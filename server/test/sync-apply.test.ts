@@ -42,14 +42,16 @@ test('added rows are inserted with negated cents and mapped category', () => {
 
 test('modified updates bank fields and never owner fields', () => {
   const { deps, apply, row } = setup();
+  seedCategory(deps.db, { id: 'food', name: 'Food' });
   apply([page({ added: [txn({ transactionId: 'p1', amount: 10 })] })]);
-  deps.db.prepare("UPDATE transactions SET payee = 'Mine', notes = 'keep', category_id = NULL WHERE source_id = 'p1'").run();
+  deps.db.prepare("UPDATE transactions SET payee = 'Mine', notes = 'keep', category_id = 'food' WHERE source_id = 'p1'").run();
   apply([page({ modified: [txn({ transactionId: 'p1', amount: 11, merchantName: 'Renamed Shop' })] })]);
   const r = row('p1');
   assert.equal(r?.amount_cents, -1100);
   assert.equal(r?.merchant_name, 'Renamed Shop');
   assert.equal(r?.payee, 'Mine');
   assert.equal(r?.notes, 'keep');
+  assert.equal(r?.category_id, 'food');
 });
 
 test('removed marks rows removed instead of deleting', () => {
@@ -107,4 +109,53 @@ test('unknown account is created before its transactions', () => {
 test('a transaction for an account that was never upserted throws', () => {
   const { apply } = setup();
   assert.throws(() => apply([page({ added: [txn({ transactionId: 'p3', accountId: 'pa-missing' })] })]), /unknown plaid account/);
+});
+
+test('owner category on pending row is preserved when posted row arrives (A)', () => {
+  const { deps, apply, row } = setup();
+  seedCategory(deps.db, { id: 'coffee', name: 'Coffee' });
+  seedCategory(deps.db, { id: 'food', name: 'Food' });
+  deps.db.prepare("INSERT INTO plaid_category_map (plaid_category, category_id) VALUES ('FOOD_AND_DRINK_COFFEE', 'coffee')").run();
+  apply([page({ added: [txn({ transactionId: 'pend1', pending: true, amount: 20 })] })]);
+  deps.db.prepare("UPDATE transactions SET category_id = 'food' WHERE source_id = 'pend1'").run();
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', amount: 21 })], removed: [{ transactionId: 'pend1' }] })]);
+  const posted = row('post1');
+  assert.equal(posted?.category_id, 'food');
+});
+
+test('superseded pending rows are not revived (B/C/E)', () => {
+  const { apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'pend1', pending: true })] })]);
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1' })], modified: [txn({ transactionId: 'pend1', pending: true })] })]);
+  assert.ok(row('post1'));
+  assert.ok(row('pend1')?.removed_at);
+});
+
+test('re-applying a page that added pending does not revive it when posted exists (C)', () => {
+  const { apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'pend1', pending: true })] })]);
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1' })] })]);
+  apply([page({ added: [txn({ transactionId: 'pend1', pending: true })] })]);
+  const p = row('pend1');
+  assert.ok(p?.removed_at);
+  assert.ok(row('post1'));
+});
+
+test('pending listed after posted in same added array still gets superseded (E)', () => {
+  const { apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1' }), txn({ transactionId: 'pend1', pending: true })] })]);
+  assert.ok(row('post1'));
+  assert.ok(row('pend1')?.removed_at);
+});
+
+test('owner clearing notes on posted row does not refill them on modified (D)', () => {
+  const { deps, apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'pend1', pending: true, amount: 20 })] })]);
+  deps.db.prepare("UPDATE transactions SET notes = 'from pending' WHERE source_id = 'pend1'").run();
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', amount: 21 })], removed: [{ transactionId: 'pend1' }] })]);
+  const posted = row('post1');
+  assert.equal(posted?.notes, 'from pending');
+  deps.db.prepare("UPDATE transactions SET notes = NULL WHERE source_id = 'post1'").run();
+  apply([page({ modified: [txn({ transactionId: 'post1', amount: 22 })] })]);
+  assert.equal(row('post1')?.notes, null);
 });

@@ -39,35 +39,65 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { cutoverDate: strin
     return id;
   };
   const mappedCategory = db.prepare('SELECT category_id FROM plaid_category_map WHERE plaid_category = ?');
+  const checkSuperseded = db.prepare("SELECT id FROM transactions WHERE source = 'plaid' AND pending_source_id = ? AND removed_at IS NULL");
+  const checkExists = db.prepare("SELECT id FROM transactions WHERE source = 'plaid' AND source_id = ?");
+  const getPendingOwnerFields = db.prepare("SELECT category_id, payee, notes FROM transactions WHERE source = 'plaid' AND source_id = ?");
   const upsert = db.prepare(`
     INSERT INTO transactions (id, account_id, source, source_id, date, authorized_date, amount_cents, bank_description, merchant_name,
-      plaid_category, pending, pending_source_id, category_id, created_at, updated_at)
+      plaid_category, pending, pending_source_id, category_id, payee, notes, created_at, updated_at)
     VALUES (@id, @accountId, 'plaid', @sourceId, @date, @authorizedDate, @amount, @desc, @merchant, @plaidCategory, @pending,
-      @pendingSourceId, @categoryId, @now, @now)
+      @pendingSourceId, @categoryId, @payee, @notes, @now, @now)
     ON CONFLICT (source, source_id) DO UPDATE SET
       account_id = excluded.account_id, date = excluded.date, authorized_date = excluded.authorized_date,
       amount_cents = excluded.amount_cents, bank_description = excluded.bank_description, merchant_name = excluded.merchant_name,
       plaid_category = excluded.plaid_category, pending = excluded.pending, pending_source_id = excluded.pending_source_id,
       removed_at = NULL, updated_at = excluded.updated_at`);
   const markRemoved = db.prepare("UPDATE transactions SET removed_at = ?, updated_at = ? WHERE source = 'plaid' AND source_id = ? AND removed_at IS NULL");
-  const carryOwnerFields = db.prepare(`
-    UPDATE transactions SET
-      category_id = COALESCE(category_id, (SELECT category_id FROM transactions WHERE source = 'plaid' AND source_id = @pending)),
-      payee = COALESCE(payee, (SELECT payee FROM transactions WHERE source = 'plaid' AND source_id = @pending)),
-      notes = COALESCE(notes, (SELECT notes FROM transactions WHERE source = 'plaid' AND source_id = @pending))
-    WHERE source = 'plaid' AND source_id = @posted`);
 
   const counts: ApplyCounts = { added: 0, modified: 0, removed: 0 };
   const write = (t: PlaidTxn): boolean => {
     if (opts.cutoverDate && t.date < opts.cutoverDate) return false;
+    // If this is a pending row that is superseded by a posted row, don't insert/update it
+    if (t.pending) {
+      const superseded = checkSuperseded.get(t.transactionId) as { id: string } | undefined;
+      if (superseded) {
+        const exists = checkExists.get(t.transactionId) as { id: string } | undefined;
+        if (exists) {
+          markRemoved.run(opts.nowIso, opts.nowIso, t.transactionId);
+        } else {
+          // Insert but immediately mark as removed
+          const mapped = t.category ? (mappedCategory.get(t.category) as { category_id: string } | undefined) : undefined;
+          upsert.run({
+            id: randomUUID(), accountId: accountFor(t.accountId), sourceId: t.transactionId, date: t.date, authorizedDate: t.authorizedDate,
+            amount: plaidAmountToCents(t.amount), desc: t.name, merchant: t.merchantName, plaidCategory: t.category,
+            pending: 1, pendingSourceId: t.pendingTransactionId, categoryId: mapped?.category_id ?? null, payee: null, notes: null, now: opts.nowIso,
+          });
+          markRemoved.run(opts.nowIso, opts.nowIso, t.transactionId);
+        }
+        return false;
+      }
+    }
     const mapped = t.category ? (mappedCategory.get(t.category) as { category_id: string } | undefined) : undefined;
+    // Check if row exists
+    const exists = checkExists.get(t.transactionId) as { id: string } | undefined;
+    // When inserting new row with a pending predecessor, carry over owner fields
+    let categoryId = mapped?.category_id ?? null;
+    let payee: string | null = null;
+    let notes: string | null = null;
+    if (!exists && t.pendingTransactionId) {
+      const pending = getPendingOwnerFields.get(t.pendingTransactionId) as { category_id: string | null; payee: string | null; notes: string | null } | undefined;
+      if (pending) {
+        categoryId = pending.category_id !== null ? pending.category_id : mapped?.category_id ?? null;
+        payee = pending.payee;
+        notes = pending.notes;
+      }
+    }
     upsert.run({
       id: randomUUID(), accountId: accountFor(t.accountId), sourceId: t.transactionId, date: t.date, authorizedDate: t.authorizedDate,
       amount: plaidAmountToCents(t.amount), desc: t.name, merchant: t.merchantName, plaidCategory: t.category,
-      pending: t.pending ? 1 : 0, pendingSourceId: t.pendingTransactionId, categoryId: mapped?.category_id ?? null, now: opts.nowIso,
+      pending: t.pending ? 1 : 0, pendingSourceId: t.pendingTransactionId, categoryId, payee, notes, now: opts.nowIso,
     });
     if (t.pendingTransactionId) {
-      carryOwnerFields.run({ pending: t.pendingTransactionId, posted: t.transactionId });
       markRemoved.run(opts.nowIso, opts.nowIso, t.pendingTransactionId);
     }
     return true;
