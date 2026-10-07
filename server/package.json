@@ -2,5 +2,5 @@
   "name": "@hermes/server",
   "private": true,
   "type": "module",
-  "dependencies": {}
+  "dependencies": { "@hermes/shared": "*" }
 }
