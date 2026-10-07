@@ -2,5 +2,11 @@
   "name": "@hermes/server",
   "private": true,
   "type": "module",
-  "dependencies": { "@hermes/shared": "*" }
+  "dependencies": {
+    "@hermes/shared": "*",
+    "better-sqlite3": "^13.0.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0"
+  }
 }
