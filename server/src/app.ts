@@ -25,11 +25,12 @@ export function buildApp(deps: Deps): FastifyInstance {
     if (err instanceof ApiError) {
       return reply.code(err.status).send({ code: err.code, message: err.message, ...(err.field ? { field: err.field } : {}) });
     }
-    const status = (err as { statusCode?: number }).statusCode;
+    const e = err as { name?: string; code?: string; statusCode?: number };
+    const status = e.statusCode;
     if (status && status >= 400 && status < 500) {
       return reply.code(status).send({ code: 'INVALID_REQUEST', message: 'invalid request' });
     }
-    console.error(`[hermes] internal error ${err.name}${(err as { code?: string }).code ? ` ${(err as { code?: string }).code}` : ''}`);
+    console.error(`[hermes] internal error ${e.name}${e.code ? ` ${e.code}` : ''}`);
     return reply.code(500).send({ code: 'INTERNAL', message: 'Internal error' });
   });
 
