@@ -27,3 +27,16 @@ test('list query coerces limit and caps it', () => {
   assert.equal(r.limit, 20);
   assert.equal(ListTransactionsQuery.safeParse({ limit: '500' }).success, false);
 });
+
+test('patch payee must be non-empty but may be cleared with null', () => {
+  assert.equal(PatchTransactionBody.safeParse({ payee: '' }).success, false);
+  assert.equal(PatchTransactionBody.safeParse({ payee: null }).success, true);
+});
+
+test('dates must be real calendar dates', () => {
+  const d = (date: string) => CreateTransactionBody.safeParse({ accountId: 'a1', date, amountCents: -1, payee: 'x' }).success;
+  assert.equal(d('2026-02-31'), false);
+  assert.equal(d('2026-04-31'), false);
+  assert.equal(d('2026-02-29'), false);
+  assert.equal(d('2024-02-29'), true);
+});

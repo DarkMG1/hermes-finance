@@ -2,7 +2,8 @@ import { z } from 'zod';
 
 export const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const Id = z.string().min(1).max(100);
-const DateStr = z.string().regex(DATE_RE, 'expected YYYY-MM-DD');
+const DateStr = z.string().regex(DATE_RE, 'expected YYYY-MM-DD')
+  .refine((s) => DATE_RE.test(s) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s, 'not a real date');
 const Cents = z.number().int().safe();
 
 export const ApiErrorBody = z.object({ code: z.string(), message: z.string(), field: z.string().optional() });
@@ -41,7 +42,7 @@ export const ListTransactionsQuery = z.object({
 export type ListTransactionsQuery = z.infer<typeof ListTransactionsQuery>;
 
 export const PatchTransactionBody = z.object({
-  categoryId: Id.nullable().optional(), payee: z.string().max(200).nullable().optional(), notes: z.string().max(2000).nullable().optional(),
+  categoryId: Id.nullable().optional(), payee: z.string().min(1).max(200).nullable().optional(), notes: z.string().max(2000).nullable().optional(),
 }).strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
 export type PatchTransactionBody = z.infer<typeof PatchTransactionBody>;
 
