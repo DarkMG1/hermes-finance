@@ -69,3 +69,21 @@ test('banks list never exposes tokens', async () => {
   assert.ok(!body.includes('tok-secret'));
   assert.ok(!body.includes('access_token'));
 });
+
+test('expired session whose Plaid result is complete still completes; expired and pending is 410', async () => {
+  const { deps, plaid } = makeTestDeps();
+  const app = buildApp(deps);
+  const mk = async (key: string) => {
+    const s = (await app.inject({ method: 'POST', url: '/v1/plaid/link-sessions', headers: w(key), payload: { mode: 'create' } })).json();
+    const linkToken = (deps.db.prepare('SELECT link_token FROM link_sessions WHERE id = ?').get(s.sessionId) as { link_token: string }).link_token;
+    deps.db.prepare("UPDATE link_sessions SET expires_at = '2000-01-01T00:00:00.000Z' WHERE id = ?").run(s.sessionId);
+    return { id: s.sessionId as string, linkToken };
+  };
+  const a = await mk('e-1');
+  assert.equal((await app.inject({ method: 'POST', url: `/v1/plaid/link-sessions/${a.id}/complete`, headers: w('e-2'), payload: {} })).statusCode, 410);
+  const b = await mk('e-3');
+  plaid.linkResults.set(b.linkToken, { status: 'complete', publicToken: 'pub-e', institutionName: 'Synthetic Bank' });
+  const done = await app.inject({ method: 'POST', url: `/v1/plaid/link-sessions/${b.id}/complete`, headers: w('e-4'), payload: {} });
+  assert.equal(done.statusCode, 200);
+  assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM items').get() as { n: number }).n, 1);
+});

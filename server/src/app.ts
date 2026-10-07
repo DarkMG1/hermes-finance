@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { timingSafeEqual } from 'node:crypto';
 import type { Deps } from './deps.ts';
 import { ApiError } from './errors.ts';
+import { PlaidError } from './plaid/port.ts';
 import { ledgerRoutes } from './routes/ledger.ts';
 import { syncRoutes } from './routes/sync.ts';
 import { bankRoutes } from './routes/banks.ts';
@@ -26,6 +27,10 @@ export function buildApp(deps: Deps): FastifyInstance {
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ApiError) {
       return reply.code(err.status).send({ code: err.code, message: err.message, ...(err.field ? { field: err.field } : {}) });
+    }
+    if (err instanceof PlaidError) {
+      console.error(`[hermes] plaid error ${err.name} ${err.code}`);
+      return reply.code(502).send({ code: err.code, message: 'bank provider error' });
     }
     const e = err as { name?: string; code?: string; statusCode?: number };
     const status = e.statusCode;

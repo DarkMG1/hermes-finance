@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.ts';
 import { idempotentWrite } from '../src/idempotency.ts';
+import { PlaidError } from '../src/plaid/port.ts';
 import { makeTestDeps, AUTH } from './helpers.ts';
 
 test('health needs no auth and reports sha and migration version', async () => {
@@ -98,4 +99,13 @@ test('a write that throws stores no key, so a retry runs again', async () => {
   assert.equal((deps.db.prepare("SELECT COUNT(*) AS n FROM settings WHERE key='probe'").get() as { n: number }).n, 0); // rolled back
   const second = await app.inject({ method: 'POST', url: '/v1/flaky', headers: h, payload: {} });
   assert.equal(second.statusCode, 200);
+});
+
+test('a PlaidError from a route is a 502 with its code and a generic message', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  app.get('/v1/plaid-boom', async () => { throw new PlaidError('INSTITUTION_DOWN', 'secret detail'); });
+  const res = await app.inject({ method: 'GET', url: '/v1/plaid-boom', headers: AUTH });
+  assert.equal(res.statusCode, 502);
+  assert.deepEqual(res.json(), { code: 'INSTITUTION_DOWN', message: 'bank provider error' });
 });

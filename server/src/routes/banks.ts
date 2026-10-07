@@ -47,10 +47,11 @@ export function bankRoutes(app: FastifyInstance, deps: Deps): void {
       { id: string; link_token: string; mode: 'create' | 'update'; item_id: string | null; expires_at: string; completed_at: string | null } | undefined;
     if (!s) throw new ApiError(404, 'NOT_FOUND', 'link session not found');
     if (s.completed_at && s.item_id) return reply.code(200).send(bankById(deps, s.item_id));
-    if (s.expires_at < deps.now().toISOString()) throw new ApiError(410, 'LINK_SESSION_EXPIRED', 'link session expired; start again');
+    const expired = s.expires_at < deps.now().toISOString();
 
     const r = await idempotentAsync(deps, req, async () => {
       const result = await deps.plaid.getLinkResult(s.link_token);
+      if (expired && result.status !== 'complete') throw new ApiError(410, 'LINK_SESSION_EXPIRED', 'link session expired; start again');
       if (result.status === 'pending') return { status: 202, body: { code: 'LINK_PENDING', message: 'bank linking not finished yet' } };
       if (result.status === 'exited') throw new ApiError(409, 'LINK_EXITED', 'bank linking was cancelled');
 
