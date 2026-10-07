@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import type { Deps } from './deps.ts';
 import { ApiError } from './errors.ts';
 import { ledgerRoutes } from './routes/ledger.ts';
+import { syncRoutes } from './routes/sync.ts';
 
 function tokenMatches(header: string | undefined, token: string): boolean {
   if (!header?.startsWith('Bearer ')) return false;
@@ -42,6 +43,7 @@ export function buildApp(deps: Deps): FastifyInstance {
   });
 
   ledgerRoutes(app, deps);
+  syncRoutes(app, deps);
 
   return app;
 }
