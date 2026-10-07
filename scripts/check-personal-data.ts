@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 export type Finding = { path: string; line: number; kind: 'term' | 'email' | 'docs'; termIndex?: number };
 
-const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
+const EMAIL = /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
 const ALLOWED_EMAIL = /(@users\.noreply\.github\.com|@example\.com|@example\.org|\.test)$/i;
 const alnum = (c: string | undefined) => c !== undefined && /[A-Za-z0-9]/.test(c);
 
@@ -16,6 +16,13 @@ function hasTerm(line: string, term: string): boolean {
     if (!alnum(line[i - 1]) && !alnum(line[i + needle.length])) return true;
   }
   return false;
+}
+
+export function parseDenylist(text: string): string[] {
+  return text
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith('#'));
 }
 
 export function findPersonalData(
@@ -31,7 +38,7 @@ export function findPersonalData(
       terms.forEach((term, termIndex) => {
         if (term && hasTerm(text, term)) out.push({ path, line, kind: 'term', termIndex });
       });
-      if ((text.match(EMAIL) ?? []).some((m) => !ALLOWED_EMAIL.test(m))) {
+      if (text.includes('@') && (text.match(EMAIL) ?? []).some((m) => !ALLOWED_EMAIL.test(m))) {
         out.push({ path, line, kind: 'email' });
       }
     });
@@ -46,10 +53,11 @@ function main(): void {
     console.log(`personal-data check: denylist not found at ${denylist}`);
     process.exit(1);
   }
-  const terms = readFileSync(denylist, 'utf8')
-    .split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l && !l.startsWith('#'));
+  const terms = parseDenylist(readFileSync(denylist, 'utf8'));
+  if (!terms.length) {
+    console.log(`personal-data check: denylist at ${denylist} has no terms`);
+    process.exit(1);
+  }
   const names = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z'], {
     encoding: 'utf8',
   })

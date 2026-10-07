@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findPersonalData } from '../check-personal-data.ts';
+import { findPersonalData, parseDenylist } from '../check-personal-data.ts';
 
 const terms = ['Zorblax Bank', 'Quentin Example', 'cafe'];
 const AT = '@';
@@ -41,4 +41,17 @@ test('package-lock.json is skipped', () => {
 
 test('clean input returns []', () => {
   assert.deepEqual(findPersonalData(f('a.ts', 'const x = 1;'), terms), []);
+});
+
+test('long lines are scanned in linear time', () => {
+  const start = Date.now();
+  findPersonalData(f('a.ts', 'a'.repeat(200_000)), terms);
+  const res = findPersonalData(f('a.ts', `${'a'.repeat(200_000)}${AT}b.io`), terms);
+  assert.ok(Date.now() - start < 1000);
+  assert.equal(res.length, 1);
+});
+
+test('parseDenylist drops comments and blanks; empty list is detectable', () => {
+  assert.deepEqual(parseDenylist('# c\n\n  Zorblax Bank \n'), ['Zorblax Bank']);
+  assert.deepEqual(parseDenylist('# only\n\n'), []);
 });
