@@ -1,0 +1,2 @@
+#!/bin/sh
+exec gitleaks protect --staged --no-banner --redact

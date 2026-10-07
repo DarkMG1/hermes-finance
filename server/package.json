@@ -1,0 +1,6 @@
+{
+  "name": "@hermes/server",
+  "private": true,
+  "type": "module",
+  "dependencies": {}
+}
