@@ -2,6 +2,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { timingSafeEqual } from 'node:crypto';
 import type { Deps } from './deps.ts';
 import { ApiError } from './errors.ts';
+import { ledgerRoutes } from './routes/ledger.ts';
 
 function tokenMatches(header: string | undefined, token: string): boolean {
   if (!header?.startsWith('Bearer ')) return false;
@@ -38,6 +39,8 @@ export function buildApp(deps: Deps): FastifyInstance {
     const row = deps.db.prepare('SELECT MAX(version) AS v FROM migrations').get() as { v: number };
     return { ok: true, gitSha: deps.config.gitSha, dbVersion: row.v };
   });
+
+  ledgerRoutes(app, deps);
 
   return app;
 }

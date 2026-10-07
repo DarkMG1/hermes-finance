@@ -1,0 +1,88 @@
+import type { Account, Category, ListTransactionsQuery, SplitLine, Transaction, TransactionPage } from '@hermes/shared';
+import type { Db } from './db.ts';
+import { ApiError } from './errors.ts';
+
+type TxnRow = {
+  id: string; account_id: string; source: 'plaid' | 'manual' | 'actual'; date: string; amount_cents: number;
+  bank_description: string; merchant_name: string | null; pending: number; category_id: string | null;
+  payee: string | null; notes: string | null;
+};
+
+const TXN_COLS = 'id, account_id, source, date, amount_cents, bank_description, merchant_name, pending, category_id, payee, notes';
+
+export function rowToTransaction(db: Db, r: TxnRow): Transaction {
+  const lines = db.prepare('SELECT id, amount_cents, category_id, notes FROM split_lines WHERE transaction_id = ? ORDER BY id').all(r.id) as
+    { id: string; amount_cents: number; category_id: string | null; notes: string | null }[];
+  const splitLines: SplitLine[] = lines.map((l) => ({ id: l.id, amountCents: l.amount_cents, categoryId: l.category_id, notes: l.notes }));
+  return {
+    id: r.id, accountId: r.account_id, source: r.source, date: r.date, amountCents: r.amount_cents,
+    payee: r.payee ?? r.merchant_name ?? r.bank_description, bankDescription: r.bank_description,
+    merchantName: r.merchant_name, pending: r.pending === 1, categoryId: r.category_id, notes: r.notes, splitLines,
+  };
+}
+
+export function listAccounts(db: Db): Account[] {
+  const rows = db.prepare('SELECT * FROM accounts ORDER BY hidden, name').all() as {
+    id: string; item_id: string | null; name: string; mask: string | null; type: string; subtype: string | null;
+    balance_current_cents: number | null; balance_available_cents: number | null; balance_at: string | null; hidden: number;
+  }[];
+  return rows.map((a) => ({
+    id: a.id, itemId: a.item_id, name: a.name, mask: a.mask, type: a.type, subtype: a.subtype,
+    balanceCurrentCents: a.balance_current_cents, balanceAvailableCents: a.balance_available_cents, balanceAt: a.balance_at, hidden: a.hidden === 1,
+  }));
+}
+
+export function listCategories(db: Db): Category[] {
+  const rows = db.prepare('SELECT * FROM categories ORDER BY group_name, name').all() as {
+    id: string; name: string; group_name: string; is_income: number; is_transfer: number; hidden: number;
+  }[];
+  return rows.map((c) => ({ id: c.id, name: c.name, groupName: c.group_name, isIncome: c.is_income === 1, isTransfer: c.is_transfer === 1, hidden: c.hidden === 1 }));
+}
+
+export function getTransaction(db: Db, id: string): Transaction | null {
+  const row = db.prepare(`SELECT ${TXN_COLS} FROM transactions WHERE id = ? AND removed_at IS NULL`).get(id) as TxnRow | undefined;
+  return row ? rowToTransaction(db, row) : null;
+}
+
+function encodeCursor(date: string, id: string): string { return Buffer.from(JSON.stringify([date, id])).toString('base64url'); }
+function decodeCursor(c: string): [string, string] {
+  try {
+    const v: unknown = JSON.parse(Buffer.from(c, 'base64url').toString('utf8'));
+    if (Array.isArray(v) && v.length === 2 && typeof v[0] === 'string' && typeof v[1] === 'string') return [v[0], v[1]];
+  } catch { /* fall through */ }
+  throw new ApiError(400, 'INVALID_REQUEST', 'cursor: invalid cursor', 'cursor');
+}
+
+export function listTransactions(db: Db, q: ListTransactionsQuery): TransactionPage {
+  const where = ['removed_at IS NULL'];
+  const args: unknown[] = [];
+  if (q.accountId) { where.push('account_id = ?'); args.push(q.accountId); }
+  if (q.categoryId) { where.push('category_id = ?'); args.push(q.categoryId); }
+  if (q.from) { where.push('date >= ?'); args.push(q.from); }
+  if (q.to) { where.push('date <= ?'); args.push(q.to); }
+  if (q.q) {
+    const like = `%${q.q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
+    where.push("(COALESCE(payee, '') LIKE ? ESCAPE '\\' OR COALESCE(merchant_name, '') LIKE ? ESCAPE '\\' OR bank_description LIKE ? ESCAPE '\\' OR COALESCE(notes, '') LIKE ? ESCAPE '\\')");
+    args.push(like, like, like, like);
+  }
+  if (q.cursor) {
+    const [d, id] = decodeCursor(q.cursor);
+    where.push('(date < ? OR (date = ? AND id < ?))');
+    args.push(d, d, id);
+  }
+  const rows = db.prepare(`SELECT ${TXN_COLS} FROM transactions WHERE ${where.join(' AND ')} ORDER BY date DESC, id DESC LIMIT ?`)
+    .all(...args, q.limit + 1) as TxnRow[];
+  const page = rows.slice(0, q.limit);
+  const last = page[page.length - 1];
+  return {
+    transactions: page.map((r) => rowToTransaction(db, r)),
+    nextCursor: rows.length > q.limit && last ? encodeCursor(last.date, last.id) : null,
+  };
+}
+
+export function assertCategoryExists(db: Db, id: string | null | undefined, field: string): void {
+  if (id === null || id === undefined) return;
+  if (!db.prepare('SELECT 1 FROM categories WHERE id = ?').get(id)) {
+    throw new ApiError(400, 'INVALID_REQUEST', `${field}: unknown category`, field);
+  }
+}
