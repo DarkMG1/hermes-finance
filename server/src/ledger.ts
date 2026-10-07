@@ -91,13 +91,12 @@ const NEGATIVE_TYPES = new Set(['credit', 'loan']);
 
 export function periodRange(q: SpendingQuery): { from: string; toExclusive: string } {
   if (q.period === 'year') {
-    const y = Number(q.date);
-    return { from: `${y}-01-01`, toExclusive: `${y + 1}-01-01` };
+    return { from: `${q.date}-01-01`, toExclusive: `${String(Number(q.date) + 1).padStart(4, '0')}-01-01` };
   }
   const [ys, ms] = q.date.split('-');
   const y = Number(ys);
   const m = Number(ms);
-  const next = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+  const next = m === 12 ? `${String(y + 1).padStart(4, '0')}-01` : `${ys}-${String(m + 1).padStart(2, '0')}`;
   return { from: `${q.date}-01`, toExclusive: `${next}-01` };
 }
 

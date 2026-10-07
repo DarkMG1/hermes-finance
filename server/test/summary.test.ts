@@ -8,6 +8,8 @@ test('period boundaries', () => {
   assert.deepEqual(periodRange({ period: 'month', date: '2026-12' }), { from: '2026-12-01', toExclusive: '2027-01-01' });
   assert.deepEqual(periodRange({ period: 'month', date: '2026-02' }), { from: '2026-02-01', toExclusive: '2026-03-01' });
   assert.deepEqual(periodRange({ period: 'year', date: '2026' }), { from: '2026-01-01', toExclusive: '2027-01-01' });
+  assert.deepEqual(periodRange({ period: 'year', date: '0099' }), { from: '0099-01-01', toExclusive: '0100-01-01' });
+  assert.deepEqual(periodRange({ period: 'month', date: '0099-12' }), { from: '0099-12-01', toExclusive: '0100-01-01' });
 });
 
 test('spending: splits, refunds, transfers, income, removed and boundaries', async () => {
