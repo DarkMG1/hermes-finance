@@ -1,11 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
-import { CreateTransactionBody, ListTransactionsQuery, PatchTransactionBody } from '@hermes/shared';
+import { CreateTransactionBody, ListTransactionsQuery, PatchTransactionBody, SpendingQuery } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
-import { assertCategoryExists, getTransaction, listAccounts, listCategories, listTransactions } from '../ledger.ts';
+import { assertCategoryExists, getHome, getSpending, getTransaction, listAccounts, listCategories, listTransactions } from '../ledger.ts';
 
 export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   const { db } = deps;
@@ -13,6 +13,8 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   app.get('/v1/accounts', async () => listAccounts(db));
   app.get('/v1/categories', async () => listCategories(db));
   app.get('/v1/transactions', async (req) => listTransactions(db, parseBody(ListTransactionsQuery, req.query)));
+  app.get('/v1/home', async () => getHome(db));
+  app.get('/v1/spending', async (req) => getSpending(db, parseBody(SpendingQuery, req.query)));
 
   app.get<{ Params: { id: string } }>('/v1/transactions/:id', async (req) => {
     const t = getTransaction(db, req.params.id);

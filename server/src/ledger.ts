@@ -1,4 +1,4 @@
-import type { Account, Category, ListTransactionsQuery, SplitLine, Transaction, TransactionPage } from '@hermes/shared';
+import type { Account, Category, Home, ListTransactionsQuery, Spending, SpendingQuery, SplitLine, Transaction, TransactionPage } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
 
@@ -85,4 +85,49 @@ export function assertCategoryExists(db: Db, id: string | null | undefined, fiel
   if (!db.prepare('SELECT 1 FROM categories WHERE id = ?').get(id)) {
     throw new ApiError(400, 'INVALID_REQUEST', `${field}: unknown category`, field);
   }
+}
+
+const NEGATIVE_TYPES = new Set(['credit', 'loan']);
+
+export function periodRange(q: SpendingQuery): { from: string; toExclusive: string } {
+  if (q.period === 'year') {
+    const y = Number(q.date);
+    return { from: `${y}-01-01`, toExclusive: `${y + 1}-01-01` };
+  }
+  const [ys, ms] = q.date.split('-');
+  const y = Number(ys);
+  const m = Number(ms);
+  const next = m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+  return { from: `${q.date}-01`, toExclusive: `${next}-01` };
+}
+
+export function getHome(db: Db): Home {
+  const accounts = db.prepare('SELECT type, balance_current_cents AS b FROM accounts WHERE hidden = 0 AND balance_current_cents IS NOT NULL').all() as { type: string; b: number }[];
+  const netWorthCents = accounts.reduce((sum, a) => sum + (NEGATIVE_TYPES.has(a.type) ? -a.b : a.b), 0);
+  const recent = listTransactions(db, { limit: 10 }).transactions;
+  const reconnect = (db.prepare("SELECT id, institution_name FROM items WHERE status = 'login_required' ORDER BY institution_name").all() as { id: string; institution_name: string }[])
+    .map((i) => ({ itemId: i.id, institutionName: i.institution_name }));
+  return { netWorthCents, recent, reconnect };
+}
+
+export function getSpending(db: Db, q: SpendingQuery): Spending {
+  const { from, toExclusive } = periodRange(q);
+  const rows = db.prepare(`
+    WITH lines AS (
+      SELECT sl.category_id AS category_id, sl.amount_cents AS amount
+        FROM split_lines sl JOIN transactions t ON t.id = sl.transaction_id
+       WHERE t.removed_at IS NULL AND t.date >= ? AND t.date < ?
+      UNION ALL
+      SELECT t.category_id, t.amount_cents
+        FROM transactions t
+       WHERE t.removed_at IS NULL AND t.date >= ? AND t.date < ?
+         AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
+    )
+    SELECT lines.category_id AS categoryId, COALESCE(c.name, 'Uncategorized') AS name, -SUM(lines.amount) AS spentCents
+      FROM lines LEFT JOIN categories c ON c.id = lines.category_id
+     WHERE COALESCE(c.is_transfer, 0) = 0 AND COALESCE(c.is_income, 0) = 0
+     GROUP BY lines.category_id
+    HAVING spentCents != 0
+     ORDER BY spentCents DESC, name`).all(from, toExclusive, from, toExclusive) as { categoryId: string | null; name: string; spentCents: number }[];
+  return { from, toExclusive, totalCents: rows.reduce((s, r) => s + r.spentCents, 0), categories: rows };
 }
