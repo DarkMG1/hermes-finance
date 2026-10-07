@@ -38,9 +38,9 @@ export async function syncItem(deps: Deps, itemId: string): Promise<ItemResult> 
   const base = { itemId, institutionName: item.institution_name, added: 0, modified: 0, removed: 0 };
   if (running.has(itemId)) return { ...base, result: 'already_running' };
   running.add(itemId);
-  const startedAt = deps.now().toISOString();
-  const runId = Number(db.prepare('INSERT INTO sync_runs (item_id, started_at) VALUES (?, ?)').run(itemId, startedAt).lastInsertRowid);
+  let runId: number | null = null;
   try {
+    runId = Number(db.prepare('INSERT INTO sync_runs (item_id, started_at) VALUES (?, ?)').run(itemId, deps.now().toISOString()).lastInsertRowid);
     const token = decryptToken(item.access_token_enc, deps.config.tokenKey);
     const pages = await fetchAllPages(deps, token, item.cursor);
     const accounts = await deps.plaid.accountsGet(token);
@@ -60,9 +60,13 @@ export async function syncItem(deps: Deps, itemId: string): Promise<ItemResult> 
   } catch (e) {
     const code = e instanceof PlaidError ? e.code : 'SYNC_FAILED';
     const status = code === 'ITEM_LOGIN_REQUIRED' ? 'login_required' : 'error';
-    db.prepare('UPDATE items SET status = ?, last_error_code = ? WHERE id = ?').run(status, code, itemId);
-    db.prepare('UPDATE sync_runs SET finished_at = ?, error_code = ? WHERE id = ?').run(deps.now().toISOString(), code, runId);
     console.error(`[hermes] sync failed item=${itemId} code=${code}`);
+    try {
+      db.prepare('UPDATE items SET status = ?, last_error_code = ? WHERE id = ?').run(status, code, itemId);
+      if (runId !== null) db.prepare('UPDATE sync_runs SET finished_at = ?, error_code = ? WHERE id = ?').run(deps.now().toISOString(), code, runId);
+    } catch {
+      console.error(`[hermes] sync bookkeeping failed item=${itemId}`);
+    }
     return { ...base, result: status };
   } finally {
     running.delete(itemId);

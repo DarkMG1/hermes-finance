@@ -1,6 +1,7 @@
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.ts';
+import { startScheduler } from '../src/scheduler.ts';
 import { syncAll, syncItem } from '../src/sync/run.ts';
 import { txn } from './fake-plaid.ts';
 import { makeTestDeps, AUTH, seedItem } from './helpers.ts';
@@ -93,4 +94,27 @@ test('POST /v1/sync runs all items and GET /v1/sync/status lists banks', async (
   const status = (await app.inject({ method: 'GET', url: '/v1/sync/status', headers: AUTH })).json();
   assert.equal(status[0].institutionName, 'Synthetic Bank');
   assert.equal(status[0].status, 'ok');
+});
+
+test('a failing sync_runs insert returns an error result and releases the item lock', async () => {
+  const { deps } = setup();
+  deps.db.exec('DROP TABLE sync_pages; DROP TABLE sync_runs');
+  const a = await syncItem(deps, 'i1');
+  const b = await syncItem(deps, 'i1');
+  assert.equal(a.result, 'error');
+  assert.equal(b.result, 'error');
+});
+
+test('stop() before the first tick prevents any scheduled sync', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  try {
+    const { deps, plaid } = setup();
+    const stop = startScheduler(deps);
+    stop();
+    mock.timers.tick(10 * 60 * 1000);
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(plaid.syncCalls, []);
+  } finally {
+    mock.timers.reset();
+  }
 });
