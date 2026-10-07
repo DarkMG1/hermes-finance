@@ -1,0 +1,10 @@
+node_modules/
+*.db
+*.db-*
+.env
+.env.*
+!.env.example
+dist/
+.expo/
+ios/
+android/
