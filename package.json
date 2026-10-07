@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "test": "node --test \"shared/test/**/*.test.ts\" \"server/test/**/*.test.ts\" \"scripts/test/**/*.test.ts\"",
     "check": "npm run typecheck && npm run lint && npm test",
+    "start": "node server/src/main.ts",
     "secrets": "gitleaks detect --no-banner --redact"
   },
   "devDependencies": {
