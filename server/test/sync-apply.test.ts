@@ -145,7 +145,7 @@ test('pending listed after posted in same added array still gets superseded (E)'
   const { apply, row } = setup();
   apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1' }), txn({ transactionId: 'pend1', pending: true })] })]);
   assert.ok(row('post1'));
-  assert.ok(row('pend1')?.removed_at);
+  assert.equal(row('pend1'), undefined);
 });
 
 test('owner clearing notes on posted row does not refill them on modified (D)', () => {
@@ -158,4 +158,29 @@ test('owner clearing notes on posted row does not refill them on modified (D)', 
   deps.db.prepare("UPDATE transactions SET notes = NULL WHERE source_id = 'post1'").run();
   apply([page({ modified: [txn({ transactionId: 'post1', amount: 22 })] })]);
   assert.equal(row('post1')?.notes, null);
+});
+
+test('a pending row superseded by a removed posted row is not revived when re-sent in modified', () => {
+  const { apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'X', pending: true })] })]);
+  apply([page({ added: [txn({ transactionId: 'P', pendingTransactionId: 'X' })], removed: [{ transactionId: 'X' }] })]);
+  apply([page({ removed: [{ transactionId: 'P' }] })]);
+  apply([page({ modified: [txn({ transactionId: 'X', pending: true })] })]);
+  assert.equal(row('X')?.removed_at, NOW);
+  assert.equal(row('P')?.removed_at, NOW);
+});
+
+test('a pending row superseded by a removed posted row is not revived when re-sent in added', () => {
+  const { apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'X', pending: true })] })]);
+  apply([page({ added: [txn({ transactionId: 'P', pendingTransactionId: 'X' })], removed: [{ transactionId: 'X' }] })]);
+  apply([page({ removed: [{ transactionId: 'P' }] })]);
+  apply([page({ added: [txn({ transactionId: 'X', pending: true })] })]);
+  assert.equal(row('X')?.removed_at, NOW);
+});
+
+test('a superseded pending row that was never stored is not inserted', () => {
+  const { apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'P', pendingTransactionId: 'X' }), txn({ transactionId: 'X', pending: true })] })]);
+  assert.equal(row('X'), undefined);
 });

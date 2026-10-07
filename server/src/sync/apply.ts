@@ -39,9 +39,8 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { cutoverDate: strin
     return id;
   };
   const mappedCategory = db.prepare('SELECT category_id FROM plaid_category_map WHERE plaid_category = ?');
-  const checkSuperseded = db.prepare("SELECT id FROM transactions WHERE source = 'plaid' AND pending_source_id = ? AND removed_at IS NULL");
-  const checkExists = db.prepare("SELECT id FROM transactions WHERE source = 'plaid' AND source_id = ?");
-  const getPendingOwnerFields = db.prepare("SELECT category_id, payee, notes FROM transactions WHERE source = 'plaid' AND source_id = ?");
+  const checkSuperseded = db.prepare("SELECT id FROM transactions WHERE source = 'plaid' AND pending_source_id = ?");
+  const getRow = db.prepare("SELECT id, category_id, payee, notes FROM transactions WHERE source = 'plaid' AND source_id = ?");
   const upsert = db.prepare(`
     INSERT INTO transactions (id, account_id, source, source_id, date, authorized_date, amount_cents, bank_description, merchant_name,
       plaid_category, pending, pending_source_id, category_id, payee, notes, created_at, updated_at)
@@ -61,31 +60,19 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { cutoverDate: strin
     if (t.pending) {
       const superseded = checkSuperseded.get(t.transactionId) as { id: string } | undefined;
       if (superseded) {
-        const exists = checkExists.get(t.transactionId) as { id: string } | undefined;
-        if (exists) {
-          markRemoved.run(opts.nowIso, opts.nowIso, t.transactionId);
-        } else {
-          // Insert but immediately mark as removed
-          const mapped = t.category ? (mappedCategory.get(t.category) as { category_id: string } | undefined) : undefined;
-          upsert.run({
-            id: randomUUID(), accountId: accountFor(t.accountId), sourceId: t.transactionId, date: t.date, authorizedDate: t.authorizedDate,
-            amount: plaidAmountToCents(t.amount), desc: t.name, merchant: t.merchantName, plaidCategory: t.category,
-            pending: 1, pendingSourceId: t.pendingTransactionId, categoryId: mapped?.category_id ?? null, payee: null, notes: null, now: opts.nowIso,
-          });
-          markRemoved.run(opts.nowIso, opts.nowIso, t.transactionId);
-        }
+        if (getRow.get(t.transactionId)) markRemoved.run(opts.nowIso, opts.nowIso, t.transactionId);
         return false;
       }
     }
     const mapped = t.category ? (mappedCategory.get(t.category) as { category_id: string } | undefined) : undefined;
     // Check if row exists
-    const exists = checkExists.get(t.transactionId) as { id: string } | undefined;
+    const exists = getRow.get(t.transactionId) as { id: string } | undefined;
     // When inserting new row with a pending predecessor, carry over owner fields
     let categoryId = mapped?.category_id ?? null;
     let payee: string | null = null;
     let notes: string | null = null;
     if (!exists && t.pendingTransactionId) {
-      const pending = getPendingOwnerFields.get(t.pendingTransactionId) as { category_id: string | null; payee: string | null; notes: string | null } | undefined;
+      const pending = getRow.get(t.pendingTransactionId) as { category_id: string | null; payee: string | null; notes: string | null } | undefined;
       if (pending) {
         categoryId = pending.category_id !== null ? pending.category_id : mapped?.category_id ?? null;
         payee = pending.payee;
