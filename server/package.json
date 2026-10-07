@@ -5,7 +5,8 @@
   "dependencies": {
     "@hermes/shared": "*",
     "better-sqlite3": "^13.0.3",
-    "fastify": "5.12.5"
+    "fastify": "5.12.5",
+    "plaid": "48.0.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0"
