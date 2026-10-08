@@ -133,20 +133,19 @@ export function getSpending(db: Db, q: SpendingQuery): Spending {
   const { from, toExclusive } = periodRange(q);
   const rows = db.prepare(`
     WITH lines AS (
-      SELECT sl.category_id AS category_id, sl.amount_cents AS amount, t.plaid_category AS plaid_category
+      -- if the bank changed a split transaction's amount, its lines scale to the new amount (same categories,
+      -- same proportions) until the owner re-splits, so spending always adds up to what the bank says
+      SELECT sl.category_id AS category_id,
+             CASE WHEN tot.s = t.amount_cents THEN sl.amount_cents ELSE CAST(ROUND(1.0 * sl.amount_cents * t.amount_cents / tot.s) AS INTEGER) END AS amount,
+             t.plaid_category AS plaid_category
         FROM split_lines sl JOIN transactions t ON t.id = sl.transaction_id
+        JOIN (SELECT transaction_id, SUM(amount_cents) AS s FROM split_lines GROUP BY transaction_id) tot ON tot.transaction_id = t.id
        WHERE t.removed_at IS NULL AND t.date >= ? AND t.date < ?
       UNION ALL
       SELECT t.category_id, t.amount_cents, t.plaid_category
         FROM transactions t
        WHERE t.removed_at IS NULL AND t.date >= ? AND t.date < ?
          AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
-      UNION ALL
-      -- the bank changed a split transaction's amount: the difference counts as uncategorized until the owner re-splits
-      SELECT NULL, t.amount_cents - SUM(sl.amount_cents), t.plaid_category
-        FROM split_lines sl JOIN transactions t ON t.id = sl.transaction_id
-       WHERE t.removed_at IS NULL AND t.date >= ? AND t.date < ?
-       GROUP BY t.id HAVING t.amount_cents != SUM(sl.amount_cents)
     )
     SELECT lines.category_id AS categoryId, COALESCE(c.name, 'Uncategorized') AS name, -SUM(lines.amount) AS spentCents
       FROM lines LEFT JOIN categories c ON c.id = lines.category_id
@@ -158,6 +157,6 @@ export function getSpending(db: Db, q: SpendingQuery): Spending {
               OR lines.plaid_category GLOB 'TRANSFER_OUT*' OR lines.plaid_category = 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT')))
      GROUP BY lines.category_id
     HAVING spentCents != 0
-     ORDER BY spentCents DESC, name`).all(from, toExclusive, from, toExclusive, from, toExclusive) as { categoryId: string | null; name: string; spentCents: number }[];
+     ORDER BY spentCents DESC, name`).all(from, toExclusive, from, toExclusive) as { categoryId: string | null; name: string; spentCents: number }[];
   return { from, toExclusive, totalCents: rows.reduce((s, r) => s + r.spentCents, 0), categories: rows };
 }
