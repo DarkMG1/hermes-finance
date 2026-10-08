@@ -61,3 +61,25 @@ test('migration 003 rebuilds transactions without losing rows or split lines and
   assert.equal((db.prepare('SELECT COUNT(*) AS n FROM split_lines').get() as { n: number }).n, 0, 'cascade still works');
   assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'transactions_account_date'").get());
 });
+
+test('migration 004 protects bank rows a stored PATCH response shows uncategorized, and nothing else', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hermes-m4-'));
+  const db = openDb(join(dir, 'h.db'));
+  const m = join(import.meta.dirname, '..', 'migrations');
+  db.exec('CREATE TABLE migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)');
+  for (const [v, f] of [[1, '001_init.sql'], [2, '002_account_cutover.sql']] as const) {
+    db.exec(readFileSync(join(m, f), 'utf8'));
+    db.prepare('INSERT INTO migrations (version, applied_at) VALUES (?, ?)').run(v, 'x');
+  }
+  db.prepare("INSERT INTO accounts (id, name, type) VALUES ('a1', 'Synthetic', 'credit')").run();
+  const txn = db.prepare("INSERT INTO transactions (id, account_id, source, source_id, date, amount_cents, category_id, created_at, updated_at) VALUES (?, 'a1', ?, ?, '2026-01-01', -1, NULL, 'x', 'x')");
+  for (const [id, source] of [['cleared', 'plaid'], ['untouched', 'plaid'], ['manual', 'manual']] as const) txn.run(id, source, id);
+  const key = db.prepare("INSERT INTO idempotency_keys (key, request_hash, status_code, response_json, created_at) VALUES (?, 'h', 200, ?, 'x')");
+  key.run('k1', JSON.stringify({ id: 'cleared', source: 'plaid', categoryId: null }));
+  key.run('k2', JSON.stringify({ id: 'manual', source: 'manual', categoryId: null }));
+  key.run('k3', JSON.stringify({ ok: true }));
+
+  assert.equal(migrate(db), 4);
+  const flag = (id: string) => (db.prepare('SELECT category_owner_set AS f FROM transactions WHERE id = ?').get(id) as { f: number }).f;
+  assert.deepEqual(['cleared', 'untouched', 'manual'].map(flag), [1, 0, 0]);
+});
