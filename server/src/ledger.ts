@@ -102,7 +102,7 @@ export function learnCategory(db: Db, transactionId: string, categoryId: string,
   db.prepare('INSERT INTO plaid_category_map (plaid_category, category_id) VALUES (?, ?) ON CONFLICT (plaid_category) DO UPDATE SET category_id = excluded.category_id')
     .run(row.plaid_category, categoryId);
   db.prepare(`UPDATE transactions SET category_id = ?, updated_at = ?
-     WHERE source IN ('plaid', 'applecard') AND plaid_category = ? AND category_id IS NULL AND removed_at IS NULL
+     WHERE source IN ('plaid', 'applecard') AND plaid_category = ? AND category_id IS NULL AND category_owner_set = 0 AND removed_at IS NULL
        AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = transactions.id)`)
     .run(categoryId, nowIso, row.plaid_category);
 }

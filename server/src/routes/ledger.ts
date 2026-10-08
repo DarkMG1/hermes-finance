@@ -29,7 +29,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       assertCategoryExists(db, body.categoryId, 'categoryId');
       const sets: string[] = [];
       const args: unknown[] = [];
-      if (body.categoryId !== undefined) { sets.push('category_id = ?'); args.push(body.categoryId); }
+      if (body.categoryId !== undefined) { sets.push('category_id = ?', 'category_owner_set = 1'); args.push(body.categoryId); }
       if (body.payee !== undefined) { sets.push('payee = ?'); args.push(body.payee); }
       if (body.notes !== undefined) { sets.push('notes = ?'); args.push(body.notes); }
       const now = deps.now().toISOString();

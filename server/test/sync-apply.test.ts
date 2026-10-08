@@ -117,6 +117,18 @@ test('modified and revived rows pick up a mapping learned after they were stored
   assert.deepEqual(['p1', 'p2', 'p3'].map((id) => row(id)?.category_id), ['coffee', 'coffee', 'food']);
 });
 
+test('a category the owner cleared stays cleared through modify and pending to posted', () => {
+  const { deps, apply, row } = setup();
+  seedCategory(deps.db, { id: 'coffee', name: 'Coffee' });
+  deps.db.prepare("INSERT INTO plaid_category_map (plaid_category, category_id) VALUES ('FOOD_AND_DRINK_COFFEE', 'coffee')").run();
+  apply([page({ added: [txn({ transactionId: 'p1' }), txn({ transactionId: 'pend', pending: true })] })]);
+  deps.db.prepare("UPDATE transactions SET category_id = NULL, category_owner_set = 1 WHERE source_id IN ('p1', 'pend')").run();
+  apply([page({ modified: [txn({ transactionId: 'p1', amount: 9 })], added: [txn({ transactionId: 'posted', pendingTransactionId: 'pend' })] })]);
+  assert.equal(row('p1')?.category_id, null);
+  assert.equal(row('posted')?.category_id, null);
+  assert.equal(row('posted')?.category_owner_set, 1);
+});
+
 test('re-adding a removed id restores it', () => {
   const { apply, row } = setup();
   apply([page({ added: [txn({ transactionId: 'p1' })] })]);

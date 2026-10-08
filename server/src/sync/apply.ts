@@ -54,17 +54,17 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
   };
   const mappedCategory = db.prepare('SELECT category_id FROM plaid_category_map WHERE plaid_category = ?');
   const checkSuperseded = db.prepare("SELECT id FROM transactions WHERE source = 'plaid' AND pending_source_id = ?");
-  const getRow = db.prepare("SELECT id, category_id, payee, notes FROM transactions WHERE source = 'plaid' AND source_id = ?");
+  const getRow = db.prepare("SELECT id, category_id, category_owner_set, payee, notes FROM transactions WHERE source = 'plaid' AND source_id = ?");
   const upsert = db.prepare(`
     INSERT INTO transactions (id, account_id, source, source_id, date, authorized_date, amount_cents, bank_description, merchant_name,
-      plaid_category, pending, pending_source_id, category_id, payee, notes, created_at, updated_at)
+      plaid_category, pending, pending_source_id, category_id, category_owner_set, payee, notes, created_at, updated_at)
     VALUES (@id, @accountId, 'plaid', @sourceId, @date, @authorizedDate, @amount, @desc, @merchant, @plaidCategory, @pending,
-      @pendingSourceId, @categoryId, @payee, @notes, @now, @now)
+      @pendingSourceId, @categoryId, @ownerSet, @payee, @notes, @now, @now)
     ON CONFLICT (source, source_id) DO UPDATE SET
       account_id = excluded.account_id, date = excluded.date, authorized_date = excluded.authorized_date,
       amount_cents = excluded.amount_cents, bank_description = excluded.bank_description, merchant_name = excluded.merchant_name,
       plaid_category = excluded.plaid_category, pending = excluded.pending,
-      category_id = COALESCE(transactions.category_id, excluded.category_id),
+      category_id = COALESCE(transactions.category_id, CASE WHEN transactions.category_owner_set = 0 THEN excluded.category_id END),
       pending_source_id = COALESCE(excluded.pending_source_id, transactions.pending_source_id),
       removed_at = NULL, updated_at = excluded.updated_at`);
   const markRemoved = db.prepare("UPDATE transactions SET removed_at = ?, updated_at = ? WHERE source = 'plaid' AND source_id = ? AND removed_at IS NULL");
@@ -86,12 +86,15 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
     const exists = getRow.get(t.transactionId) as { id: string } | undefined;
     // When inserting new row with a pending predecessor, carry over owner fields
     let categoryId = mapped?.category_id ?? null;
+    let ownerSet = 0;
     let payee: string | null = null;
     let notes: string | null = null;
     if (!exists && t.pendingTransactionId) {
-      const pending = getRow.get(t.pendingTransactionId) as { category_id: string | null; payee: string | null; notes: string | null } | undefined;
+      const pending = getRow.get(t.pendingTransactionId) as
+        { category_id: string | null; category_owner_set: number; payee: string | null; notes: string | null } | undefined;
       if (pending) {
-        categoryId = pending.category_id !== null ? pending.category_id : mapped?.category_id ?? null;
+        ownerSet = pending.category_owner_set;
+        categoryId = pending.category_id !== null || ownerSet ? pending.category_id : mapped?.category_id ?? null;
         payee = pending.payee;
         notes = pending.notes;
       }
@@ -99,7 +102,7 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
     upsert.run({
       id: randomUUID(), accountId: accountFor(t.accountId), sourceId: t.transactionId, date: t.date, authorizedDate: t.authorizedDate,
       amount: plaidAmountToCents(t.amount), desc: t.name, merchant: t.merchantName, plaidCategory: t.category,
-      pending: t.pending ? 1 : 0, pendingSourceId: t.pendingTransactionId, categoryId, payee, notes, now: opts.nowIso,
+      pending: t.pending ? 1 : 0, pendingSourceId: t.pendingTransactionId, categoryId, ownerSet, payee, notes, now: opts.nowIso,
     });
     if (t.pendingTransactionId) {
       markRemoved.run(opts.nowIso, opts.nowIso, t.pendingTransactionId);

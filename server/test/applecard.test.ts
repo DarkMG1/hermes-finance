@@ -133,4 +133,7 @@ test('re-import fills an uncategorized row from a mapping learned since the firs
   deps.db.prepare("INSERT INTO plaid_category_map (plaid_category, category_id) VALUES ('Restaurants', 'dining')").run();
   await post(app, SEPT, 'k2');
   assert.equal(cat(), 'dining');
+  deps.db.prepare("UPDATE transactions SET category_id = NULL, category_owner_set = 1 WHERE source = 'applecard' AND amount_cents = -1234").run();
+  await post(app, SEPT, 'k3');
+  assert.equal(cat(), null);
 });

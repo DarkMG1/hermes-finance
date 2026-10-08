@@ -87,6 +87,16 @@ test('a later categorization replaces the learned mapping and skips removed rows
   assert.equal((deps.db.prepare("SELECT category_id AS c FROM transactions WHERE id = 'gone'").get() as { c: string | null }).c, null);
 });
 
+test('a category the owner cleared is not refilled when another row teaches the mapping', async () => {
+  const { deps, app } = setup();
+  const pc = 'FOOD_AND_DRINK_COFFEE';
+  seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-01', amountCents: -1, source: 'plaid', sourceId: 'p1', plaidCategory: pc, categoryId: 'c-fun' });
+  seedTxn(deps.db, { id: 't2', accountId: 'a1', date: '2026-03-01', amountCents: -1, source: 'plaid', sourceId: 'p2', plaidCategory: pc });
+  assert.equal((await app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: w('p-clear'), payload: { categoryId: null } })).statusCode, 200);
+  assert.equal((await app.inject({ method: 'PATCH', url: '/v1/transactions/t2', headers: w('p-teach'), payload: { categoryId: 'c-food' } })).statusCode, 200);
+  assert.equal((deps.db.prepare("SELECT category_id AS c FROM transactions WHERE id = 't1'").get() as { c: string | null }).c, null);
+});
+
 test('categorizing a transfer, income or card payment row learns nothing', async () => {
   const { deps, app } = setup();
   const pcs = ['LOAN_PAYMENTS_CREDIT_CARD_PAYMENT', 'TRANSFER_OUT_ACCOUNT_TRANSFER', 'TRANSFER_IN_DEPOSIT', 'INCOME_SALARY'];

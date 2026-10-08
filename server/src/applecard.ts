@@ -109,7 +109,8 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
     ON CONFLICT (source, source_id) DO UPDATE SET
       date = excluded.date, authorized_date = excluded.authorized_date, amount_cents = excluded.amount_cents,
       bank_description = excluded.bank_description, merchant_name = excluded.merchant_name, plaid_category = excluded.plaid_category,
-      category_id = COALESCE(transactions.category_id, excluded.category_id), updated_at = excluded.updated_at`);
+      category_id = COALESCE(transactions.category_id, CASE WHEN transactions.category_owner_set = 0 THEN excluded.category_id END),
+      updated_at = excluded.updated_at`);
   const result: AppleCardImportResult = { accountId, rows: rows.length, added: 0, updated: 0, skippedBeforeCutover: 0 };
   sourceIds(rows).forEach((sourceId, i) => {
     const r = rows[i] as AppleCardRow;
