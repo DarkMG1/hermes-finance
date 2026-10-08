@@ -34,3 +34,29 @@ private func tempCache() -> ResponseCache {
         try await offline.read("/v1/transactions", query: [URLQueryItem(name: "q", value: "b")], as: TransactionPage.self)
     }
 }
+
+@Test func gatewayErrorsFallBackToCacheButServerErrorsThrow() async throws {
+    let cache = tempCache()
+    let seed = FakeTransport([.success(HTTPResponse(status: 200, body: try fixture("home")))])
+    _ = try await Reader(client: APIClient(baseURL: testBase, token: "t", transport: seed), cache: cache).read("/v1/home", as: Home.self)
+
+    let bad = FakeTransport([FakeTransport.json(502, "<html>Bad Gateway</html>")])
+    let cached = try await Reader(client: APIClient(baseURL: testBase, token: "t", transport: bad), cache: cache).read("/v1/home", as: Home.self)
+    #expect(cached.fromCache && cached.value.recent.count == 3)
+
+    let broken = FakeTransport([FakeTransport.json(500, #"{"code":"INTERNAL","message":"x"}"#)])
+    let reader = Reader(client: APIClient(baseURL: testBase, token: "t", transport: broken), cache: cache)
+    await #expect(throws: ClientError.self) { try await reader.read("/v1/home", as: Home.self) }
+}
+
+@Test func queryValuesCannotCollideAcrossKeys() async throws {
+    let cache = tempCache()
+    let seed = FakeTransport([.success(HTTPResponse(status: 200, body: try fixture("transactions-page")))])
+    _ = try await Reader(client: APIClient(baseURL: testBase, token: "t", transport: seed), cache: cache)
+        .read("/v1/transactions", query: [URLQueryItem(name: "q", value: "a&cursor=c")], as: TransactionPage.self)
+    let offline = Reader(client: APIClient(baseURL: testBase, token: "t", transport: FakeTransport([])), cache: cache)
+    await #expect(throws: ClientError.self) {
+        try await offline.read("/v1/transactions", query: [URLQueryItem(name: "q", value: "a"), URLQueryItem(name: "cursor", value: "c")],
+                               as: TransactionPage.self)
+    }
+}

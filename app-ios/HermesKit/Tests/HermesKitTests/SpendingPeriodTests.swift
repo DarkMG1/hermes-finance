@@ -20,3 +20,8 @@ import Testing
     #expect(!y.canGoNext(today: "2026-10-08"))
     #expect(y.with(kind: .month).title == "October 2026")
 }
+
+@Test func titleDoesNotTrapOnBadMonth() {
+    #expect(SpendingPeriod.current(today: "2026-13-01").title == "December 2026")
+    #expect(SpendingPeriod.current(today: "2026-00-01").title == "January 2026")
+}

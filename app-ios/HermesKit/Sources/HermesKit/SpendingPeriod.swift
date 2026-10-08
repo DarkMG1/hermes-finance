@@ -37,5 +37,5 @@ public struct SpendingPeriod: Hashable, Sendable {
         return [URLQueryItem(name: "period", value: kind.rawValue), URLQueryItem(name: "date", value: date)]
     }
 
-    public var title: String { kind == .year ? String(year) : "\(Self.monthNames[month - 1]) \(year)" }
+    public var title: String { kind == .year ? String(year) : "\(Self.monthNames[min(max(month, 1), 12) - 1]) \(year)" }
 }

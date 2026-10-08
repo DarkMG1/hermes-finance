@@ -12,13 +12,19 @@ public struct WriteGuard: Sendable {
         key = makeKey()
     }
 
+    /// After an unknown outcome, 401 or a reused-key conflict says nothing about whether the first attempt committed.
+    private static func mayHideEarlierCommit(_ error: ClientError) -> Bool {
+        guard case .api(let status, let body) = error else { return false }
+        return status == 401 || (status == 409 && body.code == "IDEMPOTENCY_KEY_REUSED")
+    }
+
     public mutating func didSucceed() {
         unresolved = false
         key = makeKey()
     }
 
     public mutating func didFail(_ error: Error) {
-        if let error = error as? ClientError, error.isOutcomeUnknown {
+        if let error = error as? ClientError, error.isOutcomeUnknown || (unresolved && Self.mayHideEarlierCommit(error)) {
             unresolved = true
         } else {
             unresolved = false

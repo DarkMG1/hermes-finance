@@ -20,7 +20,7 @@ public enum Money {
     public static func parse(_ text: String) -> Int? {
         var s = text.trimmingCharacters(in: .whitespaces)
         if s.hasPrefix("$") { s.removeFirst() }
-        guard s.range(of: #"^(\d{1,3}(,\d{3}){1,2}|\d{0,9})(\.\d{0,2})?$"#, options: .regularExpression) != nil,
+        guard s.range(of: #"^([0-9]{1,3}(,[0-9]{3}){1,2}|[0-9]{0,9})(\.[0-9]{0,2})?$"#, options: .regularExpression) != nil,
               s.contains(where: \.isNumber) else { return nil }
         let parts = s.replacingOccurrences(of: ",", with: "").split(separator: ".", omittingEmptySubsequences: false)
         let whole = parts.first.map { $0.isEmpty ? 0 : Int($0) ?? 0 } ?? 0

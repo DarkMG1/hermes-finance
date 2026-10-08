@@ -20,7 +20,7 @@ func parsesValidAmounts(text: String, cents: Int) {
     #expect(Money.parse(text) == cents)
 }
 
-@Test(arguments: ["abc", "12.345", "-5", "", ".", "1,23", "1.2.3", "$", "1234567890123"])
+@Test(arguments: ["abc", "12.345", "-5", "", ".", "1,23", "1.2.3", "$", "1234567890123", "１２"])
 func rejectsInvalidAmounts(text: String) {
     #expect(Money.parse(text) == nil)
 }
