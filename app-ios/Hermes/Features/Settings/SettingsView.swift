@@ -32,6 +32,7 @@ struct SettingsView: View {
                                         await loadBanks()
                                     }
                                 }
+                                .buttonStyle(.borderless)
                                 .disabled(linker.busy)
                             }
                         }
@@ -108,8 +109,11 @@ struct SettingsView: View {
     private func loadBanks() async {
         guard let reader = model.reader else { return }
         do {
-            banks = .loaded(try await reader.read("/v1/banks", as: [Bank].self))
+            let loaded = try await reader.read("/v1/banks", as: [Bank].self)
+            guard !Task.isCancelled else { return }
+            banks = .loaded(loaded)
         } catch {
+            guard !Task.isCancelled else { return }
             banks = .failed(errorMessage(error))
         }
     }
@@ -147,6 +151,11 @@ struct SettingsView: View {
                 + (imported.skippedBeforeCutover > 0 ? ", \(imported.skippedBeforeCutover) before the cutover" : "")
             await model.refreshReferenceData()
         } catch {
+            if case ClientError.api(409, let body) = error, body.code == "IDEMPOTENCY_KEY_REUSED" {
+                importWrites.didSucceed()
+                importNote = "The earlier import finished. Import this file again to add it."
+                return
+            }
             importWrites.didFail(error)
             importNote = importWrites.unresolved ? "Couldn't confirm the import. Import the same file again to finish." : errorMessage(error)
         }
