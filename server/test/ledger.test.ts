@@ -75,6 +75,21 @@ test('categorizing a bank row learns its Plaid category and fills only matching 
   assert.deepEqual(deps.db.prepare('SELECT plaid_category, category_id FROM plaid_category_map').all(), [{ plaid_category: pc, category_id: 'c-food' }]);
 });
 
+test('categorizing a transfer, income or card payment row learns nothing', async () => {
+  const { deps, app } = setup();
+  const pcs = ['LOAN_PAYMENTS_CREDIT_CARD_PAYMENT', 'TRANSFER_OUT_ACCOUNT_TRANSFER', 'TRANSFER_IN_DEPOSIT', 'INCOME_SALARY'];
+  pcs.forEach((pc, i) => {
+    seedTxn(deps.db, { id: `t${i}`, accountId: 'a1', date: '2026-03-01', amountCents: -1, source: 'plaid', sourceId: `p${i}`, plaidCategory: pc });
+    seedTxn(deps.db, { id: `o${i}`, accountId: 'a1', date: '2026-03-01', amountCents: -1, source: 'plaid', sourceId: `q${i}`, plaidCategory: pc });
+  });
+  for (const i of pcs.keys()) {
+    const res = await app.inject({ method: 'PATCH', url: `/v1/transactions/t${i}`, headers: w(`p-nolearn-${i}`), payload: { categoryId: 'c-food' } });
+    assert.equal(res.statusCode, 200);
+  }
+  assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM plaid_category_map').get() as { n: number }).n, 0);
+  assert.equal((deps.db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE id LIKE 'o%' AND category_id IS NOT NULL").get() as { n: number }).n, 0);
+});
+
 test('unknown categoryId is a 400 field error', async () => {
   const { deps, app } = setup();
   seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-01', amountCents: -500 });

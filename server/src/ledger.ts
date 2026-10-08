@@ -97,7 +97,8 @@ const NEGATIVE_TYPES = new Set(['credit', 'loan']);
 export function learnCategory(db: Db, transactionId: string, categoryId: string, nowIso: string): void {
   const row = db.prepare("SELECT plaid_category FROM transactions WHERE id = ? AND source IN ('plaid', 'applecard')").get(transactionId) as
     { plaid_category: string | null } | undefined;
-  if (!row?.plaid_category) return;
+  // Transfers, income and card payments stay out of spending only while uncategorized; one odd edit must not pull them all in.
+  if (!row?.plaid_category || /^(INCOME|TRANSFER_IN|TRANSFER_OUT)|^LOAN_PAYMENTS_CREDIT_CARD_PAYMENT$/.test(row.plaid_category)) return;
   db.prepare('INSERT INTO plaid_category_map (plaid_category, category_id) VALUES (?, ?) ON CONFLICT (plaid_category) DO UPDATE SET category_id = excluded.category_id')
     .run(row.plaid_category, categoryId);
   db.prepare(`UPDATE transactions SET category_id = ?, updated_at = ?
