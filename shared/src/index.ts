@@ -49,6 +49,14 @@ export type PatchTransactionBody = z.infer<typeof PatchTransactionBody>;
 export const PatchAccountBody = z.object({ name: z.string().trim().min(1).max(100).nullable() }).strict();
 export type PatchAccountBody = z.infer<typeof PatchAccountBody>;
 
+/** Replaces a transaction's split lines. No lines removes the split; otherwise 2+ lines that add up to the transaction amount. */
+export const PutSplitsBody = z.object({
+  lines: z.array(z.object({
+    amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'), categoryId: Id.nullable(), notes: z.string().max(2000).nullable().optional(),
+  }).strict()).max(20).refine((l) => l.length !== 1, 'a split needs at least two lines'),
+}).strict();
+export type PutSplitsBody = z.infer<typeof PutSplitsBody>;
+
 export const CreateTransactionBody = z.object({
   accountId: Id, date: DateStr, amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'),
   payee: z.string().min(1).max(200), categoryId: Id.nullable().optional(), notes: z.string().max(2000).nullable().optional(),

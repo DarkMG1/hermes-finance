@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
-import { CreateTransactionBody, ListTransactionsQuery, PatchAccountBody, PatchTransactionBody, SpendingQuery } from '@hermes/shared';
+import { CreateTransactionBody, ListTransactionsQuery, PatchAccountBody, PatchTransactionBody, PutSplitsBody, SpendingQuery } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
@@ -47,6 +47,27 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       db.prepare(`UPDATE transactions SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...args, now, req.params.id);
       if (body.categoryId) learnCategory(db, req.params.id, body.categoryId, now);
       return { status: 200, body: getTransaction(db, req.params.id) };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+
+  app.put<{ Params: { id: string } }>('/v1/transactions/:id/splits', async (req, reply) => {
+    const body = parseBody(PutSplitsBody, req.body);
+    const r = idempotentWrite(deps, req, () => {
+      const txn = getTransaction(db, req.params.id);
+      if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      body.lines.forEach((l, i) => assertCategoryExists(db, l.categoryId, `lines.${i}.categoryId`));
+      if (body.lines.length && body.lines.reduce((s, l) => s + l.amountCents, 0) !== txn.amountCents) {
+        throw new ApiError(400, 'INVALID_REQUEST', 'lines: must add up to the transaction amount', 'lines');
+      }
+      const now = deps.now().toISOString();
+      db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(txn.id);
+      // ids sort in entry order (lines are read back ORDER BY id)
+      const insert = db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id, notes) VALUES (?, ?, ?, ?, ?)');
+      body.lines.forEach((l, i) => insert.run(`${String(i).padStart(2, '0')}-${randomUUID()}`, txn.id, l.amountCents, l.categoryId, l.notes ?? null));
+      // a split transaction's category lives on its lines; the owner decided, so learned mappings leave it alone
+      db.prepare('UPDATE transactions SET category_id = NULL, category_owner_set = 1, updated_at = ? WHERE id = ?').run(now, txn.id);
+      return { status: 200, body: getTransaction(db, txn.id) };
     });
     return reply.code(r.status).send(r.body);
   });

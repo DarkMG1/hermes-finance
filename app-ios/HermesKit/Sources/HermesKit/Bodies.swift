@@ -44,6 +44,35 @@ public struct PatchAccountBody: Encodable, Sendable, Equatable {
     }
 }
 
+/// One line of a split. `categoryId: nil` sends JSON null (an uncategorized line); nil notes are left out.
+public struct SplitLineBody: Encodable, Sendable, Equatable {
+    public let amountCents: Int
+    public let categoryId: String?
+    public let notes: String?
+
+    public init(amountCents: Int, categoryId: String?, notes: String?) {
+        self.amountCents = amountCents
+        self.categoryId = categoryId
+        self.notes = notes
+    }
+
+    private enum Keys: String, CodingKey { case amountCents, categoryId, notes }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: Keys.self)
+        try container.encode(amountCents, forKey: .amountCents)
+        if let categoryId { try container.encode(categoryId, forKey: .categoryId) } else { try container.encodeNil(forKey: .categoryId) }
+        try container.encodeIfPresent(notes, forKey: .notes)
+    }
+}
+
+/// Replaces a transaction's split lines; no lines removes the split.
+public struct PutSplitsBody: Encodable, Sendable, Equatable {
+    public let lines: [SplitLineBody]
+
+    public init(lines: [SplitLineBody]) { self.lines = lines }
+}
+
 public struct CreateTransactionBody: Encodable, Sendable, Equatable {
     public let accountId: String
     public let date: String

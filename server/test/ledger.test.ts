@@ -135,6 +135,32 @@ test('renaming an account survives a sync; null goes back to the bank name; unkn
   assert.equal((await app.inject({ method: 'PATCH', url: '/v1/accounts/nope', headers: w('a-4'), payload: { name: 'x' } })).statusCode, 404);
 });
 
+test('splits replace in entry order, must add up, can be removed, and count in spending by line', async () => {
+  const { deps, app } = setup();
+  seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-01', amountCents: -2490, source: 'plaid', sourceId: 'p1', categoryId: 'c-food' });
+  const put = (key: string, lines: { amountCents: number; categoryId: string | null; notes?: string | null }[]) =>
+    app.inject({ method: 'PUT', url: '/v1/transactions/t1/splits', headers: w(key), payload: { lines } });
+  const res = await put('s-1', [{ amountCents: -1245, categoryId: 'c-fun', notes: 'mine' }, { amountCents: -1245, categoryId: 'c-food' }]);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json().splitLines.map((l: { categoryId: string; notes: string | null }) => [l.categoryId, l.notes]), [['c-fun', 'mine'], ['c-food', null]]);
+  assert.equal(res.json().categoryId, null);
+  const spend = (await app.inject({ method: 'GET', url: '/v1/spending?period=month&date=2026-03', headers: AUTH })).json();
+  assert.deepEqual(spend.categories.map((c: { categoryId: string; spentCents: number }) => [c.categoryId, c.spentCents]).sort(), [['c-food', 1245], ['c-fun', 1245]]);
+  assert.equal((await put('s-1', [{ amountCents: -1245, categoryId: 'c-fun', notes: 'mine' }, { amountCents: -1245, categoryId: 'c-food' }])).statusCode, 200, 'replay');
+  assert.equal((deps.db.prepare("SELECT COUNT(*) AS n FROM split_lines WHERE transaction_id = 't1'").get() as { n: number }).n, 2);
+  const bad = await put('s-2', [{ amountCents: -1000, categoryId: null }, { amountCents: -1000, categoryId: null }]);
+  assert.equal(bad.statusCode, 400);
+  assert.equal(bad.json().field, 'lines');
+  assert.equal((await put('s-3', [{ amountCents: -2490, categoryId: null }])).statusCode, 400);
+  assert.equal((await put('s-4', [{ amountCents: -1245, categoryId: 'c-missing' }, { amountCents: -1245, categoryId: null }])).statusCode, 400);
+  assert.equal((deps.db.prepare("SELECT COUNT(*) AS n FROM split_lines WHERE transaction_id = 't1'").get() as { n: number }).n, 2, 'failed writes change nothing');
+  const cleared = await put('s-5', []);
+  assert.equal(cleared.statusCode, 200);
+  assert.deepEqual(cleared.json().splitLines, []);
+  assert.equal((deps.db.prepare("SELECT category_owner_set AS f FROM transactions WHERE id = 't1'").get() as { f: number }).f, 1);
+  assert.equal((await app.inject({ method: 'PUT', url: '/v1/transactions/nope/splits', headers: w('s-6'), payload: { lines: [] } })).statusCode, 404);
+});
+
 test('unknown categoryId is a 400 field error', async () => {
   const { deps, app } = setup();
   seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-01', amountCents: -500 });

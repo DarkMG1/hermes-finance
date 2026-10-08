@@ -15,6 +15,7 @@ struct TransactionDetailSheet: View {
     @State private var error: String?
     @State private var busy = false
     @State private var confirmDelete = false
+    @State private var splitting = false
 
     var body: some View {
         Sheet(
@@ -39,12 +40,13 @@ struct TransactionDetailSheet: View {
                 Field(label: "Notes", error: error) { TextField("Notes", text: $notes, axis: .vertical).lineLimit(1...6) }
             }
             .disabled(writes.unresolved || deleteWrites.unresolved)
-            if !transaction.splitLines.isEmpty {
-                Section("Split") {
-                    ForEach(transaction.splitLines) { line in
-                        ListRow(title: model.categoryName(line.categoryId), subtitle: line.notes) { MoneyText(cents: line.amountCents) }
-                    }
+            Section(transaction.splitLines.isEmpty ? "" : "Split") {
+                ForEach(transaction.splitLines) { line in
+                    ListRow(title: model.categoryName(line.categoryId), subtitle: line.notes) { MoneyText(cents: line.amountCents) }
                 }
+                // Unsaved edits would be lost when the split saves and this sheet closes, so save them first.
+                Button(transaction.splitLines.isEmpty ? "Split transaction" : "Edit split") { splitting = true }
+                    .disabled(!patch.isEmpty || writes.unresolved || deleteWrites.unresolved)
             }
             if transaction.source == "manual" {
                 Section {
@@ -57,6 +59,12 @@ struct TransactionDetailSheet: View {
             payee = transaction.payee
             notes = transaction.notes ?? ""
             categoryId = transaction.categoryId
+        }
+        .sheet(isPresented: $splitting) {
+            SplitSheet(transaction: transaction) {
+                await onChange()
+                dismiss()
+            }
         }
         .confirmationDialog("Delete this transaction?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { Task { await delete() } }

@@ -53,6 +53,11 @@ func json(_ value: some Encodable) throws -> String {
     #expect(try json(PatchAccountBody(name: nil)) == #"{"name":null}"#)
 }
 
+@Test func splitsBodySendsNullCategoriesAndOmitsEmptyNotes() throws {
+    let body = PutSplitsBody(lines: [.init(amountCents: -1245, categoryId: nil, notes: nil), .init(amountCents: -1245, categoryId: "c1", notes: "n")])
+    #expect(try json(body) == #"{"lines":[{"amountCents":-1245,"categoryId":null},{"amountCents":-1245,"categoryId":"c1","notes":"n"}]}"#)
+}
+
 @Test func linkSessionBodyMatchesTheServerUnion() throws {
     #expect(try json(LinkSessionBody.create) == #"{"mode":"create"}"#)
     #expect(try json(LinkSessionBody.update(itemId: "i1")) == #"{"itemId":"i1","mode":"update"}"#)
