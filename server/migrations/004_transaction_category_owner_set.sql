@@ -8,3 +8,7 @@ UPDATE transactions SET category_owner_set = 1
    AND id IN (SELECT CASE WHEN json_valid(response_json) THEN json_extract(response_json, '$.id') END FROM idempotency_keys
                WHERE CASE WHEN json_valid(response_json) THEN json_type(response_json, '$.categoryId') = 'null'
                        AND json_extract(response_json, '$.source') IN ('plaid', 'applecard') END);
+-- A cleared pending row that has since posted: its posted successor inherits the protection.
+UPDATE transactions SET category_owner_set = 1
+ WHERE category_id IS NULL AND source = 'plaid' AND category_owner_set = 0
+   AND pending_source_id IN (SELECT source_id FROM transactions WHERE source = 'plaid' AND category_owner_set = 1);

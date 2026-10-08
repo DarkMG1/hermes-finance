@@ -74,6 +74,8 @@ test('migration 004 protects bank rows a stored PATCH response shows uncategoriz
   db.prepare("INSERT INTO accounts (id, name, type) VALUES ('a1', 'Synthetic', 'credit')").run();
   const txn = db.prepare("INSERT INTO transactions (id, account_id, source, source_id, date, amount_cents, category_id, created_at, updated_at) VALUES (?, 'a1', ?, ?, '2026-01-01', -1, NULL, 'x', 'x')");
   for (const [id, source] of [['cleared', 'plaid'], ['untouched', 'plaid'], ['manual', 'manual']] as const) txn.run(id, source, id);
+  db.prepare("UPDATE transactions SET removed_at = 'x' WHERE id = 'cleared'").run();
+  db.prepare("INSERT INTO transactions (id, account_id, source, source_id, pending_source_id, date, amount_cents, created_at, updated_at) VALUES ('posted', 'a1', 'plaid', 'posted', 'cleared', '2026-01-02', -1, 'x', 'x')").run();
   const key = db.prepare("INSERT INTO idempotency_keys (key, request_hash, status_code, response_json, created_at) VALUES (?, 'h', 200, ?, 'x')");
   key.run('k1', JSON.stringify({ id: 'cleared', source: 'plaid', categoryId: null }));
   key.run('k2', JSON.stringify({ id: 'manual', source: 'manual', categoryId: null }));
@@ -82,5 +84,5 @@ test('migration 004 protects bank rows a stored PATCH response shows uncategoriz
 
   assert.equal(migrate(db), 4);
   const flag = (id: string) => (db.prepare('SELECT category_owner_set AS f FROM transactions WHERE id = ?').get(id) as { f: number }).f;
-  assert.deepEqual(['cleared', 'untouched', 'manual'].map(flag), [1, 0, 0]);
+  assert.deepEqual(['cleared', 'posted', 'untouched', 'manual'].map(flag), [1, 1, 0, 0]);
 });
