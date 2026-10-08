@@ -103,8 +103,9 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
   const cutover = (db.prepare('SELECT cutover_date FROM accounts WHERE id = ?').get(accountId) as { cutover_date: string | null }).cutover_date;
   const exists = db.prepare("SELECT 1 FROM transactions WHERE source = 'applecard' AND source_id = ?");
   const upsert = db.prepare(`
-    INSERT INTO transactions (id, account_id, source, source_id, date, authorized_date, amount_cents, bank_description, merchant_name, plaid_category, created_at, updated_at)
-    VALUES (@id, @accountId, 'applecard', @sourceId, @date, @date, @amount, @desc, @merchant, @plaidCategory, @now, @now)
+    INSERT INTO transactions (id, account_id, source, source_id, date, authorized_date, amount_cents, bank_description, merchant_name, plaid_category, category_id, created_at, updated_at)
+    VALUES (@id, @accountId, 'applecard', @sourceId, @date, @date, @amount, @desc, @merchant, @plaidCategory,
+      (SELECT category_id FROM plaid_category_map WHERE plaid_category = @plaidCategory), @now, @now)
     ON CONFLICT (source, source_id) DO UPDATE SET
       date = excluded.date, authorized_date = excluded.authorized_date, amount_cents = excluded.amount_cents,
       bank_description = excluded.bank_description, merchant_name = excluded.merchant_name, plaid_category = excluded.plaid_category,

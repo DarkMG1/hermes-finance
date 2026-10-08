@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { parseAppleCardCsv, parseCsv, sourceIds } from '../src/applecard.ts';
 import { buildApp } from '../src/app.ts';
 import { getSpending } from '../src/ledger.ts';
-import { AUTH, makeTestDeps } from './helpers.ts';
+import { AUTH, makeTestDeps, seedCategory } from './helpers.ts';
 
 const HEADER = 'Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD),Purchased By';
 const SEPT = [
@@ -107,4 +107,18 @@ test('import needs an idempotency key, rejects bad CSV as a field error, and acc
   const big = [HEADER, ...Array.from({ length: 1500 }, (_, i) => `09/01/2026,,SYNTHETIC ROW ${i},,Shopping,Purchase,1.00,Synthetic Person`)].join('\n');
   assert.ok(big.length > 64 * 1024);
   assert.equal((await post(app, big, 'k2')).statusCode, 200);
+});
+
+test('new rows take the mapped category on insert; re-import never overwrites an edited one', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  seedCategory(deps.db, { id: 'dining', name: 'Dining' });
+  seedCategory(deps.db, { id: 'other', name: 'Other' });
+  deps.db.prepare("INSERT INTO plaid_category_map (plaid_category, category_id) VALUES ('Restaurants', 'dining')").run();
+  await post(app, SEPT, 'k1');
+  const cat = () => (deps.db.prepare("SELECT category_id FROM transactions WHERE source = 'applecard' AND amount_cents = -1234").get() as { category_id: string | null }).category_id;
+  assert.equal(cat(), 'dining');
+  deps.db.prepare("UPDATE transactions SET category_id = 'other' WHERE source = 'applecard' AND amount_cents = -1234").run();
+  await post(app, SEPT, 'k2');
+  assert.equal(cat(), 'other');
 });
