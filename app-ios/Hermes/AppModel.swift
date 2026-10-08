@@ -31,12 +31,12 @@ final class AppModel {
     var serverURL: String { UserDefaults.standard.string(forKey: "serverURL") ?? "" }
 
     func connect(urlText: String, token: String) async throws {
-        guard let url = URL(string: urlText.trimmingCharacters(in: .whitespaces)), url.scheme == "https", url.host() != nil else {
+        guard let url = URL(string: urlText.trimmingCharacters(in: .whitespacesAndNewlines)), url.scheme == "https", url.host() != nil else {
             throw ConnectError.badURL
         }
         let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
         _ = try await APIClient(baseURL: url, token: trimmedToken, transport: URLSessionTransport()).accounts()
-        keychain.write("apiToken", trimmedToken)
+        try keychain.write("apiToken", trimmedToken)
         UserDefaults.standard.set(url.absoluteString, forKey: "serverURL")
         configure(url: url, token: trimmedToken)
         await refreshReferenceData()

@@ -12,7 +12,7 @@ struct ConnectView: View {
             Form {
                 Section {
                     Field(label: "Server address") {
-                        TextField("https://hermes.example.com", text: $url)
+                        TextField("Server address", text: $url, prompt: Text(verbatim: "https://hermes.example.com"))
                             .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                     }
                     Field(label: "API token", error: error) {
@@ -22,6 +22,7 @@ struct ConnectView: View {
                 Section {
                     HButton(title: "Connect", busy: busy) { Task { await connect() } }
                         .disabled(url.isEmpty || token.isEmpty)
+                        .listRowBackground(Color.clear)
                 }
             }
             .themedForm()
@@ -32,6 +33,7 @@ struct ConnectView: View {
 
     private func connect() async {
         busy = true
+        error = nil
         defer { busy = false }
         do {
             try await model.connect(urlText: url, token: token)
