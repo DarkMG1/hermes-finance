@@ -8,3 +8,5 @@ dist/
 .expo/
 ios/
 android/
+.superpowers/
+docs/

@@ -1,0 +1,4 @@
+#!/bin/sh
+set -e
+gitleaks protect --staged --no-banner --redact
+node scripts/check-personal-data.ts
