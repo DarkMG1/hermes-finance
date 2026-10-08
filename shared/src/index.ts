@@ -46,6 +46,9 @@ export const PatchTransactionBody = z.object({
 }).strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
 export type PatchTransactionBody = z.infer<typeof PatchTransactionBody>;
 
+export const PatchAccountBody = z.object({ name: z.string().trim().min(1).max(100).nullable() }).strict();
+export type PatchAccountBody = z.infer<typeof PatchAccountBody>;
+
 export const CreateTransactionBody = z.object({
   accountId: Id, date: DateStr, amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'),
   payee: z.string().min(1).max(200), categoryId: Id.nullable().optional(), notes: z.string().max(2000).nullable().optional(),

@@ -9,6 +9,10 @@ extension APIClient {
     public func accounts() async throws -> [Account] { try decode(try await getData("/v1/accounts")) }
     public func categories() async throws -> [Category] { try decode(try await getData("/v1/categories")) }
 
+    public func patchAccount(id: String, body: PatchAccountBody, idempotencyKey: String) async throws -> Account {
+        try await write("PATCH", "/v1/accounts/\(id)", body: body, key: idempotencyKey)
+    }
+
     public func patchTransaction(id: String, body: PatchTransactionBody, idempotencyKey: String) async throws -> LedgerTransaction {
         try await write("PATCH", "/v1/transactions/\(id)", body: body, key: idempotencyKey)
     }

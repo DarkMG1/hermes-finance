@@ -7,6 +7,7 @@ struct HomeView: View {
     @Environment(\.webAuthenticationSession) private var webAuth
     @State private var state: LoadState<Home> = .loading
     @State private var selected: LedgerTransaction?
+    @State private var renaming: Account?
     @State private var linker = BankLinker()
 
     var body: some View {
@@ -41,11 +42,15 @@ struct HomeView: View {
                         ForEach(groups, id: \.name) { group in
                             Text(group.name).textStyle(.subhead, color: Palette.secondaryText)
                             ForEach(group.accounts) { account in
-                                ListRow(title: account.name, subtitle: AccountGrouping.subtitle(account)) {
-                                    if let cents = AccountGrouping.netWorthCents(account) {
-                                        MoneyText(cents: cents, colored: false, negativeIsLoss: true)
+                                Button { renaming = account } label: {
+                                    ListRow(title: account.name, subtitle: AccountGrouping.subtitle(account)) {
+                                        if let cents = AccountGrouping.netWorthCents(account) {
+                                            MoneyText(cents: cents, colored: false, negativeIsLoss: true)
+                                        }
                                     }
                                 }
+                                .buttonStyle(.plain)
+                                .accessibilityHint("Rename")
                             }
                         }
                     }
@@ -67,6 +72,9 @@ struct HomeView: View {
         .task { await load() }
         .sheet(item: $selected) { transaction in
             TransactionDetailSheet(transaction: transaction) { await load() }
+        }
+        .sheet(item: $renaming) { account in
+            AccountSheet(account: account) { await model.refreshReferenceData() }
         }
     }
 

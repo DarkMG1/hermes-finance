@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
-import { CreateTransactionBody, ListTransactionsQuery, PatchTransactionBody, SpendingQuery } from '@hermes/shared';
+import { CreateTransactionBody, ListTransactionsQuery, PatchAccountBody, PatchTransactionBody, SpendingQuery } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
@@ -12,6 +12,17 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
 
   app.get('/v1/accounts', async () => listAccounts(db));
   app.get('/v1/categories', async () => listCategories(db));
+
+  app.patch<{ Params: { id: string } }>('/v1/accounts/:id', async (req, reply) => {
+    const body = parseBody(PatchAccountBody, req.body);
+    const r = idempotentWrite(deps, req, () => {
+      if (db.prepare('UPDATE accounts SET display_name = ? WHERE id = ?').run(body.name, req.params.id).changes === 0) {
+        throw new ApiError(404, 'NOT_FOUND', 'account not found');
+      }
+      return { status: 200, body: listAccounts(db).find((a) => a.id === req.params.id) };
+    });
+    return reply.code(r.status).send(r.body);
+  });
   app.get('/v1/transactions', async (req) => listTransactions(db, parseBody(ListTransactionsQuery, req.query)));
   app.get('/v1/home', async () => getHome(db));
   app.get('/v1/spending', async (req) => getSpending(db, parseBody(SpendingQuery, req.query)));

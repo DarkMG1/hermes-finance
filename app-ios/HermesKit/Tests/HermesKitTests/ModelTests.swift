@@ -48,6 +48,11 @@ func json(_ value: some Encodable) throws -> String {
     #expect(try json(body) == #"{"categoryId":null,"payee":"Synthetic"}"#)
 }
 
+@Test func accountRenameSendsNullToGoBackToTheBankName() throws {
+    #expect(try json(PatchAccountBody(name: "Synthetic Card")) == #"{"name":"Synthetic Card"}"#)
+    #expect(try json(PatchAccountBody(name: nil)) == #"{"name":null}"#)
+}
+
 @Test func linkSessionBodyMatchesTheServerUnion() throws {
     #expect(try json(LinkSessionBody.create) == #"{"mode":"create"}"#)
     #expect(try json(LinkSessionBody.update(itemId: "i1")) == #"{"itemId":"i1","mode":"update"}"#)

@@ -30,6 +30,20 @@ public struct PatchTransactionBody: Encodable, Sendable, Equatable {
     }
 }
 
+/// `name: nil` sends JSON null: go back to the bank's name.
+public struct PatchAccountBody: Encodable, Sendable, Equatable {
+    public let name: String?
+
+    public init(name: String?) { self.name = name }
+
+    private enum Keys: String, CodingKey { case name }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: Keys.self)
+        if let name { try container.encode(name, forKey: .name) } else { try container.encodeNil(forKey: .name) }
+    }
+}
+
 public struct CreateTransactionBody: Encodable, Sendable, Equatable {
     public let accountId: String
     public let date: String
