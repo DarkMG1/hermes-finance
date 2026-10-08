@@ -43,7 +43,7 @@ export function seedAccount(db: Db, a: { id: string; itemId?: string; plaidAccou
 }
 
 export function seedTxn(db: Db, t: {
-  id: string; accountId: string; date: string; amountCents: number; source?: 'plaid' | 'manual' | 'actual'; sourceId?: string;
+  id: string; accountId: string; date: string; amountCents: number; source?: 'plaid' | 'manual' | 'actual' | 'applecard'; sourceId?: string;
   categoryId?: string | null; payee?: string | null; merchantName?: string | null; bankDescription?: string; removedAt?: string; pending?: boolean;
   plaidCategory?: string;
 }): void {

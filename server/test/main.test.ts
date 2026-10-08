@@ -15,7 +15,7 @@ test('start migrates, listens and serves health; refuses bad config', async () =
   const server = await start(env);
   try {
     const res = await fetch(`http://127.0.0.1:${server.port}/v1/health`);
-    assert.deepEqual(await res.json(), { ok: true, gitSha: 'abc', dbVersion: 3 });
+    assert.deepEqual(await res.json(), { ok: true, gitSha: 'abc', dbVersion: 4 });
   } finally {
     await server.close();
   }

@@ -122,3 +122,18 @@ test('new rows take the mapped category on insert; re-import never overwrites an
   await post(app, SEPT, 'k2');
   assert.equal(cat(), 'other');
 });
+
+test('re-import fills an uncategorized row from a mapping learned since the first import', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  seedCategory(deps.db, { id: 'dining', name: 'Dining' });
+  await post(app, SEPT, 'k1');
+  const cat = () => (deps.db.prepare("SELECT category_id FROM transactions WHERE source = 'applecard' AND amount_cents = -1234").get() as { category_id: string | null }).category_id;
+  assert.equal(cat(), null);
+  deps.db.prepare("INSERT INTO plaid_category_map (plaid_category, category_id) VALUES ('Restaurants', 'dining')").run();
+  await post(app, SEPT, 'k2');
+  assert.equal(cat(), 'dining');
+  deps.db.prepare("UPDATE transactions SET category_id = NULL, category_owner_set = 1 WHERE source = 'applecard' AND amount_cents = -1234").run();
+  await post(app, SEPT, 'k3');
+  assert.equal(cat(), null);
+});
