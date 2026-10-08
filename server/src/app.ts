@@ -6,6 +6,7 @@ import { PlaidError } from './plaid/port.ts';
 import { ledgerRoutes } from './routes/ledger.ts';
 import { syncRoutes } from './routes/sync.ts';
 import { bankRoutes } from './routes/banks.ts';
+import { importRoutes } from './routes/imports.ts';
 
 function tokenMatches(header: string | undefined, token: string): boolean {
   if (!header?.startsWith('Bearer ')) return false;
@@ -51,6 +52,7 @@ export function buildApp(deps: Deps): FastifyInstance {
   ledgerRoutes(app, deps);
   syncRoutes(app, deps);
   bankRoutes(app, deps);
+  importRoutes(app, deps);
 
   return app;
 }

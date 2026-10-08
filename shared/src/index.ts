@@ -92,3 +92,11 @@ export const SyncStatus = z.object({
   })),
 });
 export type SyncStatus = z.infer<typeof SyncStatus>;
+
+export const AppleCardImportBody = z.object({ csv: z.string().min(1).max(2_000_000) }).strict();
+export type AppleCardImportBody = z.infer<typeof AppleCardImportBody>;
+
+export const AppleCardImportResult = z.object({
+  accountId: Id, rows: z.number().int(), added: z.number().int(), updated: z.number().int(), skippedBeforeCutover: z.number().int(),
+});
+export type AppleCardImportResult = z.infer<typeof AppleCardImportResult>;
