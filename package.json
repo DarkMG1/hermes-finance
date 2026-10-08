@@ -12,7 +12,6 @@
     "start": "node server/src/main.ts",
     "secrets": "gitleaks detect --no-banner --redact",
     "backup": "node server/src/backup-cli.ts",
-    "migrate:actual": "node server/src/migrate/cli.ts",
     "fixtures": "node scripts/gen-fixtures.ts"
   },
   "devDependencies": {
