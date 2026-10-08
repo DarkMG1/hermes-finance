@@ -54,7 +54,7 @@ function setup() {
 
 test('imports history before D, splits, transfers and new accounts, and retires overlapping Plaid rows', () => {
   const { db, run, actualRow, catId } = setup();
-  assert.deepEqual(run(), { categories: 4, accountsCreated: 1, transactions: 7, splitLines: 2, splitRemainders: 1, orphanCategories: 1, retiredPlaid: 1, offBudgetRows: 0 });
+  assert.deepEqual(run(), { categories: 4, accountsCreated: 1, transactions: 7, splitLines: 2, splitRemainders: 1, orphanCategories: 1, retiredPlaid: 1, offBudgetRows: 0, adjustments: 0 });
 
   const a1 = actualRow('a1');
   assert.equal(a1?.account_id, 'h-chk');
@@ -143,4 +143,89 @@ test('uncategorized rows in an off-budget account get a hidden Off budget catego
   assert.equal(actualRow('o1')?.category_id, cat.id);
   assert.equal(actualRow('o2')?.category_id, catId('Transfers'));
   assert.equal(getSpending(db, jan).totalCents, before);
+});
+
+test('a per-account cutover imports and retires by its own date and is stored on the Hermes account', () => {
+  const { db, actualRow } = setup();
+  const counts = db.transaction(() => applyImport(db, snapshot, mapping, { cutoverDate: D, cutovers: { 'A-chk': '2026-02-05' }, nowIso: NOW }))();
+  assert.equal(counts.transactions, 8);
+  assert.equal(counts.retiredPlaid, 2);
+  assert.equal(actualRow('a2')?.account_id, 'h-chk', 'a2 is before the account cutover');
+  const removedAt = (id: string) => (db.prepare('SELECT removed_at FROM transactions WHERE id = ?').get(id) as { removed_at: string | null }).removed_at;
+  assert.equal(removedAt('p-new'), NOW);
+  const cut = (id: string) => (db.prepare('SELECT cutover_date FROM accounts WHERE id = ?').get(id) as { cutover_date: string | null }).cutover_date;
+  assert.equal(cut('h-chk'), '2026-02-05');
+  assert.equal(cut('h-card'), D);
+  assert.equal(cut('h-unmapped'), null);
+  assert.equal((db.prepare("SELECT cutover_date FROM accounts WHERE name = 'Synthetic A-cash'").get() as { cutover_date: string | null }).cutover_date, null);
+  assert.equal((db.prepare("SELECT value FROM settings WHERE key = 'cutover_date'").get() as { value: string }).value, D);
+});
+
+test('two Actual accounts on one Hermes account with different cutovers are rejected and nothing is written', () => {
+  const { db } = setup();
+  const m: AccountMapping = { 'A-chk': 'h-chk', 'A-card': 'h-chk', 'A-cash': 'new', 'A-old': 'skip' };
+  assert.throws(() => db.transaction(() => applyImport(db, snapshot, m, { cutoverDate: D, cutovers: { 'A-card': '2026-03-01' }, nowIso: NOW }))(),
+    (e: unknown) => e instanceof MigrationError && /conflicting cutover dates for Hermes account h-chk/.test(e.message));
+  assert.equal((db.prepare('SELECT COUNT(*) AS n FROM categories').get() as { n: number }).n, 0);
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE source = 'actual'").get() as { n: number }).n, 0);
+  assert.equal((db.prepare('SELECT COUNT(*) AS n FROM accounts WHERE cutover_date IS NOT NULL').get() as { n: number }).n, 0);
+});
+
+function adjustSetup(adjust: boolean) {
+  const { deps } = makeTestDeps();
+  const db = deps.db;
+  seedItem(deps, { id: 'i1', plaidItemId: 'pi1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
+  seedAccount(db, { id: 'h-chk', itemId: 'i1', plaidAccountId: 'pa-chk', type: 'depository', balanceCents: 10000 });
+  seedAccount(db, { id: 'h-card', itemId: 'i1', plaidAccountId: 'pa-card', type: 'credit', balanceCents: 3000 });
+  seedAccount(db, { id: 'h-inv', itemId: 'i1', plaidAccountId: 'pa-inv', type: 'investment', balanceCents: 5000 });
+  seedAccount(db, { id: 'h-own', type: 'depository', balanceCents: 7000 }); // no Plaid link: never adjusted
+  seedTxn(db, { id: 'p-chk', accountId: 'h-chk', source: 'plaid', sourceId: 'pc', date: '2026-02-03', amountCents: -500 });
+  seedTxn(db, { id: 'p-pend', accountId: 'h-chk', source: 'plaid', sourceId: 'pp', date: '2026-02-04', amountCents: -900, pending: true });
+  const snap: ActualSnapshot = {
+    accounts: [acct('A-chk'), acct('A-card'), acct('A-inv'), acct('A-cash'), acct('A-own')],
+    categories: [],
+    transactions: [
+      tx({ id: 'j1', accountId: 'A-chk', date: '2026-01-05', amountCents: 12845 }),
+      tx({ id: 'j2', accountId: 'A-card', date: '2026-01-06', amountCents: -1000 }),
+      tx({ id: 'j3', accountId: 'A-inv', date: '2026-01-07', amountCents: 100 }),
+      tx({ id: 'j4', accountId: 'A-cash', date: '2026-01-08', amountCents: 300 }),
+      tx({ id: 'j5', accountId: 'A-own', date: '2026-01-09', amountCents: 100 }),
+    ],
+  };
+  const m: AccountMapping = { 'A-chk': 'h-chk', 'A-card': 'h-card', 'A-inv': 'h-inv', 'A-cash': 'new', 'A-own': 'h-own' };
+  const counts = db.transaction(() => applyImport(db, snap, m, { cutoverDate: D, cutovers: { 'A-card': '2026-02-10' }, adjust, nowIso: NOW }))();
+  const adjustments = db.prepare("SELECT * FROM transactions WHERE source_id LIKE 'adjustment:%' ORDER BY source_id").all() as Record<string, unknown>[];
+  const ledger = (id: string) => (db.prepare("SELECT COALESCE(SUM(amount_cents), 0) AS s FROM transactions WHERE account_id = ? AND source IN ('actual', 'plaid') AND removed_at IS NULL AND pending = 0").get(id) as { s: number }).s;
+  return { db, counts, adjustments, ledger };
+}
+
+test('adjust writes one Transfers-category adjustment per reconcilable gap, dated the day before the account cutover', () => {
+  const { db, counts, adjustments, ledger } = adjustSetup(true);
+  assert.equal(counts.adjustments, 2);
+  const transfers = (db.prepare("SELECT id FROM categories WHERE name = 'Transfers' AND is_transfer = 1").get() as { id: string }).id;
+  const pick = (r: Record<string, unknown>) => ({ account: r.account_id, source: r.source, sourceId: r.source_id, date: r.date, amount: r.amount_cents,
+    desc: r.bank_description, payee: r.payee, notes: r.notes, category: r.category_id, pending: r.pending });
+  const common = { source: 'actual', desc: 'Balance adjustment (migration)', payee: 'Balance adjustment (migration)',
+    notes: 'Difference between Actual history and the bank balance at migration', category: transfers, pending: 0 };
+  assert.deepEqual(adjustments.map(pick), [
+    { account: 'h-card', sourceId: 'adjustment:h-card', date: '2026-02-09', amount: -2000, ...common },
+    { account: 'h-chk', sourceId: 'adjustment:h-chk', date: '2026-01-31', amount: -2345, ...common },
+  ]);
+  assert.equal(ledger('h-chk'), 10000);
+  assert.equal(ledger('h-card'), -3000);
+});
+
+test('adjust=false writes no adjustments', () => {
+  const { counts, adjustments } = adjustSetup(false);
+  assert.equal(counts.adjustments, 0);
+  assert.equal(adjustments.length, 0);
+});
+
+test('adjustment rows are excluded from spending', () => {
+  const withAdj = adjustSetup(true).db;
+  const without = adjustSetup(false).db;
+  for (const date of ['2026-01', '2026-02']) {
+    const q = { period: 'month', date } as const;
+    assert.equal(getSpending(withAdj, q).totalCents, getSpending(without, q).totalCents);
+  }
 });

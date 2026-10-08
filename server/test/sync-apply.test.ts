@@ -91,6 +91,20 @@ test('rows dated before the cutover date are skipped', () => {
   assert.ok(row('new'));
 });
 
+test('an account with its own cutover date uses it instead of the global one', () => {
+  const { deps, apply, row } = setup();
+  upsertAccounts(deps.db, 'i1', [{ accountId: 'pa2', name: 'Synthetic Card', mask: '0002', type: 'credit', subtype: 'credit card', currentBalance: 5, availableBalance: null }], NOW);
+  deps.db.prepare("UPDATE accounts SET cutover_date = '2026-03-01' WHERE plaid_account_id = 'pa2'").run();
+  apply([page({ added: [
+    txn({ transactionId: 'a-mid', accountId: 'pa1', date: '2026-02-15' }),
+    txn({ transactionId: 'b-mid', accountId: 'pa2', date: '2026-02-15' }),
+    txn({ transactionId: 'b-late', accountId: 'pa2', date: '2026-03-02' }),
+  ] })], '2026-02-01');
+  assert.ok(row('a-mid'));
+  assert.equal(row('b-mid'), undefined);
+  assert.ok(row('b-late'));
+});
+
 test('re-adding a removed id restores it', () => {
   const { apply, row } = setup();
   apply([page({ added: [txn({ transactionId: 'p1' })] })]);

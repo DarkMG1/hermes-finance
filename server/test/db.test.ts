@@ -11,12 +11,13 @@ function tempDb() {
 
 test('migrate creates the schema and is idempotent', () => {
   const db = tempDb();
-  assert.equal(migrate(db), 1);
-  assert.equal(migrate(db), 1);
+  assert.equal(migrate(db), 2);
+  assert.equal(migrate(db), 2);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map((r) => (r as { name: string }).name);
   for (const t of ['accounts', 'categories', 'idempotency_keys', 'items', 'link_sessions', 'migrations', 'plaid_category_map', 'settings', 'split_lines', 'sync_pages', 'sync_runs', 'transactions']) {
     assert.ok(tables.includes(t), `missing ${t}`);
   }
+  assert.ok(db.prepare('PRAGMA table_info(accounts)').all().some((c) => (c as { name: string }).name === 'cutover_date'));
 });
 
 test('foreign keys and WAL are on', () => {

@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { openDb } from '../db.ts';
+import { migrate, openDb } from '../db.ts';
 import { loadActualSnapshot } from './actual.ts';
 import { MigrationError } from './import.ts';
 import { mappingSkeleton, parseMapping } from './mapping.ts';
@@ -10,7 +10,7 @@ async function main(): Promise<void> {
   const { values } = parseArgs({
     options: {
       'init-mapping': { type: 'string' }, mapping: { type: 'string' }, cutover: { type: 'string' },
-      'dry-run': { type: 'boolean', default: false }, apply: { type: 'boolean', default: false },
+      'dry-run': { type: 'boolean', default: false }, apply: { type: 'boolean', default: false }, adjust: { type: 'boolean', default: false },
     },
   });
   const dbPath = process.env.HERMES_DB_PATH;
@@ -34,12 +34,13 @@ async function main(): Promise<void> {
 
   if (values['dry-run'] === values.apply) throw new MigrationError('pass exactly one of --dry-run or --apply');
   if (!values.mapping || !values.cutover) throw new MigrationError('--mapping and --cutover are required');
-  const mapping = parseMapping(readFileSync(values.mapping, 'utf8'));
+  const { mapping, cutovers } = parseMapping(readFileSync(values.mapping, 'utf8'));
   if (!existsSync(dbPath)) throw new MigrationError(`no Hermes database at ${dbPath}`);
   const snapshot = await loadActualSnapshot(process.env);
   const db = openDb(dbPath);
   try {
-    console.log(formatReport(runMigration(db, snapshot, mapping, { cutoverDate: values.cutover, apply: values.apply, now: new Date() })));
+    migrate(db);
+    console.log(formatReport(runMigration(db, snapshot, mapping, { cutoverDate: values.cutover, cutovers, adjust: values.adjust, apply: values.apply, now: new Date() })));
   } finally {
     db.close();
   }

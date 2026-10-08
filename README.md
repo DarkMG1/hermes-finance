@@ -36,3 +36,5 @@ One-time import from Actual Budget (`ACTUAL_SERVER_URL`, `ACTUAL_PASSWORD`, `ACT
     npm run migrate:actual -- --init-mapping map.json
     npm run migrate:actual -- --dry-run --mapping map.json --cutover YYYY-MM-DD
     npm run migrate:actual -- --apply   --mapping map.json --cutover YYYY-MM-DD   # with the service stopped
+
+A mapping entry may set its own `"cutover": "YYYY-MM-DD"` (default: `--cutover`), and `--adjust` books any remaining gap between the imported history and a checking/savings or credit balance as one `Balance adjustment (migration)` row in Transfers, excluded from spending.

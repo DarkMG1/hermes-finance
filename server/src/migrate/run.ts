@@ -5,7 +5,7 @@ import { applyImport, MigrationError, type AccountMapping, type ImportCounts } f
 
 export type ReconcileRow = {
   accountId: string; name: string; type: string; status: 'ok' | 'mismatch' | 'not_reconciled';
-  expectedCents: number | null; ledgerCents: number; diffCents: number | null;
+  expectedCents: number | null; ledgerCents: number; diffCents: number | null; adjustmentCents: number; boundaryRows: number;
 };
 export type MigrationResult = { applied: boolean; counts: ImportCounts; report: ReconcileRow[] };
 
@@ -13,12 +13,18 @@ export function reconcile(db: Db): ReconcileRow[] {
   const rows = db.prepare(`
     SELECT a.id, a.name, a.type, a.plaid_account_id AS plaidId, a.balance_current_cents AS balance,
       COALESCE((SELECT SUM(t.amount_cents) FROM transactions t
-        WHERE t.account_id = a.id AND t.source IN ('actual', 'plaid') AND t.removed_at IS NULL AND t.pending = 0), 0) AS ledger
+        WHERE t.account_id = a.id AND t.source IN ('actual', 'plaid') AND t.removed_at IS NULL AND t.pending = 0), 0) AS ledger,
+      COALESCE((SELECT t.amount_cents FROM transactions t WHERE t.source = 'actual' AND t.source_id = 'adjustment:' || a.id AND t.removed_at IS NULL), 0) AS adjustment,
+      -- posted Plaid rows from the cutover on whose purchase (or pending row) predates it: may duplicate an imported Actual row
+      (SELECT COUNT(*) FROM transactions t
+        WHERE t.account_id = a.id AND t.source = 'plaid' AND t.removed_at IS NULL AND t.pending = 0 AND t.date >= a.cutover_date
+          AND (t.authorized_date < a.cutover_date OR EXISTS (SELECT 1 FROM transactions p
+            WHERE p.source = 'plaid' AND p.source_id = t.pending_source_id AND p.date < a.cutover_date))) AS boundary
     FROM accounts a
     WHERE a.plaid_account_id IS NOT NULL OR EXISTS (SELECT 1 FROM transactions t WHERE t.account_id = a.id AND t.source = 'actual')
-    ORDER BY a.name, a.id`).all() as { id: string; name: string; type: string; plaidId: string | null; balance: number | null; ledger: number }[];
+    ORDER BY a.name, a.id`).all() as { id: string; name: string; type: string; plaidId: string | null; balance: number | null; ledger: number; adjustment: number; boundary: number }[];
   return rows.map((r) => {
-    const base = { accountId: r.id, name: r.name, type: r.type, ledgerCents: r.ledger };
+    const base = { accountId: r.id, name: r.name, type: r.type, ledgerCents: r.ledger, adjustmentCents: r.adjustment, boundaryRows: r.boundary };
     const sign = r.type === 'depository' ? 1 : r.type === 'credit' ? -1 : 0;
     if (sign === 0 || r.plaidId === null || r.balance === null) return { ...base, status: 'not_reconciled', expectedCents: null, diffCents: null };
     const expected = sign * r.balance;
@@ -35,10 +41,20 @@ function isRealDate(d: string): boolean {
   return !Number.isNaN(t) && new Date(t).toISOString().slice(0, 10) === d;
 }
 
-export function runMigration(db: Db, snapshot: ActualSnapshot, mapping: AccountMapping, opts: { cutoverDate: string; apply: boolean; now: Date }): MigrationResult {
+export function runMigration(db: Db, snapshot: ActualSnapshot, mapping: AccountMapping,
+  opts: { cutoverDate: string; cutovers?: Record<string, string>; adjust?: boolean; apply: boolean; now: Date }): MigrationResult {
   const { cutoverDate } = opts;
+  const cutovers = opts.cutovers ?? {};
+  const adjust = opts.adjust ?? false;
+  const today = opts.now.toISOString().slice(0, 10);
   if (!isRealDate(cutoverDate)) throw new MigrationError('cutover must be a real YYYY-MM-DD date');
-  if (cutoverDate > opts.now.toISOString().slice(0, 10)) throw new MigrationError('cutover date is in the future');
+  if (cutoverDate > today) throw new MigrationError('cutover date is in the future');
+  for (const [id, d] of Object.entries(cutovers)) {
+    const to = mapping[id];
+    if (to === undefined || to === 'new' || to === 'skip') throw new MigrationError(`cutover for Actual account ${id} needs the account mapped to a Hermes account`);
+    if (!isRealDate(d)) throw new MigrationError(`cutover for Actual account ${id} must be a real YYYY-MM-DD date`);
+    if (d > today) throw new MigrationError(`cutover for Actual account ${id} is in the future`);
+  }
   if (db.prepare("SELECT 1 FROM settings WHERE key = 'actual_migration'").get()) throw new MigrationError('Actual migration already applied');
   const stored = getCutoverDate(db);
   if (stored !== null && stored !== cutoverDate) throw new MigrationError('the database is already set to a different cutover date');
@@ -49,10 +65,10 @@ export function runMigration(db: Db, snapshot: ActualSnapshot, mapping: AccountM
   try {
     db.transaction(() => {
       const nowIso = opts.now.toISOString();
-      const counts = applyImport(db, snapshot, mapping, { cutoverDate, nowIso });
+      const counts = applyImport(db, snapshot, mapping, { cutoverDate, cutovers, adjust, nowIso });
       const report = reconcile(db);
       if (opts.apply) {
-        db.prepare("INSERT INTO settings (key, value) VALUES ('actual_migration', ?)").run(JSON.stringify({ appliedAt: nowIso, cutoverDate, counts }));
+        db.prepare("INSERT INTO settings (key, value) VALUES ('actual_migration', ?)").run(JSON.stringify({ appliedAt: nowIso, cutoverDate, cutovers, adjust, counts }));
       }
       out.result = { applied: opts.apply, counts, report };
       if (!opts.apply) throw new DryRunRollback(); // rolls the whole transaction back
@@ -71,10 +87,10 @@ export function formatReport(r: MigrationResult): string {
   const c = r.counts;
   return [
     r.applied ? 'APPLIED' : 'DRY RUN (nothing written)',
-    `${'status'.padEnd(15)}${'type'.padEnd(12)}${'expected'.padStart(13)}${'ledger'.padStart(13)}${'diff'.padStart(11)}  account`,
-    ...r.report.map((x) => `${x.status.toUpperCase().padEnd(15)}${x.type.padEnd(12)}${money(x.expectedCents).padStart(13)}${money(x.ledgerCents).padStart(13)}${money(x.diffCents).padStart(11)}  ${x.name}`),
+    `${'status'.padEnd(15)}${'type'.padEnd(12)}${'expected'.padStart(13)}${'ledger'.padStart(13)}${'diff'.padStart(11)}${'adjust'.padStart(11)}${'boundary'.padStart(10)}  account`,
+    ...r.report.map((x) => `${x.status.toUpperCase().padEnd(15)}${x.type.padEnd(12)}${money(x.expectedCents).padStart(13)}${money(x.ledgerCents).padStart(13)}${money(x.diffCents).padStart(11)}${money(x.adjustmentCents).padStart(11)}${String(x.boundaryRows).padStart(10)}  ${x.name}`),
     `summary: applied=${r.applied} accounts=${r.report.length} ok=${n('ok')} mismatch=${n('mismatch')} not_reconciled=${n('not_reconciled')} `
       + `transactions=${c.transactions} split_lines=${c.splitLines} split_remainders=${c.splitRemainders} orphan_categories=${c.orphanCategories} `
-      + `categories=${c.categories} accounts_created=${c.accountsCreated} retired_plaid=${c.retiredPlaid} off_budget_rows=${c.offBudgetRows}`,
+      + `categories=${c.categories} accounts_created=${c.accountsCreated} retired_plaid=${c.retiredPlaid} off_budget_rows=${c.offBudgetRows} adjustments=${c.adjustments} boundary_rows=${r.report.reduce((s, x) => s + x.boundaryRows, 0)}`,
   ].join('\n');
 }

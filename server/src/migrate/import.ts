@@ -7,7 +7,7 @@ export class MigrationError extends Error {}
 export type AccountMapping = Record<string, string>; // Actual account id -> Hermes account id | 'new' | 'skip'
 export type ImportCounts = {
   categories: number; accountsCreated: number; transactions: number; splitLines: number;
-  splitRemainders: number; orphanCategories: number; retiredPlaid: number; offBudgetRows: number;
+  splitRemainders: number; orphanCategories: number; retiredPlaid: number; offBudgetRows: number; adjustments: number;
 };
 
 export function validateMapping(db: Db, snapshot: ActualSnapshot, mapping: AccountMapping): void {
@@ -22,9 +22,18 @@ export function validateMapping(db: Db, snapshot: ActualSnapshot, mapping: Accou
   if (problems.length) throw new MigrationError(problems.join('\n'));
 }
 
-export function applyImport(db: Db, snapshot: ActualSnapshot, mapping: AccountMapping, opts: { cutoverDate: string; nowIso: string }): ImportCounts {
+export function applyImport(db: Db, snapshot: ActualSnapshot, mapping: AccountMapping, opts: { cutoverDate: string; cutovers?: Record<string, string>; adjust?: boolean; nowIso: string }): ImportCounts {
   validateMapping(db, snapshot, mapping);
-  const counts: ImportCounts = { categories: 0, accountsCreated: 0, transactions: 0, splitLines: 0, splitRemainders: 0, orphanCategories: 0, retiredPlaid: 0, offBudgetRows: 0 };
+  const cutoverOf = (actualId: string): string => opts.cutovers?.[actualId] ?? opts.cutoverDate;
+  const hermesCutovers = new Map<string, string>(); // mapped Hermes account id -> its effective cutover
+  for (const [actualId, to] of Object.entries(mapping)) {
+    if (to === 'new' || to === 'skip') continue;
+    const d = cutoverOf(actualId);
+    const prev = hermesCutovers.get(to);
+    if (prev !== undefined && prev !== d) throw new MigrationError(`conflicting cutover dates for Hermes account ${to}`);
+    hermesCutovers.set(to, d);
+  }
+  const counts: ImportCounts = { categories: 0, accountsCreated: 0, transactions: 0, splitLines: 0, splitRemainders: 0, orphanCategories: 0, retiredPlaid: 0, offBudgetRows: 0, adjustments: 0 };
 
   const byName = db.prepare('SELECT id FROM categories WHERE name = ?');
   const insertCategory = db.prepare('INSERT INTO categories (id, name, group_name, is_income, is_transfer, hidden) VALUES (?, ?, ?, ?, ?, ?)');
@@ -102,7 +111,7 @@ export function applyImport(db: Db, snapshot: ActualSnapshot, mapping: AccountMa
   for (const t of snapshot.transactions) {
     const accountId = targets.get(t.accountId);
     if (!accountId) continue;
-    if (!created.has(t.accountId) && t.date >= opts.cutoverDate) continue;
+    if (!created.has(t.accountId) && t.date >= cutoverOf(t.accountId)) continue;
     const id = randomUUID();
     const categoryId = t.lines.length ? null : category(t.categoryId, t.isTransfer, t.accountId);
     insertTxn.run(id, accountId, t.id, t.date, t.amountCents, t.importedPayee ?? t.payee ?? '', categoryId, t.payee, t.notes, opts.nowIso, opts.nowIso);
@@ -120,8 +129,30 @@ export function applyImport(db: Db, snapshot: ActualSnapshot, mapping: AccountMa
   }
 
   const retire = db.prepare("UPDATE transactions SET removed_at = ?, updated_at = ? WHERE account_id = ? AND source = 'plaid' AND date < ? AND removed_at IS NULL");
-  const mappedHermesIds = new Set([...targets].filter(([actualId]) => !created.has(actualId)).map(([, hermesId]) => hermesId));
-  for (const hermesId of mappedHermesIds) counts.retiredPlaid += retire.run(opts.nowIso, opts.nowIso, hermesId, opts.cutoverDate).changes;
+  const setCutover = db.prepare('UPDATE accounts SET cutover_date = ? WHERE id = ?');
+  for (const [hermesId, d] of hermesCutovers) {
+    counts.retiredPlaid += retire.run(opts.nowIso, opts.nowIso, hermesId, d).changes;
+    setCutover.run(d, hermesId);
+  }
+
+  if (opts.adjust) {
+    const account = db.prepare(`SELECT a.type, a.plaid_account_id AS plaidId, a.balance_current_cents AS balance,
+        COALESCE((SELECT SUM(t.amount_cents) FROM transactions t
+          WHERE t.account_id = a.id AND t.source IN ('actual', 'plaid') AND t.removed_at IS NULL AND t.pending = 0), 0) AS ledger
+      FROM accounts a WHERE a.id = ?`);
+    const label = 'Balance adjustment (migration)';
+    for (const [hermesId, d] of hermesCutovers) {
+      const a = account.get(hermesId) as { type: string; plaidId: string | null; balance: number | null; ledger: number };
+      const sign = a.type === 'depository' ? 1 : a.type === 'credit' ? -1 : 0;
+      if (sign === 0 || a.plaidId === null || a.balance === null) continue;
+      const gap = sign * a.balance - a.ledger;
+      if (gap === 0) continue;
+      const dayBefore = new Date(Date.parse(`${d}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+      insertTxn.run(randomUUID(), hermesId, `adjustment:${hermesId}`, dayBefore, gap, label, specialCategory('Transfers', 0), label,
+        'Difference between Actual history and the bank balance at migration', opts.nowIso, opts.nowIso);
+      counts.adjustments += 1;
+    }
+  }
 
   db.prepare("INSERT INTO settings (key, value) VALUES ('cutover_date', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run(opts.cutoverDate);
   return counts;
