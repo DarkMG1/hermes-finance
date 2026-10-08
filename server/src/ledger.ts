@@ -3,7 +3,7 @@ import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
 
 type TxnRow = {
-  id: string; account_id: string; source: 'plaid' | 'manual' | 'actual'; date: string; amount_cents: number;
+  id: string; account_id: string; source: 'plaid' | 'manual' | 'actual' | 'applecard'; date: string; amount_cents: number;
   bank_description: string; merchant_name: string | null; pending: number; category_id: string | null;
   payee: string | null; notes: string | null;
 };

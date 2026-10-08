@@ -1,0 +1,38 @@
+included:
+  - Hermes
+  - HermesKit/Sources
+  - HermesKit/Tests
+excluded:
+  - LintFixtures
+  - HermesKit/.build
+disabled_rules:
+  - trailing_comma
+  - todo
+line_length:
+  warning: 160
+  error: 220
+identifier_name:
+  min_length: 1
+type_body_length:
+  warning: 400
+file_length:
+  warning: 600
+custom_rules:
+  no_raw_color:
+    name: "Raw colour"
+    regex: '(Color|UIColor)\(\s*(red|hue|white|displayP3|\.sRGB)|"#[0-9A-Fa-f]{6}"|0x[0-9A-Fa-f]{6}\b'
+    excluded: 'Hermes/Theme/'
+    message: "Use Palette tokens from Hermes/Theme"
+    severity: error
+  no_raw_font_size:
+    name: "Raw font size"
+    regex: '\.system\(\s*size:|Font\.custom\('
+    excluded: 'Hermes/Theme/'
+    message: "Use TextStyle from Hermes/Theme"
+    severity: error
+  no_raw_spacing:
+    name: "Raw spacing or radius"
+    regex: '\.padding\((\s*\.[A-Za-z]+\s*,)?\s*-?\d|spacing:\s*-?\d|cornerRadius:\s*-?\d|\.frame\([^)]*(width|height|Width|Height):\s*-?\d|\.cornerRadius\(\s*-?\d'
+    excluded: 'Hermes/Theme/'
+    message: "Use Space / Radius tokens from Hermes/Theme"
+    severity: error

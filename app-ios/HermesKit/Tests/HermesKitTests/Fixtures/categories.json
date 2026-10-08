@@ -1,0 +1,18 @@
+[
+  {
+    "id": "cat-food",
+    "name": "Synthetic Food",
+    "groupName": "Group",
+    "isIncome": false,
+    "isTransfer": false,
+    "hidden": false
+  },
+  {
+    "id": "cat-pay",
+    "name": "Synthetic Pay",
+    "groupName": "Group",
+    "isIncome": true,
+    "isTransfer": false,
+    "hidden": false
+  }
+]

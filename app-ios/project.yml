@@ -1,0 +1,39 @@
+name: Hermes
+options:
+  bundleIdPrefix: dev.darkmg1
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+packages:
+  HermesKit:
+    path: HermesKit
+targets:
+  Hermes:
+    type: application
+    platform: iOS
+    sources: [Hermes]
+    dependencies:
+      - package: HermesKit
+    configFiles:
+      Debug: Signing.xcconfig
+      Release: Signing.xcconfig
+    info:
+      path: Hermes/Info.plist
+      properties:
+        CFBundleDisplayName: Hermes
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.darkmg1.hermesfinance
+        TARGETED_DEVICE_FAMILY: "1"
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_PREVIEWS: YES
+    scheme: {}

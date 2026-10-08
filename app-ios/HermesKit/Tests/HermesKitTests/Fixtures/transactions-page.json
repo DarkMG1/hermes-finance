@@ -1,0 +1,33 @@
+{
+  "transactions": [
+    {
+      "id": "txn-1",
+      "accountId": "acct-card",
+      "source": "plaid",
+      "date": "2026-03-14",
+      "amountCents": -1250,
+      "payee": "Synthetic Cafe",
+      "bankDescription": "SYNTHETIC CAFE 001",
+      "merchantName": "Synthetic Cafe",
+      "pending": false,
+      "categoryId": "cat-food",
+      "notes": null,
+      "splitLines": []
+    },
+    {
+      "id": "txn-2",
+      "accountId": "acct-checking",
+      "source": "plaid",
+      "date": "2026-03-13",
+      "amountCents": 300000,
+      "payee": "Synthetic Employer",
+      "bankDescription": "SYNTHETIC",
+      "merchantName": null,
+      "pending": false,
+      "categoryId": "cat-pay",
+      "notes": null,
+      "splitLines": []
+    }
+  ],
+  "nextCursor": "WyIyMDI2LTAzLTEzIiwidHhuLTIiXQ"
+}

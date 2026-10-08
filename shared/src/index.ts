@@ -25,7 +25,7 @@ export const SplitLine = z.object({ id: Id, amountCents: Cents, categoryId: Id.n
 export type SplitLine = z.infer<typeof SplitLine>;
 
 export const Transaction = z.object({
-  id: Id, accountId: Id, source: z.enum(['plaid', 'manual', 'actual']), date: DateStr,
+  id: Id, accountId: Id, source: z.enum(['plaid', 'manual', 'actual', 'applecard']), date: DateStr,
   amountCents: Cents, payee: z.string(), bankDescription: z.string(), merchantName: z.string().nullable(),
   pending: z.boolean(), categoryId: Id.nullable(), notes: z.string().nullable(), splitLines: z.array(SplitLine),
 });
@@ -92,3 +92,11 @@ export const SyncStatus = z.object({
   })),
 });
 export type SyncStatus = z.infer<typeof SyncStatus>;
+
+export const AppleCardImportBody = z.object({ csv: z.string().min(1).max(2_000_000) }).strict();
+export type AppleCardImportBody = z.infer<typeof AppleCardImportBody>;
+
+export const AppleCardImportResult = z.object({
+  accountId: Id, rows: z.number().int(), added: z.number().int(), updated: z.number().int(), skippedBeforeCutover: z.number().int(),
+});
+export type AppleCardImportResult = z.infer<typeof AppleCardImportResult>;

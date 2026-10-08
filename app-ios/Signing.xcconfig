@@ -1,0 +1,3 @@
+// Personal signing stays out of git. Create Signing.local.xcconfig next to this file with:
+// DEVELOPMENT_TEAM = <your Apple personal team id>
+#include? "Signing.local.xcconfig"
