@@ -1,0 +1,27 @@
+{
+  "id": "txn-3",
+  "accountId": "acct-card",
+  "source": "manual",
+  "date": "2026-03-12",
+  "amountCents": -4000,
+  "payee": "Synthetic Split",
+  "bankDescription": "SYNTHETIC",
+  "merchantName": null,
+  "pending": true,
+  "categoryId": null,
+  "notes": null,
+  "splitLines": [
+    {
+      "id": "line-1",
+      "amountCents": -2500,
+      "categoryId": "cat-food",
+      "notes": null
+    },
+    {
+      "id": "line-2",
+      "amountCents": -1500,
+      "categoryId": null,
+      "notes": null
+    }
+  ]
+}

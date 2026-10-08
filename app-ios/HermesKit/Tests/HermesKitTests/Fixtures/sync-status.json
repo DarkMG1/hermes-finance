@@ -1,0 +1,12 @@
+{
+  "items": [
+    {
+      "itemId": "item-1",
+      "institutionName": "Synthetic Bank",
+      "result": "ok",
+      "added": 2,
+      "modified": 1,
+      "removed": 0
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "id": "acct-card",
+    "itemId": "item-1",
+    "name": "Account acct-card",
+    "mask": null,
+    "type": "credit",
+    "subtype": null,
+    "balanceCurrentCents": 4200,
+    "balanceAvailableCents": null,
+    "balanceAt": null,
+    "hidden": false
+  },
+  {
+    "id": "acct-checking",
+    "itemId": "item-1",
+    "name": "Account acct-checking",
+    "mask": null,
+    "type": "depository",
+    "subtype": null,
+    "balanceCurrentCents": 250000,
+    "balanceAvailableCents": null,
+    "balanceAt": null,
+    "hidden": false
+  }
+]
