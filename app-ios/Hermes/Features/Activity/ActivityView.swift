@@ -17,19 +17,23 @@ struct ActivityView: View {
 
     var body: some View {
         List {
-            if let lastLoad { LastUpdated(loaded: lastLoad) }
-            InlineError(message: error)
-            ForEach(items) { transaction in
-                Button { selected = transaction } label: { TransactionRow(transaction: transaction) }
-                    .buttonStyle(.plain)
-                    .onAppear {
-                        if transaction.id == items.last?.id, cursor != nil { Task { await load(reset: false) } }
-                    }
+            // plain-list rows draw the system background (pure black in dark mode) unless told otherwise
+            Group {
+                if let lastLoad { LastUpdated(loaded: lastLoad) }
+                InlineError(message: error)
+                ForEach(items) { transaction in
+                    Button { selected = transaction } label: { TransactionRow(transaction: transaction) }
+                        .buttonStyle(.plain)
+                        .onAppear {
+                            if transaction.id == items.last?.id, cursor != nil { Task { await load(reset: false) } }
+                        }
+                }
+                if loading { ProgressView().frame(maxWidth: .infinity) }
+                if !loading && items.isEmpty && error == nil {
+                    Text("No transactions").textStyle(.subhead, color: Palette.secondaryText)
+                }
             }
-            if loading { ProgressView().frame(maxWidth: .infinity) }
-            if !loading && items.isEmpty && error == nil {
-                Text("No transactions").textStyle(.subhead, color: Palette.secondaryText)
-            }
+            .listRowBackground(Palette.background)
         }
         .listStyle(.plain)
         .themedForm()
