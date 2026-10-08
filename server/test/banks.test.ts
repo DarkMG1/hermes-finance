@@ -87,3 +87,32 @@ test('expired session whose Plaid result is complete still completes; expired an
   assert.equal(done.statusCode, 200);
   assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM items').get() as { n: number }).n, 1);
 });
+
+test('a pending completion is not cached: retrying the same key completes once', async () => {
+  const { deps, plaid } = makeTestDeps();
+  const app = buildApp(deps);
+  const s = (await app.inject({ method: 'POST', url: '/v1/plaid/link-sessions', headers: w('k-1'), payload: { mode: 'create' } })).json();
+  const url = `/v1/plaid/link-sessions/${s.sessionId}/complete`;
+  assert.equal((await app.inject({ method: 'POST', url, headers: w('k-2'), payload: {} })).statusCode, 202);
+  const linkToken = (deps.db.prepare('SELECT link_token FROM link_sessions WHERE id = ?').get(s.sessionId) as { link_token: string }).link_token;
+  plaid.linkResults.set(linkToken, { status: 'complete', publicToken: 'pub-k', institutionName: 'Synthetic Bank' });
+  const done = await app.inject({ method: 'POST', url, headers: w('k-2'), payload: {} });
+  assert.equal(done.statusCode, 200);
+  assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM items').get() as { n: number }).n, 1);
+  assert.deepEqual(plaid.exchanged, ['pub-k']);
+});
+
+test('replaying a completed session still requires an Idempotency-Key', async () => {
+  const { deps, plaid } = makeTestDeps();
+  const app = buildApp(deps);
+  const s = (await app.inject({ method: 'POST', url: '/v1/plaid/link-sessions', headers: w('r-1'), payload: { mode: 'create' } })).json();
+  const url = `/v1/plaid/link-sessions/${s.sessionId}/complete`;
+  const linkToken = (deps.db.prepare('SELECT link_token FROM link_sessions WHERE id = ?').get(s.sessionId) as { link_token: string }).link_token;
+  plaid.linkResults.set(linkToken, { status: 'complete', publicToken: 'pub-r', institutionName: 'Synthetic Bank' });
+  assert.equal((await app.inject({ method: 'POST', url, headers: w('r-2'), payload: {} })).statusCode, 200);
+  const bare = await app.inject({ method: 'POST', url, headers: AUTH, payload: {} });
+  assert.equal(bare.statusCode, 400);
+  assert.equal(bare.json().code, 'IDEMPOTENCY_KEY_REQUIRED');
+  assert.equal((await app.inject({ method: 'POST', url, headers: w('r-3'), payload: {} })).statusCode, 200);
+  assert.deepEqual(plaid.exchanged, ['pub-r']);
+});

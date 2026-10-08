@@ -46,10 +46,10 @@ export function bankRoutes(app: FastifyInstance, deps: Deps): void {
     const s = db.prepare('SELECT * FROM link_sessions WHERE id = ?').get(req.params.id) as
       { id: string; link_token: string; mode: 'create' | 'update'; item_id: string | null; expires_at: string; completed_at: string | null } | undefined;
     if (!s) throw new ApiError(404, 'NOT_FOUND', 'link session not found');
-    if (s.completed_at && s.item_id) return reply.code(200).send(bankById(deps, s.item_id));
     const expired = s.expires_at < deps.now().toISOString();
 
     const r = await idempotentAsync(deps, req, async () => {
+      if (s.completed_at && s.item_id) return { status: 200, body: bankById(deps, s.item_id) };
       const result = await deps.plaid.getLinkResult(s.link_token);
       if (expired && result.status !== 'complete') throw new ApiError(410, 'LINK_SESSION_EXPIRED', 'link session expired; start again');
       if (result.status === 'pending') return { status: 202, body: { code: 'LINK_PENDING', message: 'bank linking not finished yet' } };
@@ -70,8 +70,10 @@ export function bankRoutes(app: FastifyInstance, deps: Deps): void {
         })();
       } else {
         if (!itemId) throw new Error('update session without item');
-        db.prepare("UPDATE items SET status = 'ok', last_error_code = NULL WHERE id = ?").run(itemId);
-        db.prepare('UPDATE link_sessions SET completed_at = ? WHERE id = ?').run(deps.now().toISOString(), s.id);
+        db.transaction(() => {
+          db.prepare("UPDATE items SET status = 'ok', last_error_code = NULL WHERE id = ?").run(itemId);
+          db.prepare('UPDATE link_sessions SET completed_at = ? WHERE id = ?').run(deps.now().toISOString(), s.id);
+        })();
       }
       await syncItem(deps, itemId);
       return { status: 200, body: bankById(deps, itemId) };

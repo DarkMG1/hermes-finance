@@ -1,4 +1,4 @@
-import { Configuration, CountryCode, PlaidApi, PlaidEnvironments, Products, type LinkTokenCreateRequest } from 'plaid';
+import { Configuration, CountryCode, PlaidApi, PlaidEnvironments, Products, type LinkTokenCreateRequest, type LinkTokenGetSessionsResponse } from 'plaid';
 import type { Config } from '../config.ts';
 import { PlaidError, type LinkResult, type PlaidAccount, type PlaidPort, type PlaidTxn, type SyncPage } from './port.ts';
 
@@ -21,6 +21,18 @@ function mapTxn(t: RawTxn): PlaidTxn {
     authorizedDate: t.authorized_date ?? null, name: t.name, merchantName: t.merchant_name ?? null, pending: t.pending,
     pendingTransactionId: t.pending_transaction_id ?? null, category: t.personal_finance_category?.detailed ?? null,
   };
+}
+
+// A link token can carry several sessions (e.g. an exit then a retry that succeeded); look at all of them.
+export function mapLinkSessions(sessions: LinkTokenGetSessionsResponse[]): LinkResult {
+  for (const s of sessions) {
+    const add = s.results?.item_add_results?.[0];
+    if (add) return { status: 'complete', publicToken: add.public_token, institutionName: add.institution?.name ?? null };
+    if (s.on_success) return { status: 'complete', publicToken: s.on_success.public_token ?? null, institutionName: s.on_success.metadata?.institution?.name ?? null };
+  }
+  if (sessions.length === 0 || sessions.some((s) => !s.finished_at)) return { status: 'pending' };
+  // a finished session with neither results nor exit is update mode
+  return sessions.every((s) => s.exit) ? { status: 'exited' } : { status: 'complete', publicToken: null, institutionName: null };
 }
 
 export function createPlaidClient(config: Config): PlaidPort {
@@ -53,7 +65,7 @@ export function createPlaidClient(config: Config): PlaidPort {
     async createLinkToken(opts) {
       const req: LinkTokenCreateRequest = {
         user: { client_user_id: 'owner' }, client_name: 'Hermes', country_codes: [CountryCode.Us], language: 'en',
-        hosted_link: { is_mobile_app: true, completion_redirect_uri: REDIRECT },
+        hosted_link: { completion_redirect_uri: REDIRECT },
         ...(opts.mode === 'update'
           ? { access_token: opts.accessToken }
           : { products: [Products.Transactions], transactions: { days_requested: 730 } }),
@@ -68,12 +80,7 @@ export function createPlaidClient(config: Config): PlaidPort {
     async getLinkResult(linkToken): Promise<LinkResult> {
       try {
         const { data } = await api.linkTokenGet({ link_token: linkToken });
-        const session = data.link_sessions?.[0];
-        if (!session?.finished_at) return { status: 'pending' };
-        const add = session.results?.item_add_results?.[0];
-        if (add) return { status: 'complete', publicToken: add.public_token, institutionName: add.institution?.name ?? null };
-        if (session.on_success) return { status: 'complete', publicToken: session.on_success.public_token ?? null, institutionName: session.on_success.metadata?.institution?.name ?? null };
-        return session.exit ? { status: 'exited' } : { status: 'complete', publicToken: null, institutionName: null };
+        return mapLinkSessions(data.link_sessions ?? []);
       } catch (e) { return rethrow(e); }
     },
 
