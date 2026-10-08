@@ -42,4 +42,8 @@ import Testing
     #expect(AccountGrouping.netWorthCents(groups[1].accounts[0]) == -500)
     #expect(AccountGrouping.netWorthCents(groups[0].accounts[0]) == 300)
     #expect(AccountGrouping.netWorthCents(groups[3].accounts[0]) == nil)
+    let masked = Account(id: "7", name: "Synthetic Card", mask: "0001", type: "credit", subtype: nil, balanceCurrentCents: nil,
+                         balanceAvailableCents: nil, balanceAt: nil, hidden: false, itemId: nil)
+    #expect(AccountGrouping.subtitle(masked) == "••0001")
+    #expect(AccountGrouping.subtitle(groups[1].accounts[0]) == "Credit card")
 }
