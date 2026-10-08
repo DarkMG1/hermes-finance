@@ -30,7 +30,7 @@ test('reconcile: depository and credit signs, pending/removed/manual excluded, u
 
   const rows = new Map(reconcile(db).map((r) => [r.accountId, r]));
   assert.equal(rows.has('h-empty'), false);
-  assert.deepEqual(rows.get('h-dep'), { accountId: 'h-dep', name: 'Account h-dep', type: 'depository', status: 'ok', expectedCents: 85000, ledgerCents: 85000, diffCents: 0 });
+  assert.deepEqual(rows.get('h-dep'), { accountId: 'h-dep', name: 'Account h-dep', type: 'depository', status: 'ok', expectedCents: 85000, ledgerCents: 85000, diffCents: 0, adjustmentCents: 0, boundaryRows: 0 });
   assert.equal(rows.get('h-cc')?.status, 'ok');
   assert.equal(rows.get('h-cc')?.expectedCents, -3000);
   assert.deepEqual([rows.get('h-miss')?.status, rows.get('h-miss')?.diffCents], ['mismatch', -1200]);
@@ -119,4 +119,50 @@ test('formatReport ends with a summary line that carries counts but no amounts o
   assert.match(text, /^DRY RUN/);
   assert.match(summary, /^summary: applied=false accounts=1 ok=1 mismatch=0 not_reconciled=0 transactions=2 /);
   assert.doesNotMatch(summary, /850|Synthetic|Account/);
+});
+
+test('adjust closes the gap with an adjustment row, reported per account and in the summary and marker', () => {
+  const { db, snapshot, mapping } = migrationSetup();
+  db.prepare("UPDATE accounts SET balance_current_cents = 90000 WHERE id = 'h-chk'").run();
+  const r = runMigration(db, snapshot, mapping, { cutoverDate: D, cutovers: { 'A-chk': D }, adjust: true, apply: true, now: NOW });
+  assert.equal(r.counts.adjustments, 1);
+  assert.deepEqual(r.report.map((x) => [x.accountId, x.status, x.ledgerCents, x.diffCents, x.adjustmentCents]), [['h-chk', 'ok', 90000, 0, 5000]]);
+  const text = formatReport(r);
+  assert.match(text, /adjust/);
+  assert.match(text.trim().split('\n').at(-1) ?? '', / adjustments=1( |$)/);
+  const marker = JSON.parse((db.prepare("SELECT value FROM settings WHERE key = 'actual_migration'").get() as { value: string }).value) as { cutovers: unknown; adjust: unknown };
+  assert.deepEqual([marker.cutovers, marker.adjust], [{ 'A-chk': D }, true]);
+  db.prepare("UPDATE transactions SET removed_at = 'x' WHERE source_id = 'adjustment:h-chk'").run();
+  assert.equal(reconcile(db)[0]?.adjustmentCents, 0, 'a removed adjustment is not reported');
+});
+
+test('boundaryRows counts posted Plaid rows on/after the cutover whose purchase or pending row predates it', () => {
+  const { db, snapshot, mapping } = migrationSetup();
+  seedAccount(db, { id: 'h-card', itemId: 'i1', plaidAccountId: 'pa-card', type: 'credit', balanceCents: 0 });
+  seedTxn(db, { id: 'c1', accountId: 'h-card', source: 'plaid', sourceId: 'c1', date: '2026-02-02', amountCents: -1200 });
+  db.prepare("UPDATE transactions SET authorized_date = '2026-01-30' WHERE id = 'c1'").run();
+  seedAccount(db, { id: 'h-sav', itemId: 'i1', plaidAccountId: 'pa-sav', type: 'depository', balanceCents: 0 });
+  seedTxn(db, { id: 's0', accountId: 'h-sav', source: 'plaid', sourceId: 's0', date: '2026-01-31', amountCents: -300, pending: true, removedAt: '2026-02-03' });
+  seedTxn(db, { id: 's1', accountId: 'h-sav', source: 'plaid', sourceId: 's1', date: '2026-02-03', amountCents: -300 });
+  seedTxn(db, { id: 's2', accountId: 'h-sav', source: 'plaid', sourceId: 's2', date: '2026-02-04', amountCents: -100 });
+  db.prepare("UPDATE transactions SET pending_source_id = 's0' WHERE id = 's1'").run();
+  const snap: ActualSnapshot = { ...snapshot, accounts: [...snapshot.accounts,
+    { id: 'A-card', name: 'Synthetic Card', offbudget: false, closed: false }, { id: 'A-sav', name: 'Synthetic Savings', offbudget: false, closed: false }] };
+  const r = runMigration(db, snap, { ...mapping, 'A-card': 'h-card', 'A-sav': 'h-sav' }, { cutoverDate: D, apply: false, now: NOW });
+  const rows = new Map(r.report.map((x) => [x.accountId, x.boundaryRows]));
+  assert.deepEqual([rows.get('h-card'), rows.get('h-sav'), rows.get('h-chk')], [1, 1, 0]);
+  const text = formatReport(r);
+  assert.match(text, /boundary/);
+  assert.match(text.trim().split('\n').at(-1) ?? '', / boundary_rows=2( |$)/);
+});
+
+test('refuses bad, future, unmapped or non-Hermes per-account cutovers, naming the account', () => {
+  const { db, snapshot } = migrationSetup();
+  const run = (mapping: Record<string, string>, cutovers: Record<string, string>) => () => runMigration(db, snapshot, mapping, { cutoverDate: D, cutovers, apply: false, now: NOW });
+  const named = (re: RegExp) => (e: unknown) => e instanceof MigrationError && /A-chk/.test(e.message) && re.test(e.message);
+  assert.throws(run({ 'A-chk': 'h-chk' }, { 'A-chk': '2026-02-30' }), named(/real YYYY-MM-DD/));
+  assert.throws(run({ 'A-chk': 'h-chk' }, { 'A-chk': '2026-03-16' }), named(/in the future/));
+  assert.throws(run({ 'A-chk': 'new' }, { 'A-chk': D }), named(/Hermes account/));
+  assert.throws(run({ 'A-chk': 'skip' }, { 'A-chk': D }), named(/Hermes account/));
+  assert.throws(run({ 'A-chk': 'h-chk' }, { 'A-zzz': D }), (e: unknown) => e instanceof MigrationError && /A-zzz/.test(e.message));
 });

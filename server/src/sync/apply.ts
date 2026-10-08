@@ -44,6 +44,14 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
     }
     return id;
   };
+  const accountCutovers = new Map<string, string | null>();
+  const cutoverFor = (plaidAccountId: string): string | null => {
+    if (!accountCutovers.has(plaidAccountId)) {
+      const row = db.prepare('SELECT cutover_date FROM accounts WHERE plaid_account_id = ?').get(plaidAccountId) as { cutover_date: string | null } | undefined;
+      accountCutovers.set(plaidAccountId, row?.cutover_date ?? null);
+    }
+    return accountCutovers.get(plaidAccountId) ?? opts.cutoverDate;
+  };
   const mappedCategory = db.prepare('SELECT category_id FROM plaid_category_map WHERE plaid_category = ?');
   const checkSuperseded = db.prepare("SELECT id FROM transactions WHERE source = 'plaid' AND pending_source_id = ?");
   const getRow = db.prepare("SELECT id, category_id, payee, notes FROM transactions WHERE source = 'plaid' AND source_id = ?");
@@ -62,7 +70,8 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
 
   const counts: ApplyCounts = { added: 0, modified: 0, removed: 0 };
   const write = (t: PlaidTxn): boolean => {
-    if (opts.cutoverDate && t.date < opts.cutoverDate) return false;
+    const cutover = cutoverFor(t.accountId);
+    if (cutover && t.date < cutover) return false;
     // If this is a pending row that is superseded by a posted row, don't insert/update it
     if (t.pending) {
       const superseded = checkSuperseded.get(t.transactionId) as { id: string } | undefined;

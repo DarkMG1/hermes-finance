@@ -5,7 +5,7 @@ import { MigrationError } from '../src/migrate/import.ts';
 
 test('parseMapping returns actual id -> target and ignores helper fields', () => {
   const text = JSON.stringify({ accounts: { A1: { to: 'h1', name: 'Synthetic Checking' }, A2: { to: 'new' }, A3: { to: 'skip' } }, hermesAccounts: { h1: 'x' } });
-  assert.deepEqual(parseMapping(text), { A1: 'h1', A2: 'new', A3: 'skip' });
+  assert.deepEqual(parseMapping(text), { mapping: { A1: 'h1', A2: 'new', A3: 'skip' }, cutovers: {} });
 });
 
 test('parseMapping rejects a missing accounts object and blank targets, naming the account', () => {
@@ -25,4 +25,10 @@ test('skeleton entries are blank so a forgotten account fails parsing instead of
     hermesAccounts: { h1: 'Synthetic Plaid Checking ••0001 (depository)', h2: 'Synthetic Card (credit)' },
   });
   assert.throws(() => parseMapping(JSON.stringify(skeleton)), /A1/);
+});
+
+test('parseMapping collects per-account cutover dates and rejects a non-string one, naming the account', () => {
+  const text = JSON.stringify({ accounts: { A1: { to: 'h1', cutover: '2026-03-01' }, A2: { to: 'h2' } } });
+  assert.deepEqual(parseMapping(text), { mapping: { A1: 'h1', A2: 'h2' }, cutovers: { A1: '2026-03-01' } });
+  assert.throws(() => parseMapping(JSON.stringify({ accounts: { A9: { to: 'h1', cutover: 20260301 } } })), (e: unknown) => e instanceof MigrationError && /A9/.test(e.message));
 });
