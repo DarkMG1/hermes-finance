@@ -36,7 +36,12 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   app.patch<{ Params: { id: string } }>('/v1/transactions/:id', async (req, reply) => {
     const body = parseBody(PatchTransactionBody, req.body);
     const r = idempotentWrite(deps, req, () => {
-      if (!getTransaction(db, req.params.id)) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      const current = getTransaction(db, req.params.id);
+      if (!current) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      // a split transaction's categories live on its lines (e.g. a stale client that loaded it before the split)
+      if (body.categoryId !== undefined && current.splitLines.length) {
+        throw new ApiError(409, 'SPLIT_TRANSACTION', 'categorize a split transaction through its lines', 'categoryId');
+      }
       assertCategoryExists(db, body.categoryId, 'categoryId');
       const sets: string[] = [];
       const args: unknown[] = [];

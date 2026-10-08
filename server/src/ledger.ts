@@ -100,6 +100,7 @@ export function learnCategory(db: Db, transactionId: string, categoryId: string,
     { plaid_category: string | null } | undefined;
   // Transfers, income and card payments stay out of spending only while uncategorized; one odd edit must not pull them all in.
   if (!row?.plaid_category || /^(INCOME|TRANSFER_IN|TRANSFER_OUT)|^LOAN_PAYMENTS_CREDIT_CARD_PAYMENT$/.test(row.plaid_category)) return;
+  if (db.prepare('SELECT 1 FROM split_lines WHERE transaction_id = ?').get(transactionId)) return;
   db.prepare('INSERT INTO plaid_category_map (plaid_category, category_id) VALUES (?, ?) ON CONFLICT (plaid_category) DO UPDATE SET category_id = excluded.category_id')
     .run(row.plaid_category, categoryId);
   db.prepare(`UPDATE transactions SET category_id = ?, updated_at = ?
@@ -140,6 +141,12 @@ export function getSpending(db: Db, q: SpendingQuery): Spending {
         FROM transactions t
        WHERE t.removed_at IS NULL AND t.date >= ? AND t.date < ?
          AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
+      UNION ALL
+      -- the bank changed a split transaction's amount: the difference counts as uncategorized until the owner re-splits
+      SELECT NULL, t.amount_cents - SUM(sl.amount_cents), t.plaid_category
+        FROM split_lines sl JOIN transactions t ON t.id = sl.transaction_id
+       WHERE t.removed_at IS NULL AND t.date >= ? AND t.date < ?
+       GROUP BY t.id HAVING t.amount_cents != SUM(sl.amount_cents)
     )
     SELECT lines.category_id AS categoryId, COALESCE(c.name, 'Uncategorized') AS name, -SUM(lines.amount) AS spentCents
       FROM lines LEFT JOIN categories c ON c.id = lines.category_id
@@ -151,6 +158,6 @@ export function getSpending(db: Db, q: SpendingQuery): Spending {
               OR lines.plaid_category GLOB 'TRANSFER_OUT*' OR lines.plaid_category = 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT')))
      GROUP BY lines.category_id
     HAVING spentCents != 0
-     ORDER BY spentCents DESC, name`).all(from, toExclusive, from, toExclusive) as { categoryId: string | null; name: string; spentCents: number }[];
+     ORDER BY spentCents DESC, name`).all(from, toExclusive, from, toExclusive, from, toExclusive) as { categoryId: string | null; name: string; spentCents: number }[];
   return { from, toExclusive, totalCents: rows.reduce((s, r) => s + r.spentCents, 0), categories: rows };
 }

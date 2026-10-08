@@ -161,6 +161,25 @@ test('splits replace in entry order, must add up, can be removed, and count in s
   assert.equal((await app.inject({ method: 'PUT', url: '/v1/transactions/nope/splits', headers: w('s-6'), payload: { lines: [] } })).statusCode, 404);
 });
 
+test('when the bank changes a split amount, spending still adds up to it; a split row cannot be categorized or teach', async () => {
+  const { deps, app } = setup();
+  const pc = 'FOOD_AND_DRINK_COFFEE';
+  seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-01', amountCents: -1000, source: 'plaid', sourceId: 'p1', plaidCategory: pc });
+  seedTxn(deps.db, { id: 'other', accountId: 'a1', date: '2026-03-01', amountCents: -1, source: 'plaid', sourceId: 'p2', plaidCategory: pc });
+  const lines = [{ amountCents: -600, categoryId: 'c-food' }, { amountCents: -400, categoryId: 'c-fun' }];
+  assert.equal((await app.inject({ method: 'PUT', url: '/v1/transactions/t1/splits', headers: w('d-1'), payload: { lines } })).statusCode, 200);
+  deps.db.prepare("UPDATE transactions SET amount_cents = -1200 WHERE id = 't1'").run();
+  const spend = (await app.inject({ method: 'GET', url: '/v1/spending?period=month&date=2026-03', headers: AUTH })).json();
+  assert.equal(spend.totalCents, 1201);
+  assert.equal(spend.categories.find((c: { categoryId: string | null }) => c.categoryId === null).spentCents, 201);
+  const stale = await app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: w('d-2'), payload: { categoryId: 'c-food' } });
+  assert.equal(stale.statusCode, 409);
+  assert.equal(stale.json().code, 'SPLIT_TRANSACTION');
+  assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM plaid_category_map').get() as { n: number }).n, 0);
+  assert.equal((deps.db.prepare("SELECT category_id AS c FROM transactions WHERE id = 'other'").get() as { c: string | null }).c, null);
+  assert.equal((await app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: w('d-3'), payload: { notes: 'ok' } })).statusCode, 200);
+});
+
 test('a pending transaction cannot be split; removing a split that does not exist changes nothing', async () => {
   const { deps, app } = setup();
   seedTxn(deps.db, { id: 'pend', accountId: 'a1', date: '2026-03-01', amountCents: -2000, source: 'plaid', sourceId: 'p1', pending: true });
