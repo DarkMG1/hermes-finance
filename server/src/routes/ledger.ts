@@ -5,7 +5,7 @@ import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
-import { assertCategoryExists, getHome, getSpending, getTransaction, listAccounts, listCategories, listTransactions } from '../ledger.ts';
+import { assertCategoryExists, getHome, getSpending, getTransaction, learnCategory, listAccounts, listCategories, listTransactions } from '../ledger.ts';
 
 export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   const { db } = deps;
@@ -32,7 +32,9 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       if (body.categoryId !== undefined) { sets.push('category_id = ?'); args.push(body.categoryId); }
       if (body.payee !== undefined) { sets.push('payee = ?'); args.push(body.payee); }
       if (body.notes !== undefined) { sets.push('notes = ?'); args.push(body.notes); }
-      db.prepare(`UPDATE transactions SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...args, deps.now().toISOString(), req.params.id);
+      const now = deps.now().toISOString();
+      db.prepare(`UPDATE transactions SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...args, now, req.params.id);
+      if (body.categoryId) learnCategory(db, req.params.id, body.categoryId, now);
       return { status: 200, body: getTransaction(db, req.params.id) };
     });
     return reply.code(r.status).send(r.body);

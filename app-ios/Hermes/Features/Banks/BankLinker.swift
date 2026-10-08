@@ -28,17 +28,20 @@ final class BankLinker {
             let session = try await client.createLinkSession(body, idempotencyKey: UUID().uuidString)
             guard let url = URL(string: session.url) else { throw ClientError.decoding("bad link address") }
             // Closing the sheet early is not proof of cancelling: the bank may already be linked, so always ask the server.
+            // Plaid never reports an exit for a sheet the user closed, so only check briefly in that case.
+            var closedEarly = false
             do {
                 _ = try await authenticate(url)
             } catch let authError as ASWebAuthenticationSessionError where authError.code == .canceledLogin {
+                closedEarly = true
             } catch {
                 self.error = errorMessage(error)
                 return
             }
-            switch try await finishLink(client: client, sessionId: session.sessionId, key: UUID().uuidString) {
+            switch try await finishLink(client: client, sessionId: session.sessionId, key: UUID().uuidString, maxAttempts: closedEarly ? 3 : 30) {
             case .linked(let bank): note = "\(bank.institutionName) is connected."
             case .cancelled: note = "Bank linking was cancelled."
-            case .stillPending: note = "Still finishing with your bank. Check back in a minute."
+            case .stillPending: note = closedEarly ? "Bank linking was cancelled." : "Still finishing with your bank. Check back in a minute."
             }
             await model.refreshReferenceData()
         } catch {

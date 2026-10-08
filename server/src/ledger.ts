@@ -92,6 +92,20 @@ export function assertCategoryExists(db: Db, id: string | null | undefined, fiel
 
 const NEGATIVE_TYPES = new Set(['credit', 'loan']);
 
+/** Categorizing a bank row teaches its Plaid category: later syncs and imports use the mapping, and
+ *  uncategorized unsplit bank rows with the same Plaid category take it now. Owner-set categories are never overwritten. */
+export function learnCategory(db: Db, transactionId: string, categoryId: string, nowIso: string): void {
+  const row = db.prepare("SELECT plaid_category FROM transactions WHERE id = ? AND source IN ('plaid', 'applecard')").get(transactionId) as
+    { plaid_category: string | null } | undefined;
+  if (!row?.plaid_category) return;
+  db.prepare('INSERT INTO plaid_category_map (plaid_category, category_id) VALUES (?, ?) ON CONFLICT (plaid_category) DO UPDATE SET category_id = excluded.category_id')
+    .run(row.plaid_category, categoryId);
+  db.prepare(`UPDATE transactions SET category_id = ?, updated_at = ?
+     WHERE source IN ('plaid', 'applecard') AND plaid_category = ? AND category_id IS NULL AND removed_at IS NULL
+       AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = transactions.id)`)
+    .run(categoryId, nowIso, row.plaid_category);
+}
+
 export function periodRange(q: SpendingQuery): { from: string; toExclusive: string } {
   if (q.period === 'year') {
     return { from: `${q.date}-01-01`, toExclusive: `${String(Number(q.date) + 1).padStart(4, '0')}-01-01` };

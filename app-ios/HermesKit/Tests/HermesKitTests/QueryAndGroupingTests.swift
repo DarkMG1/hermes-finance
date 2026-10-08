@@ -26,3 +26,20 @@ import Testing
     #expect(CategoryGrouping.group(cats, matching: "cafe").flatMap(\.items).map(\.id) == ["2"])
     #expect(CategoryGrouping.group(cats, matching: "home").flatMap(\.items).map(\.id) == ["1"])
 }
+
+@Test func accountsGroupInFixedOrderAndCreditCountsAsOwed() {
+    func account(_ id: String, _ name: String, _ type: String, _ cents: Int?, hidden: Bool = false) -> Account {
+        Account(id: id, name: name, mask: nil, type: type, subtype: nil, balanceCurrentCents: cents,
+                balanceAvailableCents: nil, balanceAt: nil, hidden: hidden, itemId: nil)
+    }
+    let groups = AccountGrouping.group([
+        account("1", "Synthetic Card", "credit", 500), account("2", "Synthetic Brokerage", "investment", 100),
+        account("3", "Synthetic Savings", "depository", 200), account("4", "Synthetic Checking", "depository", 300),
+        account("5", "Synthetic Old", "depository", 1, hidden: true), account("6", "Synthetic Misc", "other", nil),
+    ])
+    #expect(groups.map(\.name) == ["Cash", "Credit", "Investments", "Other"])
+    #expect(groups[0].accounts.map(\.id) == ["4", "3"])
+    #expect(AccountGrouping.netWorthCents(groups[1].accounts[0]) == -500)
+    #expect(AccountGrouping.netWorthCents(groups[0].accounts[0]) == 300)
+    #expect(AccountGrouping.netWorthCents(groups[3].accounts[0]) == nil)
+}

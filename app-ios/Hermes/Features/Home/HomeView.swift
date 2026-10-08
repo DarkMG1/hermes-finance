@@ -34,6 +34,22 @@ struct HomeView: View {
                     Text("Net worth").textStyle(.subhead, color: Palette.secondaryText)
                     MoneyText(cents: loaded.value.netWorthCents, style: .display, colored: false, negativeIsLoss: true)
                 }
+                let groups = AccountGrouping.group(model.accounts)
+                if !groups.isEmpty {
+                    Card {
+                        Text("Accounts").textStyle(.headline)
+                        ForEach(groups, id: \.name) { group in
+                            Text(group.name).textStyle(.subhead, color: Palette.secondaryText)
+                            ForEach(group.accounts) { account in
+                                ListRow(title: account.name, subtitle: account.mask.map { "••\($0)" }) {
+                                    if let cents = AccountGrouping.netWorthCents(account) {
+                                        MoneyText(cents: cents, colored: false, negativeIsLoss: true)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 Card {
                     Text("Recent").textStyle(.headline)
                     if loaded.value.recent.isEmpty {
@@ -60,6 +76,7 @@ struct HomeView: View {
             let loaded = try await reader.read("/v1/home", as: Home.self)
             guard !Task.isCancelled else { return }
             state = .loaded(loaded)
+            await model.refreshReferenceData()
         } catch {
             guard !Task.isCancelled else { return }
             state = .failed(errorMessage(error))

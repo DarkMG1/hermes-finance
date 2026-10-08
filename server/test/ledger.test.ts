@@ -58,6 +58,23 @@ test('patch sets owner fields only', async () => {
   assert.equal(t.amountCents, -500);
 });
 
+test('categorizing a bank row learns its Plaid category and fills only matching uncategorized unsplit bank rows', async () => {
+  const { deps, app } = setup();
+  const pc = 'FOOD_AND_DRINK_COFFEE';
+  seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-01', amountCents: -1, source: 'plaid', sourceId: 'p1', plaidCategory: pc });
+  seedTxn(deps.db, { id: 'same', accountId: 'a1', date: '2026-03-02', amountCents: -1, source: 'applecard', sourceId: 'ac1', plaidCategory: pc });
+  seedTxn(deps.db, { id: 'mine', accountId: 'a1', date: '2026-03-02', amountCents: -1, source: 'plaid', sourceId: 'p2', plaidCategory: pc, categoryId: 'c-fun' });
+  seedTxn(deps.db, { id: 'split', accountId: 'a1', date: '2026-03-02', amountCents: -1, source: 'plaid', sourceId: 'p3', plaidCategory: pc });
+  seedSplit(deps.db, { id: 's1', transactionId: 'split', amountCents: -1, categoryId: null });
+  seedTxn(deps.db, { id: 'other', accountId: 'a1', date: '2026-03-02', amountCents: -1, source: 'plaid', sourceId: 'p4', plaidCategory: 'FOOD_AND_DRINK_GROCERIES' });
+  seedTxn(deps.db, { id: 'manual', accountId: 'a1', date: '2026-03-02', amountCents: -1, plaidCategory: pc });
+  const res = await app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: w('p-learn'), payload: { categoryId: 'c-food' } });
+  assert.equal(res.statusCode, 200);
+  const cat = (id: string) => (deps.db.prepare('SELECT category_id AS c FROM transactions WHERE id = ?').get(id) as { c: string | null }).c;
+  assert.deepEqual(['t1', 'same', 'mine', 'split', 'other', 'manual'].map(cat), ['c-food', 'c-food', 'c-fun', null, null, null]);
+  assert.deepEqual(deps.db.prepare('SELECT plaid_category, category_id FROM plaid_category_map').all(), [{ plaid_category: pc, category_id: 'c-food' }]);
+});
+
 test('unknown categoryId is a 400 field error', async () => {
   const { deps, app } = setup();
   seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-01', amountCents: -500 });
