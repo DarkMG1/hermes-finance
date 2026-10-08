@@ -24,3 +24,14 @@ func parsesValidAmounts(text: String, cents: Int) {
 func rejectsInvalidAmounts(text: String) {
     #expect(Money.parse(text) == nil)
 }
+
+@Test func splitLinesTakeTheTransactionSignAndMustAddUp() {
+    #expect(SplitMath.cents(total: -2490, amounts: ["12.45", "12.45"]) == [-1245, -1245])
+    #expect(SplitMath.cents(total: 2490, amounts: ["24.90", "0"]) == nil)
+    #expect(SplitMath.cents(total: -2490, amounts: ["12.45", ""]) == nil)
+    #expect(SplitMath.remaining(total: -2490, amounts: ["10", ""]) == 1490)
+    #expect(SplitMath.remaining(total: -2490, amounts: ["20", "10"]) == -510)
+    #expect(SplitMath.isComplete(total: -2490, amounts: ["12.45", "12.45"]))
+    #expect(!SplitMath.isComplete(total: -2490, amounts: ["24.90"]))
+    #expect(!SplitMath.isComplete(total: -2490, amounts: ["12.45", "12.44"]))
+}

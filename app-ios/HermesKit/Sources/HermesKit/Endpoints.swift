@@ -13,6 +13,10 @@ extension APIClient {
         try await write("PATCH", "/v1/accounts/\(id)", body: body, key: idempotencyKey)
     }
 
+    public func putSplits(transactionId: String, body: PutSplitsBody, idempotencyKey: String) async throws -> LedgerTransaction {
+        try await write("PUT", "/v1/transactions/\(transactionId)/splits", body: body, key: idempotencyKey)
+    }
+
     public func patchTransaction(id: String, body: PatchTransactionBody, idempotencyKey: String) async throws -> LedgerTransaction {
         try await write("PATCH", "/v1/transactions/\(id)", body: body, key: idempotencyKey)
     }

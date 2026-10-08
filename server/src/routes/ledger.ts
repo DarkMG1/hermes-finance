@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
-import { CreateTransactionBody, ListTransactionsQuery, PatchAccountBody, PatchTransactionBody, SpendingQuery } from '@hermes/shared';
+import { CreateTransactionBody, ListTransactionsQuery, PatchAccountBody, PatchTransactionBody, PutSplitsBody, SpendingQuery } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
@@ -36,7 +36,12 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   app.patch<{ Params: { id: string } }>('/v1/transactions/:id', async (req, reply) => {
     const body = parseBody(PatchTransactionBody, req.body);
     const r = idempotentWrite(deps, req, () => {
-      if (!getTransaction(db, req.params.id)) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      const current = getTransaction(db, req.params.id);
+      if (!current) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      // a split transaction's categories live on its lines (e.g. a stale client that loaded it before the split)
+      if (body.categoryId !== undefined && current.splitLines.length) {
+        throw new ApiError(409, 'SPLIT_TRANSACTION', 'categorize a split transaction through its lines', 'categoryId');
+      }
       assertCategoryExists(db, body.categoryId, 'categoryId');
       const sets: string[] = [];
       const args: unknown[] = [];
@@ -47,6 +52,34 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       db.prepare(`UPDATE transactions SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...args, now, req.params.id);
       if (body.categoryId) learnCategory(db, req.params.id, body.categoryId, now);
       return { status: 200, body: getTransaction(db, req.params.id) };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+
+  app.put<{ Params: { id: string } }>('/v1/transactions/:id/splits', async (req, reply) => {
+    const body = parseBody(PutSplitsBody, req.body);
+    const r = idempotentWrite(deps, req, () => {
+      const txn = getTransaction(db, req.params.id);
+      if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      // sync replaces a pending row with a new posted row and doesn't carry lines over
+      if (txn.pending) throw new ApiError(409, 'PENDING_TRANSACTION', 'split a transaction after it posts');
+      if (!body.lines.length && !txn.splitLines.length) return { status: 200, body: txn };
+      body.lines.forEach((l, i) => assertCategoryExists(db, l.categoryId, `lines.${i}.categoryId`));
+      // lines share the transaction's sign: the app enters them as positive amounts, so it couldn't show anything else
+      if (body.lines.some((l) => (l.amountCents < 0) !== (txn.amountCents < 0))) {
+        throw new ApiError(400, 'INVALID_REQUEST', 'lines: every line must have the same sign as the transaction', 'lines');
+      }
+      if (body.lines.length && body.lines.reduce((s, l) => s + l.amountCents, 0) !== txn.amountCents) {
+        throw new ApiError(400, 'INVALID_REQUEST', 'lines: must add up to the transaction amount', 'lines');
+      }
+      const now = deps.now().toISOString();
+      db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(txn.id);
+      // ids sort in entry order (lines are read back ORDER BY id)
+      const insert = db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id, notes) VALUES (?, ?, ?, ?, ?)');
+      body.lines.forEach((l, i) => insert.run(`${String(i).padStart(2, '0')}-${randomUUID()}`, txn.id, l.amountCents, l.categoryId, l.notes ?? null));
+      // a split transaction's category lives on its lines; the owner decided, so learned mappings leave it alone
+      db.prepare('UPDATE transactions SET category_id = NULL, category_owner_set = 1, updated_at = ? WHERE id = ?').run(now, txn.id);
+      return { status: 200, body: getTransaction(db, txn.id) };
     });
     return reply.code(r.status).send(r.body);
   });

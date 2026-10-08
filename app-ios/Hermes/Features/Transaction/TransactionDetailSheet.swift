@@ -15,6 +15,7 @@ struct TransactionDetailSheet: View {
     @State private var error: String?
     @State private var busy = false
     @State private var confirmDelete = false
+    @State private var splitting = false
 
     var body: some View {
         Sheet(
@@ -39,11 +40,20 @@ struct TransactionDetailSheet: View {
                 Field(label: "Notes", error: error) { TextField("Notes", text: $notes, axis: .vertical).lineLimit(1...6) }
             }
             .disabled(writes.unresolved || deleteWrites.unresolved)
-            if !transaction.splitLines.isEmpty {
-                Section("Split") {
-                    ForEach(transaction.splitLines) { line in
-                        ListRow(title: model.categoryName(line.categoryId), subtitle: line.notes) { MoneyText(cents: line.amountCents) }
-                    }
+            Section(transaction.splitLines.isEmpty ? "" : "Split") {
+                ForEach(transaction.splitLines) { line in
+                    ListRow(title: model.categoryName(line.categoryId), subtitle: line.notes) { MoneyText(cents: line.amountCents) }
+                }
+                if splitDrifted {
+                    Text("The bank changed this amount, so the split no longer adds up. Edit the split to fix it.")
+                        .textStyle(.caption, color: Palette.loss)
+                }
+                if transaction.pending {
+                    Text("You can split this once it posts.").textStyle(.caption, color: Palette.secondaryText)
+                } else {
+                    // Unsaved edits would be lost when the split saves and this sheet closes, so save them first.
+                    Button(transaction.splitLines.isEmpty ? "Split transaction" : "Edit split") { splitting = true }
+                        .disabled(!patch.isEmpty || writes.unresolved || deleteWrites.unresolved)
                 }
             }
             if transaction.source == "manual" {
@@ -58,9 +68,19 @@ struct TransactionDetailSheet: View {
             notes = transaction.notes ?? ""
             categoryId = transaction.categoryId
         }
+        .sheet(isPresented: $splitting) {
+            SplitSheet(transaction: transaction) {
+                await onChange()
+                dismiss()
+            }
+        }
         .confirmationDialog("Delete this transaction?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { Task { await delete() } }
         }
+    }
+
+    private var splitDrifted: Bool {
+        !transaction.splitLines.isEmpty && transaction.splitLines.reduce(0) { $0 + $1.amountCents } != transaction.amountCents
     }
 
     private var trimmedPayee: String { payee.trimmingCharacters(in: .whitespacesAndNewlines) }
