@@ -161,6 +161,20 @@ test('splits replace in entry order, must add up, can be removed, and count in s
   assert.equal((await app.inject({ method: 'PUT', url: '/v1/transactions/nope/splits', headers: w('s-6'), payload: { lines: [] } })).statusCode, 404);
 });
 
+test('a pending transaction cannot be split; removing a split that does not exist changes nothing', async () => {
+  const { deps, app } = setup();
+  seedTxn(deps.db, { id: 'pend', accountId: 'a1', date: '2026-03-01', amountCents: -2000, source: 'plaid', sourceId: 'p1', pending: true });
+  seedTxn(deps.db, { id: 'plain', accountId: 'a1', date: '2026-03-01', amountCents: -2000, source: 'plaid', sourceId: 'p2', categoryId: 'c-food' });
+  const lines = [{ amountCents: -1000, categoryId: null }, { amountCents: -1000, categoryId: null }];
+  const pend = await app.inject({ method: 'PUT', url: '/v1/transactions/pend/splits', headers: w('sp-1'), payload: { lines } });
+  assert.equal(pend.statusCode, 409);
+  assert.equal(pend.json().code, 'PENDING_TRANSACTION');
+  const res = await app.inject({ method: 'PUT', url: '/v1/transactions/plain/splits', headers: w('sp-2'), payload: { lines: [] } });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().categoryId, 'c-food');
+  assert.equal((deps.db.prepare("SELECT category_owner_set AS f FROM transactions WHERE id = 'plain'").get() as { f: number }).f, 0);
+});
+
 test('unknown categoryId is a 400 field error', async () => {
   const { deps, app } = setup();
   seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-01', amountCents: -500 });

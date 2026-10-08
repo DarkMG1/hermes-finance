@@ -44,9 +44,17 @@ struct TransactionDetailSheet: View {
                 ForEach(transaction.splitLines) { line in
                     ListRow(title: model.categoryName(line.categoryId), subtitle: line.notes) { MoneyText(cents: line.amountCents) }
                 }
-                // Unsaved edits would be lost when the split saves and this sheet closes, so save them first.
-                Button(transaction.splitLines.isEmpty ? "Split transaction" : "Edit split") { splitting = true }
-                    .disabled(!patch.isEmpty || writes.unresolved || deleteWrites.unresolved)
+                if splitDrifted {
+                    Text("The bank changed this amount, so the split no longer adds up. Edit the split to fix it.")
+                        .textStyle(.caption, color: Palette.loss)
+                }
+                if transaction.pending {
+                    Text("You can split this once it posts.").textStyle(.caption, color: Palette.secondaryText)
+                } else {
+                    // Unsaved edits would be lost when the split saves and this sheet closes, so save them first.
+                    Button(transaction.splitLines.isEmpty ? "Split transaction" : "Edit split") { splitting = true }
+                        .disabled(!patch.isEmpty || writes.unresolved || deleteWrites.unresolved)
+                }
             }
             if transaction.source == "manual" {
                 Section {
@@ -69,6 +77,10 @@ struct TransactionDetailSheet: View {
         .confirmationDialog("Delete this transaction?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { Task { await delete() } }
         }
+    }
+
+    private var splitDrifted: Bool {
+        !transaction.splitLines.isEmpty && transaction.splitLines.reduce(0) { $0 + $1.amountCents } != transaction.amountCents
     }
 
     private var trimmedPayee: String { payee.trimmingCharacters(in: .whitespacesAndNewlines) }

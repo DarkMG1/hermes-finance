@@ -56,6 +56,9 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
     const r = idempotentWrite(deps, req, () => {
       const txn = getTransaction(db, req.params.id);
       if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      // sync replaces a pending row with a new posted row and doesn't carry lines over
+      if (txn.pending) throw new ApiError(409, 'PENDING_TRANSACTION', 'split a transaction after it posts');
+      if (!body.lines.length && !txn.splitLines.length) return { status: 200, body: txn };
       body.lines.forEach((l, i) => assertCategoryExists(db, l.categoryId, `lines.${i}.categoryId`));
       if (body.lines.length && body.lines.reduce((s, l) => s + l.amountCents, 0) !== txn.amountCents) {
         throw new ApiError(400, 'INVALID_REQUEST', 'lines: must add up to the transaction amount', 'lines');
