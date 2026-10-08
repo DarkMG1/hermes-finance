@@ -106,3 +106,15 @@ test('accounts and categories list', async () => {
   assert.equal((await app.inject({ method: 'GET', url: '/v1/accounts', headers: AUTH })).json().length, 1);
   assert.equal((await app.inject({ method: 'GET', url: '/v1/categories', headers: AUTH })).json().length, 2);
 });
+
+test('categoryId filter matches the transaction category or any split line category', async () => {
+  const { deps, app } = setup();
+  seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-01', amountCents: -100, categoryId: 'c-food' });
+  seedTxn(deps.db, { id: 't2', accountId: 'a1', date: '2026-03-02', amountCents: -500 });
+  seedSplit(deps.db, { id: 's1', transactionId: 't2', amountCents: -300, categoryId: 'c-food' });
+  seedSplit(deps.db, { id: 's2', transactionId: 't2', amountCents: -200, categoryId: 'c-fun' });
+  seedTxn(deps.db, { id: 't3', accountId: 'a1', date: '2026-03-03', amountCents: -100, categoryId: 'c-fun' });
+  const ids = async (c: string) => (await app.inject({ method: 'GET', url: `/v1/transactions?categoryId=${c}`, headers: AUTH })).json().transactions.map((t: { id: string }) => t.id);
+  assert.deepEqual(await ids('c-food'), ['t2', 't1']);
+  assert.deepEqual(await ids('c-fun'), ['t3', 't2']);
+});

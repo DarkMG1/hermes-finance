@@ -45,12 +45,13 @@ export function seedAccount(db: Db, a: { id: string; itemId?: string; plaidAccou
 export function seedTxn(db: Db, t: {
   id: string; accountId: string; date: string; amountCents: number; source?: 'plaid' | 'manual' | 'actual'; sourceId?: string;
   categoryId?: string | null; payee?: string | null; merchantName?: string | null; bankDescription?: string; removedAt?: string; pending?: boolean;
+  plaidCategory?: string;
 }): void {
   db.prepare(`INSERT INTO transactions (id, account_id, source, source_id, date, amount_cents, bank_description, merchant_name,
-      pending, removed_at, category_id, payee, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'seed', 'seed')`)
+      pending, removed_at, category_id, payee, plaid_category, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'seed', 'seed')`)
     .run(t.id, t.accountId, t.source ?? 'manual', t.sourceId ?? null, t.date, t.amountCents, t.bankDescription ?? 'SYNTHETIC',
-      t.merchantName ?? null, t.pending ? 1 : 0, t.removedAt ?? null, t.categoryId ?? null, t.payee ?? null);
+      t.merchantName ?? null, t.pending ? 1 : 0, t.removedAt ?? null, t.categoryId ?? null, t.payee ?? null, t.plaidCategory ?? null);
 }
 
 export function seedSplit(db: Db, s: { id: string; transactionId: string; amountCents: number; categoryId: string | null }): void {

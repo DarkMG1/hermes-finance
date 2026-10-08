@@ -57,7 +57,10 @@ export function listTransactions(db: Db, q: ListTransactionsQuery): TransactionP
   const where = ['removed_at IS NULL'];
   const args: unknown[] = [];
   if (q.accountId) { where.push('account_id = ?'); args.push(q.accountId); }
-  if (q.categoryId) { where.push('category_id = ?'); args.push(q.categoryId); }
+  if (q.categoryId) {
+    where.push('(category_id = ? OR EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = transactions.id AND sl.category_id = ?))');
+    args.push(q.categoryId, q.categoryId);
+  }
   if (q.from) { where.push('date >= ?'); args.push(q.from); }
   if (q.to) { where.push('date <= ?'); args.push(q.to); }
   if (q.q) {
@@ -113,18 +116,22 @@ export function getSpending(db: Db, q: SpendingQuery): Spending {
   const { from, toExclusive } = periodRange(q);
   const rows = db.prepare(`
     WITH lines AS (
-      SELECT sl.category_id AS category_id, sl.amount_cents AS amount
+      SELECT sl.category_id AS category_id, sl.amount_cents AS amount, t.plaid_category AS plaid_category
         FROM split_lines sl JOIN transactions t ON t.id = sl.transaction_id
        WHERE t.removed_at IS NULL AND t.date >= ? AND t.date < ?
       UNION ALL
-      SELECT t.category_id, t.amount_cents
+      SELECT t.category_id, t.amount_cents, t.plaid_category
         FROM transactions t
        WHERE t.removed_at IS NULL AND t.date >= ? AND t.date < ?
          AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
     )
     SELECT lines.category_id AS categoryId, COALESCE(c.name, 'Uncategorized') AS name, -SUM(lines.amount) AS spentCents
       FROM lines LEFT JOIN categories c ON c.id = lines.category_id
-     WHERE COALESCE(c.is_transfer, 0) = 0 AND COALESCE(c.is_income, 0) = 0
+     WHERE (lines.category_id IS NOT NULL AND c.is_transfer = 0 AND c.is_income = 0)
+        -- uncategorized: outflows only, and never income, transfers or card payments by Plaid's category
+        OR (lines.category_id IS NULL AND lines.amount < 0 AND (lines.plaid_category IS NULL OR NOT (
+              lines.plaid_category GLOB 'INCOME*' OR lines.plaid_category GLOB 'TRANSFER_IN*'
+              OR lines.plaid_category GLOB 'TRANSFER_OUT*' OR lines.plaid_category GLOB 'LOAN_PAYMENTS*')))
      GROUP BY lines.category_id
     HAVING spentCents != 0
      ORDER BY spentCents DESC, name`).all(from, toExclusive, from, toExclusive) as { categoryId: string | null; name: string; spentCents: number }[];
