@@ -16,3 +16,5 @@ app-ios/Signing.local.xcconfig
 app-ios/HermesKit/.build/
 app-ios/build/
 DerivedData/
+.DS_Store
+.swiftpm/
