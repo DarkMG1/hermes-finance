@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.ts';
-import { makeTestDeps, AUTH, seedAccount, seedCategory, seedTxn, seedSplit } from './helpers.ts';
+import { upsertAccounts } from '../src/sync/apply.ts';
+import { makeTestDeps, AUTH, seedAccount, seedCategory, seedItem, seedTxn, seedSplit } from './helpers.ts';
 
 function setup() {
   const { deps } = makeTestDeps();
@@ -110,6 +111,28 @@ test('categorizing a transfer, income or card payment row learns nothing', async
   }
   assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM plaid_category_map').get() as { n: number }).n, 0);
   assert.equal((deps.db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE id LIKE 'o%' AND category_id IS NOT NULL").get() as { n: number }).n, 0);
+});
+
+test('renaming an account survives a sync; null goes back to the bank name; unknown id is 404', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  seedItem(deps, { id: 'i1', plaidItemId: 'pi1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
+  const plaidAccount = { accountId: 'pa1', name: 'Synthetic Rewards', mask: '0001', type: 'credit', subtype: 'credit card', currentBalance: 1, availableBalance: null };
+  upsertAccounts(deps.db, 'i1', [plaidAccount], 'now');
+  const id = (deps.db.prepare("SELECT id FROM accounts WHERE plaid_account_id = 'pa1'").get() as { id: string }).id;
+  const rename = (key: string, payload: { name: string | null }) => app.inject({ method: 'PATCH', url: `/v1/accounts/${id}`, headers: w(key), payload });
+  const res = await rename('a-1', { name: '  Synthetic Card  ' });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().name, 'Synthetic Card');
+  upsertAccounts(deps.db, 'i1', [{ ...plaidAccount, accountId: 'pa2', name: 'Synthetic Middle' }], 'now');
+  const names = async () => (await app.inject({ method: 'GET', url: '/v1/accounts', headers: AUTH })).json().map((a: { name: string }) => a.name);
+  assert.deepEqual(await names(), ['Synthetic Card', 'Synthetic Middle'], 'sorted by the shown name');
+  upsertAccounts(deps.db, 'i1', [plaidAccount], 'later');
+  assert.equal((await names())[0], 'Synthetic Card');
+  assert.equal((await rename('a-2', { name: null })).statusCode, 200);
+  assert.deepEqual(await names(), ['Synthetic Middle', 'Synthetic Rewards']);
+  assert.equal((await rename('a-3', { name: '   ' })).statusCode, 400);
+  assert.equal((await app.inject({ method: 'PATCH', url: '/v1/accounts/nope', headers: w('a-4'), payload: { name: 'x' } })).statusCode, 404);
 });
 
 test('unknown categoryId is a 400 field error', async () => {

@@ -11,8 +11,8 @@ function tempDb() {
 
 test('migrate creates the schema and is idempotent', () => {
   const db = tempDb();
-  assert.equal(migrate(db), 4);
-  assert.equal(migrate(db), 4);
+  assert.equal(migrate(db), 5);
+  assert.equal(migrate(db), 5);
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all().map((r) => (r as { name: string }).name);
   for (const t of ['accounts', 'categories', 'idempotency_keys', 'items', 'link_sessions', 'migrations', 'plaid_category_map', 'settings', 'split_lines', 'sync_pages', 'sync_runs', 'transactions']) {
     assert.ok(tables.includes(t), `missing ${t}`);
@@ -50,7 +50,7 @@ test('migration 003 rebuilds transactions without losing rows or split lines and
   db.prepare("INSERT INTO transactions (id, account_id, source, source_id, date, amount_cents, created_at, updated_at) VALUES ('t1', 'a1', 'actual', 's1', '2026-01-01', -500, 'x', 'x')").run();
   db.prepare("INSERT INTO split_lines (id, transaction_id, amount_cents) VALUES ('l1', 't1', -500)").run();
 
-  assert.equal(migrate(db), 4);
+  assert.equal(migrate(db), 5);
   assert.equal((db.prepare('SELECT COUNT(*) AS n FROM transactions').get() as { n: number }).n, 1);
   assert.equal((db.prepare("SELECT transaction_id FROM split_lines WHERE id = 'l1'").get() as { transaction_id: string }).transaction_id, 't1');
   assert.equal(db.pragma('foreign_keys', { simple: true }), 1);
@@ -82,7 +82,7 @@ test('migration 004 protects bank rows a stored PATCH response shows uncategoriz
   key.run('k3', JSON.stringify({ ok: true }));
   key.run('k4', '{not-json');
 
-  assert.equal(migrate(db), 4);
+  assert.equal(migrate(db), 5);
   const flag = (id: string) => (db.prepare('SELECT category_owner_set AS f FROM transactions WHERE id = ?').get(id) as { f: number }).f;
   assert.deepEqual(['cleared', 'posted', 'untouched', 'manual'].map(flag), [1, 1, 0, 0]);
 });

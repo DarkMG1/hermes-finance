@@ -22,12 +22,13 @@ export function rowToTransaction(db: Db, r: TxnRow): Transaction {
 }
 
 export function listAccounts(db: Db): Account[] {
-  const rows = db.prepare('SELECT * FROM accounts ORDER BY hidden, name').all() as {
+  const rows = db.prepare('SELECT * FROM accounts ORDER BY hidden, COALESCE(display_name, name)').all() as {
     id: string; item_id: string | null; name: string; mask: string | null; type: string; subtype: string | null;
     balance_current_cents: number | null; balance_available_cents: number | null; balance_at: string | null; hidden: number;
+    display_name: string | null;
   }[];
   return rows.map((a) => ({
-    id: a.id, itemId: a.item_id, name: a.name, mask: a.mask, type: a.type, subtype: a.subtype,
+    id: a.id, itemId: a.item_id, name: a.display_name ?? a.name, mask: a.mask, type: a.type, subtype: a.subtype,
     balanceCurrentCents: a.balance_current_cents, balanceAvailableCents: a.balance_available_cents, balanceAt: a.balance_at, hidden: a.hidden === 1,
   }));
 }

@@ -56,7 +56,7 @@ export function createPlaidClient(config: Config): PlaidPort {
       try {
         const { data } = await api.accountsGet({ access_token: accessToken });
         return data.accounts.map((a) => ({
-          accountId: a.account_id, name: a.name, mask: a.mask ?? null, type: String(a.type), subtype: a.subtype ? String(a.subtype) : null,
+          accountId: a.account_id, name: a.official_name || a.name, mask: a.mask ?? null, type: String(a.type), subtype: a.subtype ? String(a.subtype) : null,
           currentBalance: a.balances.current ?? null, availableBalance: a.balances.available ?? null,
         }));
       } catch (e) { return rethrow(e); }
