@@ -19,7 +19,9 @@ export function upsertAccounts(db: Db, itemId: string, accounts: PlaidAccount[],
     ON CONFLICT (plaid_account_id) DO UPDATE SET
       item_id = excluded.item_id, name = excluded.name, mask = excluded.mask, type = excluded.type, subtype = excluded.subtype,
       balance_current_cents = excluded.balance_current_cents, balance_available_cents = excluded.balance_available_cents,
-      balance_at = excluded.balance_at`);
+      balance_at = excluded.balance_at,
+      -- a placeholder from applyPages (never upserted, so no balance_at) becomes visible; owner-hidden accounts stay hidden
+      hidden = CASE WHEN accounts.balance_at IS NULL AND accounts.name = 'Unknown account' THEN 0 ELSE accounts.hidden END`);
   for (const a of accounts) {
     stmt.run({ id: randomUUID(), itemId, plaidAccountId: a.accountId, name: a.name, mask: a.mask, type: a.type, subtype: a.subtype,
       cur: toCents(a.currentBalance), avail: toCents(a.availableBalance), at: nowIso });

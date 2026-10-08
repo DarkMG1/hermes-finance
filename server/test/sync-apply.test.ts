@@ -202,3 +202,16 @@ test('a later modified posted row without the pending link keeps it, so the pend
   apply([page({ added: [txn({ transactionId: 'pend1', pending: true })] })]);
   assert.equal(row('pend1')?.removed_at, NOW);
 });
+
+test('a placeholder account is unhidden once Plaid lists it; an owner-hidden account stays hidden', () => {
+  const { deps, apply } = setup();
+  apply([page({ added: [txn({ transactionId: 'p5', accountId: 'pa-late' })] })]);
+  deps.db.prepare("UPDATE accounts SET hidden = 1 WHERE plaid_account_id = 'pa1'").run();
+  upsertAccounts(deps.db, 'i1', [
+    { accountId: 'pa1', name: 'Synthetic Checking', mask: '0001', type: 'depository', subtype: 'checking', currentBalance: 1, availableBalance: null },
+    { accountId: 'pa-late', name: 'Synthetic Savings', mask: '0003', type: 'depository', subtype: 'savings', currentBalance: 2, availableBalance: null },
+  ], NOW);
+  const get = (id: string) => deps.db.prepare('SELECT name, hidden FROM accounts WHERE plaid_account_id = ?').get(id);
+  assert.deepEqual(get('pa-late'), { name: 'Synthetic Savings', hidden: 0 });
+  assert.deepEqual(get('pa1'), { name: 'Synthetic Checking', hidden: 1 });
+});
