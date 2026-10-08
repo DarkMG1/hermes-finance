@@ -172,9 +172,11 @@ test('when the bank changes a split amount, spending still adds up to it; a spli
   const spending = async () => (await app.inject({ method: 'GET', url: '/v1/spending?period=month&date=2026-03', headers: AUTH })).json();
   const byCat = (s: { categories: { categoryId: string | null; spentCents: number }[] }) => Object.fromEntries(s.categories.map((c) => [c.categoryId ?? 'none', c.spentCents]));
   deps.db.prepare("UPDATE transactions SET amount_cents = -1200 WHERE id = 't1'").run();
-  assert.deepEqual(byCat(await spending()), { 'c-food': 720, 'c-fun': 480, none: 1 }, 'lines scale up with the bank amount');
+  assert.deepEqual(byCat(await spending()), { 'c-food': 600, 'c-fun': 400, none: 201 }, 'saved lines stay; the extra is uncategorized');
   deps.db.prepare("UPDATE transactions SET amount_cents = -800, plaid_category = NULL WHERE id = 't1'").run();
-  assert.deepEqual(byCat(await spending()), { 'c-food': 480, 'c-fun': 320, none: 1 }, 'and down, with no Plaid category');
+  assert.equal((await spending()).totalCents, 801, 'a smaller amount with no Plaid category still totals the bank amount');
+  deps.db.prepare("UPDATE transactions SET amount_cents = -1001 WHERE id = 't1'").run();
+  assert.equal((await spending()).totalCents, 1002, 'exact to the cent');
   const stale = await app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: w('d-2'), payload: { categoryId: 'c-food' } });
   assert.equal(stale.statusCode, 409);
   assert.equal(stale.json().code, 'SPLIT_TRANSACTION');
