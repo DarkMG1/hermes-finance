@@ -77,6 +77,9 @@ struct SettingsView: View {
             Section("Server") {
                 LabeledContent("Address", value: model.serverURL)
                 Button("Disconnect", role: .destructive) { confirmDisconnect = true }
+                    .confirmationDialog("Disconnect from this server?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
+                        Button("Disconnect", role: .destructive) { model.disconnect() }
+                    }
             }
         }
         .themedForm()
@@ -85,9 +88,6 @@ struct SettingsView: View {
         .refreshable { await loadBanks() }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.commaSeparatedText]) { result in
             Task { await importCSV(result) }
-        }
-        .confirmationDialog("Disconnect from this server?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
-            Button("Disconnect", role: .destructive) { model.disconnect() }
         }
     }
 

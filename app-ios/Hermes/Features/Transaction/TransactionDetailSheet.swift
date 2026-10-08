@@ -60,6 +60,9 @@ struct TransactionDetailSheet: View {
                 Section {
                     HButton(title: "Delete transaction", kind: .destructive, busy: busy) { confirmDelete = true }
                         .disabled(writes.unresolved)
+                        .confirmationDialog("Delete this transaction?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                            Button("Delete", role: .destructive) { Task { await delete() } }
+                        }
                 }
             }
         }
@@ -73,9 +76,6 @@ struct TransactionDetailSheet: View {
                 await onChange()
                 dismiss()
             }
-        }
-        .confirmationDialog("Delete this transaction?", isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) { Task { await delete() } }
         }
     }
 
