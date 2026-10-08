@@ -105,6 +105,18 @@ test('an account with its own cutover date uses it instead of the global one', (
   assert.ok(row('b-late'));
 });
 
+test('modified and revived rows pick up a mapping learned after they were stored, without replacing a set category', () => {
+  const { deps, apply, row } = setup();
+  seedCategory(deps.db, { id: 'coffee', name: 'Coffee' });
+  seedCategory(deps.db, { id: 'food', name: 'Food' });
+  apply([page({ added: [txn({ transactionId: 'p1' }), txn({ transactionId: 'p2' }), txn({ transactionId: 'p3' })] })]);
+  apply([page({ removed: [{ transactionId: 'p2' }] })]);
+  deps.db.prepare("UPDATE transactions SET category_id = 'food' WHERE source_id = 'p3'").run();
+  deps.db.prepare("INSERT INTO plaid_category_map (plaid_category, category_id) VALUES ('FOOD_AND_DRINK_COFFEE', 'coffee')").run();
+  apply([page({ modified: [txn({ transactionId: 'p1' }), txn({ transactionId: 'p3' })], added: [txn({ transactionId: 'p2' })] })]);
+  assert.deepEqual(['p1', 'p2', 'p3'].map((id) => row(id)?.category_id), ['coffee', 'coffee', 'food']);
+});
+
 test('re-adding a removed id restores it', () => {
   const { apply, row } = setup();
   apply([page({ added: [txn({ transactionId: 'p1' })] })]);

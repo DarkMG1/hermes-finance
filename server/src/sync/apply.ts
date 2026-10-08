@@ -64,6 +64,7 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
       account_id = excluded.account_id, date = excluded.date, authorized_date = excluded.authorized_date,
       amount_cents = excluded.amount_cents, bank_description = excluded.bank_description, merchant_name = excluded.merchant_name,
       plaid_category = excluded.plaid_category, pending = excluded.pending,
+      category_id = COALESCE(transactions.category_id, excluded.category_id),
       pending_source_id = COALESCE(excluded.pending_source_id, transactions.pending_source_id),
       removed_at = NULL, updated_at = excluded.updated_at`);
   const markRemoved = db.prepare("UPDATE transactions SET removed_at = ?, updated_at = ? WHERE source = 'plaid' AND source_id = ? AND removed_at IS NULL");
