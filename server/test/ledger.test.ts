@@ -152,6 +152,7 @@ test('splits replace in entry order, must add up, can be removed, and count in s
   assert.equal(bad.statusCode, 400);
   assert.equal(bad.json().field, 'lines');
   assert.equal((await put('s-3', [{ amountCents: -2490, categoryId: null }])).statusCode, 400);
+  assert.equal((await put('s-3b', [{ amountCents: -3000, categoryId: null }, { amountCents: 510, categoryId: null }])).statusCode, 400, 'mixed signs');
   assert.equal((await put('s-4', [{ amountCents: -1245, categoryId: 'c-missing' }, { amountCents: -1245, categoryId: null }])).statusCode, 400);
   assert.equal((deps.db.prepare("SELECT COUNT(*) AS n FROM split_lines WHERE transaction_id = 't1'").get() as { n: number }).n, 2, 'failed writes change nothing');
   const cleared = await put('s-5', []);

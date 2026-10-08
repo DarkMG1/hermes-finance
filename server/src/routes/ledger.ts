@@ -65,6 +65,10 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       if (txn.pending) throw new ApiError(409, 'PENDING_TRANSACTION', 'split a transaction after it posts');
       if (!body.lines.length && !txn.splitLines.length) return { status: 200, body: txn };
       body.lines.forEach((l, i) => assertCategoryExists(db, l.categoryId, `lines.${i}.categoryId`));
+      // lines share the transaction's sign: the app enters them as positive amounts, so it couldn't show anything else
+      if (body.lines.some((l) => (l.amountCents < 0) !== (txn.amountCents < 0))) {
+        throw new ApiError(400, 'INVALID_REQUEST', 'lines: every line must have the same sign as the transaction', 'lines');
+      }
       if (body.lines.length && body.lines.reduce((s, l) => s + l.amountCents, 0) !== txn.amountCents) {
         throw new ApiError(400, 'INVALID_REQUEST', 'lines: must add up to the transaction amount', 'lines');
       }
