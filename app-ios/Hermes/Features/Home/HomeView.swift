@@ -74,9 +74,9 @@ struct HomeView: View {
         guard let reader = model.reader else { return }
         do {
             let loaded = try await reader.read("/v1/home", as: Home.self)
+            await model.refreshReferenceData()
             guard !Task.isCancelled else { return }
             state = .loaded(loaded)
-            await model.refreshReferenceData()
         } catch {
             guard !Task.isCancelled else { return }
             state = .failed(errorMessage(error))

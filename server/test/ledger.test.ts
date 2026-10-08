@@ -75,6 +75,18 @@ test('categorizing a bank row learns its Plaid category and fills only matching 
   assert.deepEqual(deps.db.prepare('SELECT plaid_category, category_id FROM plaid_category_map').all(), [{ plaid_category: pc, category_id: 'c-food' }]);
 });
 
+test('a later categorization replaces the learned mapping and skips removed rows', async () => {
+  const { deps, app } = setup();
+  const pc = 'FOOD_AND_DRINK_COFFEE';
+  deps.db.prepare('INSERT INTO plaid_category_map (plaid_category, category_id) VALUES (?, ?)').run(pc, 'c-food');
+  seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-01', amountCents: -1, source: 'plaid', sourceId: 'p1', plaidCategory: pc });
+  seedTxn(deps.db, { id: 'gone', accountId: 'a1', date: '2026-03-01', amountCents: -1, source: 'plaid', sourceId: 'p2', plaidCategory: pc, removedAt: 'x' });
+  const res = await app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: w('p-relearn'), payload: { categoryId: 'c-fun' } });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(deps.db.prepare('SELECT category_id FROM plaid_category_map').all(), [{ category_id: 'c-fun' }]);
+  assert.equal((deps.db.prepare("SELECT category_id AS c FROM transactions WHERE id = 'gone'").get() as { c: string | null }).c, null);
+});
+
 test('categorizing a transfer, income or card payment row learns nothing', async () => {
   const { deps, app } = setup();
   const pcs = ['LOAN_PAYMENTS_CREDIT_CARD_PAYMENT', 'TRANSFER_OUT_ACCOUNT_TRANSFER', 'TRANSFER_IN_DEPOSIT', 'INCOME_SALARY'];

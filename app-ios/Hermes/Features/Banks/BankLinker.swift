@@ -42,7 +42,9 @@ final class BankLinker {
             case .linked(let bank): note = "\(bank.institutionName) is connected."
             case .cancelled: note = "Bank linking was cancelled."
             case .stillPending:
-                note = closedEarly ? "Linking didn't finish. Try again if your bank isn't listed." : "Still finishing with your bank. Check back in a minute."
+                note = closedEarly
+                    ? "Linking didn't finish. If your bank isn't connected, try again."
+                    : "Still finishing with your bank. Check back in a minute."
             }
             await model.refreshReferenceData()
         } catch {
