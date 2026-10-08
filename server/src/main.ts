@@ -18,7 +18,7 @@ export async function start(env: NodeJS.ProcessEnv): Promise<{ close: () => Prom
   console.log(`[hermes] listening on ${config.host}:${port} sha=${config.gitSha}`);
   return {
     port,
-    close: async () => { stop(); await app.close(); db.close(); },
+    close: async () => { await stop(); await app.close(); db.close(); },
   };
 }
 

@@ -26,14 +26,18 @@ export function upsertAccounts(db: Db, itemId: string, accounts: PlaidAccount[],
   }
 }
 
-export function applyPages(db: Db, pages: SyncPage[], opts: { cutoverDate: string | null; nowIso: string }): ApplyCounts {
+export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cutoverDate: string | null; nowIso: string }): ApplyCounts {
   const accountIds = new Map<string, string>();
   const accountFor = (plaidAccountId: string): string => {
     let id = accountIds.get(plaidAccountId);
     if (!id) {
       const row = db.prepare('SELECT id FROM accounts WHERE plaid_account_id = ?').get(plaidAccountId) as { id: string } | undefined;
-      if (!row) throw new Error('unknown plaid account');
-      id = row.id;
+      id = row?.id ?? randomUUID();
+      // Plaid sent a transaction for an account accountsGet didn't list: park it on a hidden placeholder rather than wedge the item
+      if (!row) {
+        db.prepare("INSERT INTO accounts (id, item_id, plaid_account_id, name, type, hidden) VALUES (?, ?, ?, 'Unknown account', 'other', 1)")
+          .run(id, opts.itemId, plaidAccountId);
+      }
       accountIds.set(plaidAccountId, id);
     }
     return id;
@@ -49,7 +53,8 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { cutoverDate: strin
     ON CONFLICT (source, source_id) DO UPDATE SET
       account_id = excluded.account_id, date = excluded.date, authorized_date = excluded.authorized_date,
       amount_cents = excluded.amount_cents, bank_description = excluded.bank_description, merchant_name = excluded.merchant_name,
-      plaid_category = excluded.plaid_category, pending = excluded.pending, pending_source_id = excluded.pending_source_id,
+      plaid_category = excluded.plaid_category, pending = excluded.pending,
+      pending_source_id = COALESCE(excluded.pending_source_id, transactions.pending_source_id),
       removed_at = NULL, updated_at = excluded.updated_at`);
   const markRemoved = db.prepare("UPDATE transactions SET removed_at = ?, updated_at = ? WHERE source = 'plaid' AND source_id = ? AND removed_at IS NULL");
 

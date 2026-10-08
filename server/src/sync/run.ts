@@ -10,7 +10,7 @@ export type ItemResult = {
 
 const running = new Set<string>();
 const MAX_RESTARTS = 3;
-const PAGE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 async function fetchAllPages(deps: Deps, token: string, cursor: string | null): Promise<SyncPage[]> {
   for (let attempt = 0; ; attempt += 1) {
@@ -47,13 +47,16 @@ export async function syncItem(deps: Deps, itemId: string): Promise<ItemResult> 
     const nowIso = deps.now().toISOString();
     const counts = db.transaction(() => {
       upsertAccounts(db, itemId, accounts, nowIso);
-      const c = applyPages(db, pages, { cutoverDate: getCutoverDate(db), nowIso });
+      const c = applyPages(db, pages, { itemId, cutoverDate: getCutoverDate(db), nowIso });
       const last = pages[pages.length - 1];
       db.prepare("UPDATE items SET cursor = ?, status = 'ok', last_error_code = NULL, last_synced_at = ? WHERE id = ?").run(last?.nextCursor ?? item.cursor, nowIso, itemId);
       const insertPage = db.prepare('INSERT INTO sync_pages (sync_run_id, page_json, created_at) VALUES (?, ?, ?)');
       for (const p of pages) insertPage.run(runId, JSON.stringify(p), nowIso);
       db.prepare('UPDATE sync_runs SET finished_at = ?, added = ?, modified = ?, removed = ? WHERE id = ?').run(nowIso, c.added, c.modified, c.removed, runId);
-      db.prepare('DELETE FROM sync_pages WHERE created_at < ?').run(new Date(deps.now().getTime() - PAGE_RETENTION_MS).toISOString());
+      const cutoff = new Date(deps.now().getTime() - RETENTION_MS).toISOString();
+      db.prepare('DELETE FROM sync_pages WHERE created_at < ?').run(cutoff);
+      db.prepare('DELETE FROM idempotency_keys WHERE created_at < ?').run(cutoff);
+      db.prepare('DELETE FROM link_sessions WHERE expires_at < ?').run(cutoff);
       return c;
     })();
     return { ...base, ...counts, result: 'ok' };

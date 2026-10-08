@@ -47,8 +47,8 @@ test('mutation during pagination restarts from the stored cursor', async () => {
 
 test('a crash before commit leaves no data and the old cursor', async () => {
   const { deps, plaid, item, count } = setup();
-  plaid.queueSync([{ added: [txn({ transactionId: 'p1' }), txn({ transactionId: 'bad', accountId: 'pa-unknown' })], modified: [], removed: [], nextCursor: 'c1', hasMore: false }]);
-  plaid.accounts = [plaid.accounts[0]!]; // pa-unknown is never upserted
+  plaid.queueSync([{ added: [txn({ transactionId: 'p1' })], modified: [], removed: [], nextCursor: 'c1', hasMore: false }]);
+  deps.db.exec('DROP TABLE sync_pages'); // the page insert inside the transaction fails after the rows were written
   const r = await syncItem(deps, 'i1');
   assert.equal(r.result, 'error');
   assert.equal(count(), 0);
@@ -110,11 +110,50 @@ test('stop() before the first tick prevents any scheduled sync', async () => {
   try {
     const { deps, plaid } = setup();
     const stop = startScheduler(deps);
-    stop();
+    await stop();
     mock.timers.tick(10 * 60 * 1000);
     await new Promise((r) => setImmediate(r));
     assert.deepEqual(plaid.syncCalls, []);
   } finally {
     mock.timers.reset();
   }
+});
+
+test('stop() while a scheduled sync is in flight resolves only after it finishes', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  try {
+    const { deps, plaid, item } = setup();
+    let release = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const orig = plaid.transactionsSync.bind(plaid);
+    plaid.transactionsSync = async (tok, cursor) => { await gate; return orig(tok, cursor); };
+    const stop = startScheduler(deps);
+    mock.timers.tick(5_000);
+    await new Promise((r) => setImmediate(r));
+    assert.equal(plaid.syncCalls.length, 0); // blocked inside the fake
+    let stopped = false;
+    const done = stop().then(() => { stopped = true; });
+    await new Promise((r) => setImmediate(r));
+    assert.equal(stopped, false);
+    release();
+    await done;
+    assert.ok(item().last_synced_at);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
+test('a successful sync prunes idempotency keys and link sessions older than 30 days', async () => {
+  const { deps } = setup();
+  const old = '2026-02-01T00:00:00.000Z';
+  const recent = '2026-03-01T00:00:00.000Z';
+  const key = deps.db.prepare("INSERT INTO idempotency_keys (key, request_hash, status_code, response_json, created_at) VALUES (?, 'h', 200, '{}', ?)");
+  key.run('k-old', old);
+  key.run('k-new', recent);
+  const sess = deps.db.prepare("INSERT INTO link_sessions (id, link_token, mode, expires_at) VALUES (?, 'link-synthetic', 'create', ?)");
+  sess.run('ls-old', old);
+  sess.run('ls-new', recent);
+  assert.equal((await syncItem(deps, 'i1')).result, 'ok');
+  assert.deepEqual(deps.db.prepare('SELECT key FROM idempotency_keys').all(), [{ key: 'k-new' }]);
+  assert.deepEqual(deps.db.prepare('SELECT id FROM link_sessions').all(), [{ id: 'ls-new' }]);
 });

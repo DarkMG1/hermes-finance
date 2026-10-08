@@ -13,7 +13,7 @@ function setup() {
   seedItem(deps, { id: 'i1', plaidItemId: 'pi1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
   upsertAccounts(deps.db, 'i1', [{ accountId: 'pa1', name: 'Synthetic Checking', mask: '0001', type: 'depository', subtype: 'checking', currentBalance: 12.34, availableBalance: null }], NOW);
   const apply = (pages: SyncPage[], cutoverDate: string | null = null) =>
-    deps.db.transaction(() => applyPages(deps.db, pages, { cutoverDate, nowIso: NOW }))();
+    deps.db.transaction(() => applyPages(deps.db, pages, { itemId: 'i1', cutoverDate, nowIso: NOW }))();
   const row = (sourceId: string) => deps.db.prepare("SELECT * FROM transactions WHERE source = 'plaid' AND source_id = ?").get(sourceId) as Record<string, unknown> | undefined;
   return { deps, apply, row };
 }
@@ -106,9 +106,17 @@ test('unknown account is created before its transactions', () => {
   assert.ok(row('p2'));
 });
 
-test('a transaction for an account that was never upserted throws', () => {
-  const { apply } = setup();
-  assert.throws(() => apply([page({ added: [txn({ transactionId: 'p3', accountId: 'pa-missing' })] })]), /unknown plaid account/);
+test('a transaction for an account that was never upserted gets a hidden placeholder account', () => {
+  const { deps, apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'p3', accountId: 'pa-missing' }), txn({ transactionId: 'p4', accountId: 'pa-missing' })] })]);
+  const accts = deps.db.prepare("SELECT * FROM accounts WHERE plaid_account_id = 'pa-missing'").all() as Record<string, unknown>[];
+  assert.equal(accts.length, 1);
+  assert.equal(accts[0]?.item_id, 'i1');
+  assert.equal(accts[0]?.name, 'Unknown account');
+  assert.equal(accts[0]?.type, 'other');
+  assert.equal(accts[0]?.hidden, 1);
+  assert.equal(row('p3')?.account_id, accts[0]?.id);
+  assert.equal(row('p4')?.account_id, accts[0]?.id);
 });
 
 test('owner category on pending row is preserved when posted row arrives (A)', () => {
@@ -183,4 +191,14 @@ test('a superseded pending row that was never stored is not inserted', () => {
   const { apply, row } = setup();
   apply([page({ added: [txn({ transactionId: 'P', pendingTransactionId: 'X' }), txn({ transactionId: 'X', pending: true })] })]);
   assert.equal(row('X'), undefined);
+});
+
+test('a later modified posted row without the pending link keeps it, so the pending row stays retired', () => {
+  const { apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'pend1', pending: true })] })]);
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1' })] })]);
+  apply([page({ modified: [txn({ transactionId: 'post1', pendingTransactionId: null })] })]);
+  assert.equal(row('post1')?.pending_source_id, 'pend1');
+  apply([page({ added: [txn({ transactionId: 'pend1', pending: true })] })]);
+  assert.equal(row('pend1')?.removed_at, NOW);
 });

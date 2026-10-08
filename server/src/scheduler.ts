@@ -1,9 +1,13 @@
 import type { Deps } from './deps.ts';
 import { syncAll } from './sync/run.ts';
 
-export function startScheduler(deps: Deps): () => void {
-  const tick = () => { syncAll(deps).catch((e: unknown) => console.error(`[hermes] scheduled sync crashed ${(e as Error).name}`)); };
+// Returns stop(): clears the timers and resolves once any in-flight scheduled sync has finished.
+export function startScheduler(deps: Deps): () => Promise<void> {
+  let inFlight: Promise<unknown> = Promise.resolve();
+  const tick = () => {
+    inFlight = Promise.all([inFlight, syncAll(deps).catch((e: unknown) => console.error(`[hermes] scheduled sync crashed ${(e as Error).name}`))]);
+  };
   const timer = setInterval(tick, deps.config.syncIntervalMs).unref();
   const first = setTimeout(tick, 5_000).unref();
-  return () => { clearInterval(timer); clearTimeout(first); };
+  return async () => { clearInterval(timer); clearTimeout(first); await inFlight; };
 }
