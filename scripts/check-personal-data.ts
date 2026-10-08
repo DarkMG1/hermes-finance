@@ -46,6 +46,24 @@ export function findPersonalData(
   return out;
 }
 
+export function findMessagePersonalData(message: string, terms: string[]): Finding[] {
+  return findPersonalData([{ path: 'commit message', content: message }], terms);
+}
+
+function stagedFiles(): { path: string; content: string }[] {
+  const names = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z'], {
+    encoding: 'utf8',
+  })
+    .split('\0')
+    .filter(Boolean);
+  const files: { path: string; content: string }[] = [];
+  for (const path of names) {
+    const buf = execFileSync('git', ['show', `:${path}`], { maxBuffer: 256 * 1024 * 1024 });
+    if (!buf.includes(0)) files.push({ path, content: buf.toString('utf8') });
+  }
+  return files;
+}
+
 function main(): void {
   const denylist =
     process.env['HERMES_DENYLIST'] ?? join(homedir(), '.config', 'hermes', 'personal-denylist.txt');
@@ -58,17 +76,14 @@ function main(): void {
     console.log(`personal-data check: denylist at ${denylist} has no terms`);
     process.exit(1);
   }
-  const names = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z'], {
-    encoding: 'utf8',
-  })
-    .split('\0')
-    .filter(Boolean);
-  const files: { path: string; content: string }[] = [];
-  for (const path of names) {
-    const buf = execFileSync('git', ['show', `:${path}`], { maxBuffer: 256 * 1024 * 1024 });
-    if (!buf.includes(0)) files.push({ path, content: buf.toString('utf8') });
+  const messageFile = process.argv[2] === '--message' ? process.argv[3] : undefined;
+  if (process.argv[2] === '--message' && !messageFile) {
+    console.log('personal-data check: --message needs a file');
+    process.exit(1);
   }
-  const findings = findPersonalData(files, terms);
+  const findings = messageFile
+    ? findMessagePersonalData(readFileSync(messageFile, 'utf8'), terms)
+    : findPersonalData(stagedFiles(), terms);
   for (const f of findings) {
     if (f.kind === 'docs') console.log(`${f.path}: docs/ must never be committed`);
     else if (f.kind === 'email') console.log(`${f.path}:${f.line}: email address`);

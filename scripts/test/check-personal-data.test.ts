@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { findPersonalData, parseDenylist } from '../check-personal-data.ts';
+import { findMessagePersonalData, findPersonalData, parseDenylist } from '../check-personal-data.ts';
 
 const terms = ['Zorblax Bank', 'Quentin Example', 'cafe'];
 const AT = '@';
@@ -54,4 +54,14 @@ test('long lines are scanned in linear time', () => {
 test('parseDenylist drops comments and blanks; empty list is detectable', () => {
   assert.deepEqual(parseDenylist('# c\n\n  Zorblax Bank \n'), ['Zorblax Bank']);
   assert.deepEqual(parseDenylist('# only\n\n'), []);
+});
+
+test('commit message is checked for terms and emails, reported by line without the term', () => {
+  const msg = `fix: thing\n\nfor Quentin Example\nping q${AT}corp.io\n`;
+  const res = findMessagePersonalData(msg, terms);
+  assert.deepEqual(res, [
+    { path: 'commit message', line: 3, kind: 'term', termIndex: 1 },
+    { path: 'commit message', line: 4, kind: 'email' },
+  ]);
+  assert.deepEqual(findMessagePersonalData('feat: synthetic only', terms), []);
 });
