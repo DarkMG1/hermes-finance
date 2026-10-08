@@ -1,0 +1,18 @@
+[Unit]
+Description=Hermes finance server
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/hermes/current
+ExecStart=/usr/bin/node server/src/main.ts
+EnvironmentFile=%h/.config/hermes/hermes.env
+EnvironmentFile=%h/hermes/release.env
+Environment=NODE_ENV=production
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+
+[Install]
+WantedBy=default.target

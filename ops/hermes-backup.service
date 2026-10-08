@@ -1,0 +1,9 @@
+[Unit]
+Description=Hermes encrypted SQLite backup
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/hermes/current
+ExecStart=/usr/bin/node server/src/backup-cli.ts backup
+EnvironmentFile=%h/.config/hermes/hermes.env
+UMask=0077

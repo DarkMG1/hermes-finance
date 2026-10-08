@@ -3,14 +3,16 @@
   "private": true,
   "type": "module",
   "workspaces": ["shared", "server"],
-  "engines": { "node": ">=24.18.0" },
+  "engines": { "node": ">=24" },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "lint": "eslint .",
     "test": "node --test \"shared/test/**/*.test.ts\" \"server/test/**/*.test.ts\" \"scripts/test/**/*.test.ts\"",
     "check": "npm run typecheck && npm run lint && npm test",
     "start": "node server/src/main.ts",
-    "secrets": "gitleaks detect --no-banner --redact"
+    "secrets": "gitleaks detect --no-banner --redact",
+    "backup": "node server/src/backup-cli.ts",
+    "migrate:actual": "node server/src/migrate/cli.ts"
   },
   "devDependencies": {
     "@types/node": "26.6.4",
