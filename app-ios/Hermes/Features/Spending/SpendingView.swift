@@ -58,8 +58,11 @@ struct SpendingView: View {
     private func load() async {
         guard let reader = model.reader else { return }
         do {
-            state = .loaded(try await reader.read("/v1/spending", query: period.queryItems, as: Spending.self))
+            let loaded = try await reader.read("/v1/spending", query: period.queryItems, as: Spending.self)
+            guard !Task.isCancelled else { return }
+            state = .loaded(loaded)
         } catch {
+            guard !Task.isCancelled else { return }
             state = .failed(errorMessage(error))
         }
     }
