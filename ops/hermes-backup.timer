@@ -1,0 +1,10 @@
+[Unit]
+Description=Nightly Hermes backup
+
+[Timer]
+OnCalendar=*-*-* 03:45:00 America/Los_Angeles
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
