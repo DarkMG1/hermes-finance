@@ -41,7 +41,7 @@ struct SpendingView: View {
                                 .foregroundStyle(Palette.accent)
                         }
                         .chartXAxis(.hidden)
-                        .frame(height: CGFloat(top.count) * 32)
+                        .frame(height: CGFloat(top.count) * Space.xxl)
                     }
                     Card {
                         ForEach(loaded.value.categories, id: \.name) { category in
@@ -51,7 +51,7 @@ struct SpendingView: View {
                 }
             }
         }
-        .task(id: period) { await load() }
+        .task(id: period) { state = .loading; await load() }
         .refreshable { await load() }
     }
 

@@ -32,7 +32,7 @@ custom_rules:
     severity: error
   no_raw_spacing:
     name: "Raw spacing or radius"
-    regex: '\.padding\((\s*\.[A-Za-z]+\s*,)?\s*-?\d|spacing:\s*-?\d|cornerRadius:\s*-?\d'
+    regex: '\.padding\((\s*\.[A-Za-z]+\s*,)?\s*-?\d|spacing:\s*-?\d|cornerRadius:\s*-?\d|\.frame\([^)]*(width|height|Width|Height):\s*-?\d|\.cornerRadius\(\s*-?\d'
     excluded: 'Hermes/Theme/'
     message: "Use Space / Radius tokens from Hermes/Theme"
     severity: error

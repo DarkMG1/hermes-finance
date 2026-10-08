@@ -54,7 +54,7 @@ final class AppModel {
 
     func refreshReferenceData() async {
         guard let reader else { return }
-        if let loaded = try? await reader.read("/v1/categories", as: [Category].self) { categories = loaded.value.filter { !$0.hidden } }
+        if let loaded = try? await reader.read("/v1/categories", as: [Category].self) { categories = loaded.value }
         if let loaded = try? await reader.read("/v1/accounts", as: [Account].self) { accounts = loaded.value }
     }
 

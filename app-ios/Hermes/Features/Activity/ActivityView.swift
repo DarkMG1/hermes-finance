@@ -65,7 +65,7 @@ struct ActivityView: View {
             }
             Picker("Category", selection: $categoryId) {
                 Text("All categories").tag(String?.none)
-                ForEach(model.categories) { category in Text(category.name).tag(Optional(category.id)) }
+                ForEach(model.categories.filter { !$0.hidden }) { category in Text(category.name).tag(Optional(category.id)) }
             }
         } label: {
             let active = accountId != nil || categoryId != nil

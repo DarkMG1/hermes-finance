@@ -20,7 +20,7 @@ struct AddTransactionSheet: View {
     var body: some View {
         Sheet(
             title: "Add transaction", saveTitle: "Add", canSave: request != nil, busy: busy, unresolved: writes.unresolved,
-            onCancel: { dismiss() }, onSave: { Task { await save() } }
+            onCancel: { if writes.unresolved { Task { await onChange() } }; dismiss() }, onSave: { Task { await save() } }
         ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
                 Picker("Type", selection: $isExpense) {

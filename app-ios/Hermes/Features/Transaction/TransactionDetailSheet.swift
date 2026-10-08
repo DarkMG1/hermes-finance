@@ -18,9 +18,9 @@ struct TransactionDetailSheet: View {
 
     var body: some View {
         Sheet(
-            title: "Transaction", canSave: !patch.isEmpty && !deleteWrites.unresolved, busy: busy,
+            title: "Transaction", canSave: !patch.isEmpty && !payeeInvalid && !deleteWrites.unresolved, busy: busy,
             unresolved: writes.unresolved || deleteWrites.unresolved,
-            onCancel: { dismiss() }, onSave: { Task { await save() } }
+            onCancel: { if writes.unresolved || deleteWrites.unresolved { Task { await onChange() } }; dismiss() }, onSave: { Task { await save() } }
         ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
                 LabeledContent("Amount") { MoneyText(cents: transaction.amountCents) }
@@ -30,7 +30,7 @@ struct TransactionDetailSheet: View {
                 if !transaction.bankDescription.isEmpty { LabeledContent("Bank description", value: transaction.bankDescription) }
             }
             Section {
-                Field(label: "Payee") { TextField("Payee", text: $payee) }
+                Field(label: "Payee", error: payeeInvalid ? "Payee can't be empty" : nil) { TextField("Payee", text: $payee) }
                 if transaction.splitLines.isEmpty {
                     NavigationLink { CategoryPicker(selection: $categoryId) } label: {
                         LabeledContent("Category", value: model.categoryName(categoryId))
@@ -63,10 +63,14 @@ struct TransactionDetailSheet: View {
         }
     }
 
+    private var trimmedPayee: String { payee.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    private var payeeInvalid: Bool { transaction.source == "manual" && trimmedPayee.isEmpty }
+
     private var patch: PatchTransactionBody {
         PatchTransactionBody(
             categoryId: categoryId != transaction.categoryId ? .set(categoryId) : .unchanged,
-            payee: payee != transaction.payee ? .set(payee.isEmpty ? nil : payee) : .unchanged,
+            payee: trimmedPayee != transaction.payee ? .set(trimmedPayee.isEmpty ? nil : trimmedPayee) : .unchanged,
             notes: notes != (transaction.notes ?? "") ? .set(notes.isEmpty ? nil : notes) : .unchanged)
     }
 

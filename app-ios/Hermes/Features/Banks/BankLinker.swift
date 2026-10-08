@@ -1,3 +1,4 @@
+import AuthenticationServices
 import Foundation
 import HermesKit
 import Observation
@@ -27,7 +28,13 @@ final class BankLinker {
             let session = try await client.createLinkSession(body, idempotencyKey: UUID().uuidString)
             guard let url = URL(string: session.url) else { throw ClientError.decoding("bad link address") }
             // Closing the sheet early is not proof of cancelling: the bank may already be linked, so always ask the server.
-            _ = try? await authenticate(url)
+            do {
+                _ = try await authenticate(url)
+            } catch let authError as ASWebAuthenticationSessionError where authError.code == .canceledLogin {
+            } catch {
+                self.error = errorMessage(error)
+                return
+            }
             switch try await finishLink(client: client, sessionId: session.sessionId, key: UUID().uuidString) {
             case .linked(let bank): note = "\(bank.institutionName) is connected."
             case .cancelled: note = "Bank linking was cancelled."
