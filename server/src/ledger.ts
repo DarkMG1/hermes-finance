@@ -22,7 +22,7 @@ export function rowToTransaction(db: Db, r: TxnRow): Transaction {
 }
 
 export function listAccounts(db: Db): Account[] {
-  const rows = db.prepare('SELECT * FROM accounts ORDER BY hidden, name').all() as {
+  const rows = db.prepare('SELECT * FROM accounts ORDER BY hidden, COALESCE(display_name, name)').all() as {
     id: string; item_id: string | null; name: string; mask: string | null; type: string; subtype: string | null;
     balance_current_cents: number | null; balance_available_cents: number | null; balance_at: string | null; hidden: number;
     display_name: string | null;
