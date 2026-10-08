@@ -46,7 +46,15 @@ export async function createBackup(opts: { dbPath: string; dir: string; recipien
 
 export function pruneBackups(dir: string, keepDaily = 14, keepMonthly = 12): string[] {
   const names = readdirSync(dir).filter((n) => NAME.test(n)).sort().reverse();
-  const keep = new Set(names.slice(0, keepDaily));
+  const keep = new Set<string>();
+  const days = new Set<string>();
+  for (const n of names) {
+    const day = n.slice(7, 15); // YYYYMMDD after "hermes-"
+    if (days.has(day)) continue;
+    if (days.size >= keepDaily) break;
+    days.add(day);
+    keep.add(n);
+  }
   const months = new Set<string>();
   for (const n of names) {
     const month = n.slice(7, 13); // YYYYMM after "hermes-"
@@ -68,6 +76,6 @@ export function restoreBackup(opts: { archive: string; identity: string; out: st
     assertIntact(partial);
     renameSync(partial, opts.out);
   } finally {
-    rmSync(partial, { force: true });
+    for (const suffix of ['', '-wal', '-shm']) rmSync(`${partial}${suffix}`, { force: true });
   }
 }

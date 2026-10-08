@@ -75,6 +75,6 @@ export function formatReport(r: MigrationResult): string {
     ...r.report.map((x) => `${x.status.toUpperCase().padEnd(15)}${x.type.padEnd(12)}${money(x.expectedCents).padStart(13)}${money(x.ledgerCents).padStart(13)}${money(x.diffCents).padStart(11)}  ${x.name}`),
     `summary: applied=${r.applied} accounts=${r.report.length} ok=${n('ok')} mismatch=${n('mismatch')} not_reconciled=${n('not_reconciled')} `
       + `transactions=${c.transactions} split_lines=${c.splitLines} split_remainders=${c.splitRemainders} orphan_categories=${c.orphanCategories} `
-      + `categories=${c.categories} accounts_created=${c.accountsCreated} retired_plaid=${c.retiredPlaid}`,
+      + `categories=${c.categories} accounts_created=${c.accountsCreated} retired_plaid=${c.retiredPlaid} off_budget_rows=${c.offBudgetRows}`,
   ].join('\n');
 }

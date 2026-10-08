@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyImport, MigrationError, type AccountMapping } from '../src/migrate/import.ts';
 import type { ActualSnapshot, ActualTxn } from '../src/migrate/actual.ts';
+import { getSpending } from '../src/ledger.ts';
 import { makeTestDeps, seedAccount, seedCategory, seedItem, seedTxn } from './helpers.ts';
 
 const D = '2026-02-01';
@@ -53,7 +54,7 @@ function setup() {
 
 test('imports history before D, splits, transfers and new accounts, and retires overlapping Plaid rows', () => {
   const { db, run, actualRow, catId } = setup();
-  assert.deepEqual(run(), { categories: 4, accountsCreated: 1, transactions: 7, splitLines: 2, splitRemainders: 1, orphanCategories: 1, retiredPlaid: 1 });
+  assert.deepEqual(run(), { categories: 4, accountsCreated: 1, transactions: 7, splitLines: 2, splitRemainders: 1, orphanCategories: 1, retiredPlaid: 1, offBudgetRows: 0 });
 
   const a1 = actualRow('a1');
   assert.equal(a1?.account_id, 'h-chk');
@@ -121,4 +122,25 @@ test('rejects an incomplete or wrong mapping, listing every problem, and writes 
     && /h-nope is not a Hermes account/.test(e.message));
   assert.equal((db.prepare('SELECT COUNT(*) AS n FROM categories').get() as { n: number }).n, 0);
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE source = 'actual'").get() as { n: number }).n, 0);
+});
+
+test('uncategorized rows in an off-budget account get a hidden Off budget category that spending excludes', () => {
+  const { db, actualRow, catId } = setup();
+  const off: ActualSnapshot = {
+    accounts: [acct('A-loan', { offbudget: true })],
+    categories: [],
+    transactions: [
+      tx({ id: 'o1', accountId: 'A-loan', date: '2026-01-03', amountCents: -500000 }),
+      tx({ id: 'o2', accountId: 'A-loan', date: '2026-01-04', amountCents: 2000, isTransfer: true }),
+    ],
+  };
+  const jan = { period: 'month', date: '2026-01' } as const;
+  const before = getSpending(db, jan).totalCents;
+  const counts = db.transaction(() => applyImport(db, off, { 'A-loan': 'new' }, { cutoverDate: D, nowIso: NOW }))();
+  assert.equal(counts.offBudgetRows, 1);
+  const cat = db.prepare("SELECT id, group_name, is_transfer, hidden FROM categories WHERE name = 'Off budget'").get() as Record<string, unknown>;
+  assert.deepEqual({ group: cat.group_name, isTransfer: cat.is_transfer, hidden: cat.hidden }, { group: 'Off budget', isTransfer: 1, hidden: 1 });
+  assert.equal(actualRow('o1')?.category_id, cat.id);
+  assert.equal(actualRow('o2')?.category_id, catId('Transfers'));
+  assert.equal(getSpending(db, jan).totalCents, before);
 });

@@ -19,6 +19,7 @@ async function main(): Promise<void> {
   const init = values['init-mapping'];
   if (init) {
     if (existsSync(init)) throw new MigrationError(`${init} already exists`);
+    if (!existsSync(dbPath)) throw new MigrationError(`no Hermes database at ${dbPath}`);
     const snapshot = await loadActualSnapshot(process.env);
     const db = openDb(dbPath);
     try {
@@ -34,6 +35,7 @@ async function main(): Promise<void> {
   if (values['dry-run'] === values.apply) throw new MigrationError('pass exactly one of --dry-run or --apply');
   if (!values.mapping || !values.cutover) throw new MigrationError('--mapping and --cutover are required');
   const mapping = parseMapping(readFileSync(values.mapping, 'utf8'));
+  if (!existsSync(dbPath)) throw new MigrationError(`no Hermes database at ${dbPath}`);
   const snapshot = await loadActualSnapshot(process.env);
   const db = openDb(dbPath);
   try {

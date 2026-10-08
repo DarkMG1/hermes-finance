@@ -13,6 +13,12 @@ fi
 SHA="$(git rev-parse HEAD)"
 echo "deploy: $SHA -> $HOST"
 
+live="$("${SSH[@]}" 'readlink "$HOME/hermes/current" 2>/dev/null || true')"
+if [[ "$live" == */releases/"$SHA" ]]; then
+  echo "deploy: $SHA is already live; restart with systemctl --user restart hermes.service" >&2
+  exit 1
+fi
+
 git archive --format=tar "$SHA" package.json package-lock.json .nvmrc shared server ops |
   "${SSH[@]}" "set -e; d=\"\$HOME/hermes/releases/$SHA.tmp\"; rm -rf \"\$d\"; mkdir -p \"\$d\"; tar -x -C \"\$d\""
 
@@ -36,7 +42,7 @@ cp "$rel/ops/hermes.service" "$rel/ops/hermes-backup.service" "$rel/ops/hermes-b
 systemctl --user daemon-reload
 
 if [ -f "$root/data/hermes.db" ]; then
-  (cd "$rel" && node --env-file="$envfile" server/src/backup-cli.ts backup)
+  (cd "$rel" && /usr/bin/node --env-file="$envfile" server/src/backup-cli.ts backup)
 fi
 
 prev="$(readlink "$root/current" 2>/dev/null || true)"

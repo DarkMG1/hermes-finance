@@ -37,6 +37,7 @@ test('backup of a live WAL database round-trips through age and restore', async 
   assert.ok(!readFileSync(file).includes('SQLite format 3'), 'archive must be encrypted');
   const restored = join(dir, 'restored.db');
   restoreBackup({ archive: file, identity, out: restored });
+  assert.deepEqual(readdirSync(dir).filter((n) => n.includes('.partial')), []);
   const db = new Database(restored, { readonly: true });
   const row = db.prepare('SELECT amount_cents FROM transactions WHERE id = ?').get('t1') as { amount_cents: number };
   db.close();
@@ -84,4 +85,22 @@ test('prune keeps the 14 newest plus the newest of each of the last 12 months, a
   assert.ok(!kept.includes('hermes-20260301T033000Z.db.age'));
   assert.ok(kept.includes('hermes-20250430T033000Z.db.age'));
   assert.ok(!kept.includes('hermes-20250331T033000Z.db.age'));
+});
+
+test('prune counts days, not files: extra same-day archives do not shrink the daily window', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hermes-prune-'));
+  for (let d = 1; d <= 20; d += 1) writeFileSync(join(dir, backupName(new Date(Date.UTC(2026, 2, d, 3, 30)))), '');
+  for (const h of [9, 15]) writeFileSync(join(dir, backupName(new Date(Date.UTC(2026, 2, 20, h)))), '');
+  for (const h of [9, 15]) writeFileSync(join(dir, backupName(new Date(Date.UTC(2026, 2, 10, h)))), '');
+  pruneBackups(dir);
+  const kept = readdirSync(dir).sort();
+  // newest of each of 2026-03-07..20 (14 days); March's newest is the 20th's 15:00 archive
+  assert.equal(kept.length, 14);
+  assert.ok(kept.includes('hermes-20260307T033000Z.db.age'));
+  assert.ok(!kept.includes('hermes-20260306T033000Z.db.age'));
+  assert.ok(kept.includes('hermes-20260320T150000Z.db.age'));
+  assert.ok(!kept.includes('hermes-20260320T090000Z.db.age'));
+  assert.ok(!kept.includes('hermes-20260320T033000Z.db.age'));
+  assert.ok(kept.includes('hermes-20260310T150000Z.db.age'));
+  assert.ok(!kept.includes('hermes-20260310T033000Z.db.age'));
 });

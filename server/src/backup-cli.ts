@@ -9,6 +9,7 @@ function need(name: string): string {
 }
 
 async function main(): Promise<void> {
+  process.umask(0o077);
   const { positionals, values } = parseArgs({
     allowPositionals: true,
     options: { archive: { type: 'string' }, identity: { type: 'string' }, out: { type: 'string' } },

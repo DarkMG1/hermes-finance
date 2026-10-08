@@ -17,9 +17,19 @@ Host layout: `~/hermes/releases/<sha>`, `~/hermes/current` (symlink), `~/hermes/
 `~/hermes/backups`, secrets in `~/.config/hermes/hermes.env` (see `.env.example`). Units live in `ops/`.
 
 Backups run nightly (`hermes-backup.timer`): an online SQLite backup, integrity-checked, encrypted with
-`age` to `HERMES_BACKUP_AGE_RECIPIENT`, keeping 14 daily + 12 monthly. Restore never overwrites:
+`age` to `HERMES_BACKUP_AGE_RECIPIENT`, keeping the newest of each of the last 14 days + 12 months.
+Restore never overwrites; write the output inside the mode-700 `~/hermes/data` (it is plaintext):
 
-    npm run backup -- restore --archive hermes-<stamp>.db.age --identity <age identity> --out restored.db
+    npm run backup -- restore --archive hermes-<stamp>.db.age --identity <age identity> --out ~/hermes/data/restored.db
+
+Then swap it in:
+
+    systemctl --user stop hermes.service
+    cd ~/hermes/data && aside="pre-restore-$(date -u +%Y%m%dT%H%M%SZ)" && mkdir "$aside"
+    for f in hermes.db hermes.db-wal hermes.db-shm; do [ -e "$f" ] && mv "$f" "$aside/"; done
+    mv restored.db hermes.db
+    systemctl --user start hermes.service
+    curl -fsS http://127.0.0.1:<HERMES_PORT>/v1/health
 
 One-time import from Actual Budget (`ACTUAL_SERVER_URL`, `ACTUAL_PASSWORD`, `ACTUAL_SYNC_ID`):
 

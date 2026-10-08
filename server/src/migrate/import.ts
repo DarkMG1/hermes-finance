@@ -7,7 +7,7 @@ export class MigrationError extends Error {}
 export type AccountMapping = Record<string, string>; // Actual account id -> Hermes account id | 'new' | 'skip'
 export type ImportCounts = {
   categories: number; accountsCreated: number; transactions: number; splitLines: number;
-  splitRemainders: number; orphanCategories: number; retiredPlaid: number;
+  splitRemainders: number; orphanCategories: number; retiredPlaid: number; offBudgetRows: number;
 };
 
 export function validateMapping(db: Db, snapshot: ActualSnapshot, mapping: AccountMapping): void {
@@ -24,7 +24,7 @@ export function validateMapping(db: Db, snapshot: ActualSnapshot, mapping: Accou
 
 export function applyImport(db: Db, snapshot: ActualSnapshot, mapping: AccountMapping, opts: { cutoverDate: string; nowIso: string }): ImportCounts {
   validateMapping(db, snapshot, mapping);
-  const counts: ImportCounts = { categories: 0, accountsCreated: 0, transactions: 0, splitLines: 0, splitRemainders: 0, orphanCategories: 0, retiredPlaid: 0 };
+  const counts: ImportCounts = { categories: 0, accountsCreated: 0, transactions: 0, splitLines: 0, splitRemainders: 0, orphanCategories: 0, retiredPlaid: 0, offBudgetRows: 0 };
 
   const byName = db.prepare('SELECT id FROM categories WHERE name = ?');
   const insertCategory = db.prepare('INSERT INTO categories (id, name, group_name, is_income, is_transfer, hidden) VALUES (?, ?, ?, ?, ?, ?)');
@@ -44,27 +44,37 @@ export function applyImport(db: Db, snapshot: ActualSnapshot, mapping: AccountMa
     counts.categories += 1;
   }
 
-  let transferId: string | null = null;
-  const transferCategory = (): string => {
-    if (transferId) return transferId;
-    const existing = byName.get('Transfers') as { id: string } | undefined;
+  // excluded from spending via is_transfer; created on first use, or reused and flagged
+  const specialIds = new Map<string, string>();
+  const specialCategory = (name: string, hidden: number): string => {
+    let id = specialIds.get(name);
+    if (id) return id;
+    const existing = byName.get(name) as { id: string } | undefined;
     if (existing) {
       db.prepare('UPDATE categories SET is_transfer = 1 WHERE id = ?').run(existing.id);
-      transferId = existing.id;
+      id = existing.id;
     } else {
-      transferId = randomUUID();
-      insertCategory.run(transferId, 'Transfers', 'Transfers', 0, 1, 0);
+      id = randomUUID();
+      insertCategory.run(id, name, name, 0, 1, hidden);
       counts.categories += 1;
     }
-    return transferId;
+    specialIds.set(name, id);
+    return id;
   };
-  const category = (actualId: string | null, isTransfer: boolean): string | null => {
+  const offBudget = new Set(snapshot.accounts.filter((a) => a.offbudget).map((a) => a.id));
+  const fallback = (isTransfer: boolean, accountId: string): string | null => {
+    if (isTransfer) return specialCategory('Transfers', 0);
+    if (!offBudget.has(accountId)) return null;
+    counts.offBudgetRows += 1; // Actual never categorizes off-budget rows; uncategorized they'd count as spending
+    return specialCategory('Off budget', 1);
+  };
+  const category = (actualId: string | null, isTransfer: boolean, accountId: string): string | null => {
     if (actualId) {
       const id = categoryIds.get(actualId);
       if (id) return id;
       counts.orphanCategories += 1;
     }
-    return isTransfer ? transferCategory() : null;
+    return fallback(isTransfer, accountId);
   };
 
   const targets = new Map<string, string>(); // Actual account id -> Hermes account id
@@ -94,17 +104,17 @@ export function applyImport(db: Db, snapshot: ActualSnapshot, mapping: AccountMa
     if (!accountId) continue;
     if (!created.has(t.accountId) && t.date >= opts.cutoverDate) continue;
     const id = randomUUID();
-    const categoryId = t.lines.length ? null : category(t.categoryId, t.isTransfer);
+    const categoryId = t.lines.length ? null : category(t.categoryId, t.isTransfer, t.accountId);
     insertTxn.run(id, accountId, t.id, t.date, t.amountCents, t.importedPayee ?? t.payee ?? '', categoryId, t.payee, t.notes, opts.nowIso, opts.nowIso);
     counts.transactions += 1;
     if (!t.lines.length) continue;
     for (const l of t.lines) {
-      insertLine.run(randomUUID(), id, l.amountCents, category(l.categoryId, l.isTransfer), l.notes);
+      insertLine.run(randomUUID(), id, l.amountCents, category(l.categoryId, l.isTransfer, t.accountId), l.notes);
       counts.splitLines += 1;
     }
     const remainder = t.amountCents - t.lines.reduce((s, l) => s + l.amountCents, 0);
     if (remainder !== 0) {
-      insertLine.run(randomUUID(), id, remainder, null, null);
+      insertLine.run(randomUUID(), id, remainder, fallback(false, t.accountId), null);
       counts.splitRemainders += 1;
     }
   }
