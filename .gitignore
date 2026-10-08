@@ -10,3 +10,9 @@ ios/
 android/
 .superpowers/
 docs/
+app-ios/Hermes.xcodeproj/
+app-ios/Hermes/Info.plist
+app-ios/Signing.local.xcconfig
+app-ios/HermesKit/.build/
+app-ios/build/
+DerivedData/
