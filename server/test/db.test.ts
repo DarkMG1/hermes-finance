@@ -78,6 +78,7 @@ test('migration 004 protects bank rows a stored PATCH response shows uncategoriz
   key.run('k1', JSON.stringify({ id: 'cleared', source: 'plaid', categoryId: null }));
   key.run('k2', JSON.stringify({ id: 'manual', source: 'manual', categoryId: null }));
   key.run('k3', JSON.stringify({ ok: true }));
+  key.run('k4', '{not-json');
 
   assert.equal(migrate(db), 4);
   const flag = (id: string) => (db.prepare('SELECT category_owner_set AS f FROM transactions WHERE id = ?').get(id) as { f: number }).f;
