@@ -13,6 +13,7 @@ fi
 SHA="$(git rev-parse HEAD)"
 echo "deploy: $SHA -> $HOST"
 
+# shellcheck disable=SC2016 # $HOME must expand on the host, not here
 live="$("${SSH[@]}" 'readlink "$HOME/hermes/current" 2>/dev/null || true')"
 if [[ "$live" == */releases/"$SHA" ]]; then
   echo "deploy: $SHA is already live; restart with systemctl --user restart hermes.service" >&2
