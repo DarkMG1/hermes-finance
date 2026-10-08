@@ -29,6 +29,7 @@ struct HomeView: View {
                         InlineError(message: linker.error)
                     }
                 }
+                if let note = linker.note { Text(note).textStyle(.caption, color: Palette.secondaryText) }
                 Card {
                     Text("Net worth").textStyle(.subhead, color: Palette.secondaryText)
                     MoneyText(cents: loaded.value.netWorthCents, style: .display, colored: false, negativeIsLoss: true)
@@ -56,8 +57,11 @@ struct HomeView: View {
     private func load() async {
         guard let reader = model.reader else { return }
         do {
-            state = .loaded(try await reader.read("/v1/home", as: Home.self))
+            let loaded = try await reader.read("/v1/home", as: Home.self)
+            guard !Task.isCancelled else { return }
+            state = .loaded(loaded)
         } catch {
+            guard !Task.isCancelled else { return }
             state = .failed(errorMessage(error))
         }
     }

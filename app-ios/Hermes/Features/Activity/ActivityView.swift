@@ -13,6 +13,7 @@ struct ActivityView: View {
     @State private var lastLoad: Loaded<TransactionPage>?
     @State private var selected: LedgerTransaction?
     @State private var adding = false
+    @State private var generation = 0
 
     var body: some View {
         List {
@@ -74,16 +75,20 @@ struct ActivityView: View {
 
     private func load(reset: Bool) async {
         guard let reader = model.reader, reset || !loading else { return }
+        if reset { generation += 1 }
+        let gen = generation
         loading = true
-        defer { loading = false }
+        defer { if gen == generation { loading = false } }
         let request = TransactionQuery(accountId: accountId, categoryId: categoryId, q: query, cursor: reset ? nil : cursor)
         do {
             let page = try await reader.read("/v1/transactions", query: request.items, as: TransactionPage.self)
+            guard gen == generation, !Task.isCancelled else { return }
             items = reset ? page.value.transactions : items + page.value.transactions
             cursor = page.value.nextCursor
             lastLoad = page
             error = nil
         } catch {
+            guard gen == generation, !Task.isCancelled else { return }
             self.error = errorMessage(error)
         }
     }

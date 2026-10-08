@@ -11,13 +11,15 @@ struct TransactionDetailSheet: View {
     @State private var notes = ""
     @State private var categoryId: String?
     @State private var writes = WriteGuard()
+    @State private var deleteWrites = WriteGuard()
     @State private var error: String?
     @State private var busy = false
     @State private var confirmDelete = false
 
     var body: some View {
         Sheet(
-            title: "Transaction", canSave: !patch.isEmpty, busy: busy, unresolved: writes.unresolved,
+            title: "Transaction", canSave: !patch.isEmpty && !deleteWrites.unresolved, busy: busy,
+            unresolved: writes.unresolved || deleteWrites.unresolved,
             onCancel: { dismiss() }, onSave: { Task { await save() } }
         ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
@@ -36,7 +38,7 @@ struct TransactionDetailSheet: View {
                 }
                 Field(label: "Notes", error: error) { TextField("Notes", text: $notes, axis: .vertical).lineLimit(1...6) }
             }
-            .disabled(writes.unresolved)
+            .disabled(writes.unresolved || deleteWrites.unresolved)
             if !transaction.splitLines.isEmpty {
                 Section("Split") {
                     ForEach(transaction.splitLines) { line in
@@ -47,6 +49,7 @@ struct TransactionDetailSheet: View {
             if transaction.source == "manual" {
                 Section {
                     HButton(title: "Delete transaction", kind: .destructive, busy: busy) { confirmDelete = true }
+                        .disabled(writes.unresolved)
                 }
             }
         }
@@ -87,13 +90,13 @@ struct TransactionDetailSheet: View {
         busy = true
         defer { busy = false }
         do {
-            try await client.deleteTransaction(id: transaction.id, idempotencyKey: writes.key)
-            writes.didSucceed()
+            try await client.deleteTransaction(id: transaction.id, idempotencyKey: deleteWrites.key)
+            deleteWrites.didSucceed()
             await onChange()
             dismiss()
         } catch {
-            writes.didFail(error)
-            self.error = writes.unresolved ? "Couldn't confirm the delete. Try again." : errorMessage(error)
+            deleteWrites.didFail(error)
+            self.error = deleteWrites.unresolved ? "Couldn't confirm the delete. Try again." : errorMessage(error)
         }
     }
 }
