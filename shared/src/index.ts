@@ -25,7 +25,7 @@ export const SplitLine = z.object({ id: Id, amountCents: Cents, categoryId: Id.n
 export type SplitLine = z.infer<typeof SplitLine>;
 
 export const Transaction = z.object({
-  id: Id, accountId: Id, source: z.enum(['plaid', 'manual', 'actual']), date: DateStr,
+  id: Id, accountId: Id, source: z.enum(['plaid', 'manual', 'actual', 'applecard']), date: DateStr,
   amountCents: Cents, payee: z.string(), bankDescription: z.string(), merchantName: z.string().nullable(),
   pending: z.boolean(), categoryId: Id.nullable(), notes: z.string().nullable(), splitLines: z.array(SplitLine),
 });

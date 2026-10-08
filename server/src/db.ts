@@ -22,10 +22,18 @@ export function migrate(db: Db): number {
     const version = Number(file.slice(0, 3));
     if (applied.has(version)) continue;
     const sql = readFileSync(join(MIGRATIONS_DIR, file), 'utf8');
-    db.transaction(() => {
-      db.exec(sql);
-      db.prepare('INSERT INTO migrations (version, applied_at) VALUES (?, ?)').run(version, new Date().toISOString());
-    })();
+    // SQLite ignores PRAGMA foreign_keys inside a transaction; table rebuilds need it off around the transaction
+    const fkOff = sql.startsWith('-- hermes:foreign-keys-off');
+    if (fkOff) db.pragma('foreign_keys = OFF');
+    try {
+      db.transaction(() => {
+        db.exec(sql);
+        if (fkOff && (db.pragma('foreign_key_check') as unknown[]).length > 0) throw new Error(`migration ${file} broke foreign keys`);
+        db.prepare('INSERT INTO migrations (version, applied_at) VALUES (?, ?)').run(version, new Date().toISOString());
+      })();
+    } finally {
+      if (fkOff) db.pragma('foreign_keys = ON');
+    }
   }
   const row = db.prepare('SELECT MAX(version) AS v FROM migrations').get() as { v: number | null };
   return row.v ?? 0;
