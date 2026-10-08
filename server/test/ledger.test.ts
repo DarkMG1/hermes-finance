@@ -177,6 +177,12 @@ test('when the bank changes a split amount, spending still adds up to it; a spli
   assert.equal((await spending()).totalCents, 801, 'a smaller amount with no Plaid category still totals the bank amount');
   deps.db.prepare("UPDATE transactions SET amount_cents = -1001 WHERE id = 't1'").run();
   assert.equal((await spending()).totalCents, 1002, 'exact to the cent');
+  seedCategory(deps.db, { id: 'c-xfer', name: 'Moves', isTransfer: true });
+  seedTxn(deps.db, { id: 'pay', accountId: 'a1', date: '2026-03-02', amountCents: -500, source: 'plaid', sourceId: 'p3', plaidCategory: 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' });
+  const payLines = [{ amountCents: -250, categoryId: 'c-xfer' }, { amountCents: -250, categoryId: 'c-xfer' }];
+  assert.equal((await app.inject({ method: 'PUT', url: '/v1/transactions/pay/splits', headers: w('d-4'), payload: { lines: payLines } })).statusCode, 200);
+  deps.db.prepare("UPDATE transactions SET amount_cents = -700 WHERE id = 'pay'").run();
+  assert.equal((await spending()).totalCents, 1002, "a card payment's drift stays out of spending");
   const stale = await app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: w('d-2'), payload: { categoryId: 'c-food' } });
   assert.equal(stale.statusCode, 409);
   assert.equal(stale.json().code, 'SPLIT_TRANSACTION');

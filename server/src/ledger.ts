@@ -151,11 +151,11 @@ export function getSpending(db: Db, q: SpendingQuery): Spending {
     )
     SELECT lines.category_id AS categoryId, COALESCE(c.name, 'Uncategorized') AS name, -SUM(lines.amount) AS spentCents
       FROM lines LEFT JOIN categories c ON c.id = lines.category_id
-     WHERE lines.drift = 1
-        OR (lines.category_id IS NOT NULL AND c.is_transfer = 0 AND c.is_income = 0)
+     WHERE (lines.category_id IS NOT NULL AND c.is_transfer = 0 AND c.is_income = 0)
         -- uncategorized: never income, transfers or card payments by Plaid's category; inflows only net
         -- when the bank categorized them (refunds), so manual/unknown inflows don't offset spending
-        OR (lines.category_id IS NULL AND (lines.amount < 0 OR lines.plaid_category IS NOT NULL) AND (lines.plaid_category IS NULL OR NOT (
+        -- (a split's drift always nets, so a smaller bank amount lowers spending, but keeps the Plaid exclusions)
+        OR (lines.category_id IS NULL AND (lines.drift = 1 OR lines.amount < 0 OR lines.plaid_category IS NOT NULL) AND (lines.plaid_category IS NULL OR NOT (
               lines.plaid_category GLOB 'INCOME*' OR lines.plaid_category GLOB 'TRANSFER_IN*'
               OR lines.plaid_category GLOB 'TRANSFER_OUT*' OR lines.plaid_category = 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT')))
      GROUP BY lines.category_id
