@@ -55,13 +55,15 @@ struct SplitSheet: View {
                 Section {
                     HButton(title: "Remove split", kind: .destructive, busy: busy) { confirmRemove = true }
                         .disabled(writes.unresolved)
+                        // anchored to the button: on iOS 26 a dialog on the whole sheet pops up near the top
+                        .confirmationDialog("Remove the split? The transaction becomes uncategorized.", isPresented: $confirmRemove,
+                                            titleVisibility: .visible) {
+                            Button("Remove split", role: .destructive) { Task { await remove() } }
+                        }
                 }
             }
         }
         .onAppear(perform: start)
-        .confirmationDialog("Remove the split? The transaction becomes uncategorized.", isPresented: $confirmRemove, titleVisibility: .visible) {
-            Button("Remove split", role: .destructive) { Task { await remove() } }
-        }
     }
 
     private var amounts: [String] { lines.map(\.amount) }
