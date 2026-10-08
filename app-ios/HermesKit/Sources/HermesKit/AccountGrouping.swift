@@ -22,6 +22,18 @@ public enum AccountGrouping {
         return ["credit", "loan"].contains(account.type) ? -cents : cents
     }
 
+    /// Second line of an account row: the last digits when the bank gave them (Apple Card CSV imports don't), else the kind of account.
+    public static func subtitle(_ account: Account) -> String {
+        if let mask = account.mask, !mask.isEmpty { return "••\(mask)" }
+        switch account.type {
+        case "depository": return "Bank account"
+        case "credit": return "Credit card"
+        case "loan": return "Loan"
+        case "investment": return "Investment"
+        default: return "Account"
+        }
+    }
+
     private static func groupName(_ account: Account) -> String {
         switch account.type {
         case "depository": "Cash"

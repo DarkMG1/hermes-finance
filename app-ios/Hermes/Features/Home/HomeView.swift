@@ -41,7 +41,7 @@ struct HomeView: View {
                         ForEach(groups, id: \.name) { group in
                             Text(group.name).textStyle(.subhead, color: Palette.secondaryText)
                             ForEach(group.accounts) { account in
-                                ListRow(title: account.name, subtitle: account.mask.map { "••\($0)" }) {
+                                ListRow(title: account.name, subtitle: AccountGrouping.subtitle(account)) {
                                     if let cents = AccountGrouping.netWorthCents(account) {
                                         MoneyText(cents: cents, colored: false, negativeIsLoss: true)
                                     }
