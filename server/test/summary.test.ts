@@ -63,17 +63,22 @@ test('home: net worth subtracts credit, ignores hidden, lists recent and reconne
   assert.deepEqual(home.reconnect, [{ itemId: 'i1', institutionName: 'Synthetic Bank' }]);
 });
 
-test('spending: uncategorized income, card payments and refunds are not netted', async () => {
+test('spending: uncategorized lines skip income, transfers and card payments; bank-categorized refunds net', async () => {
   const { deps } = makeTestDeps();
   const { db } = deps;
   seedAccount(db, { id: 'a1' });
   seedTxn(db, { id: 'pay', accountId: 'a1', date: '2026-04-01', amountCents: 300000, plaidCategory: 'INCOME_WAGES' });
-  seedTxn(db, { id: 'coffee', accountId: 'a1', date: '2026-04-02', amountCents: -5000, plaidCategory: 'FOOD_AND_DRINK_COFFEE' });
-  seedTxn(db, { id: 'card', accountId: 'a1', date: '2026-04-03', amountCents: -20000, plaidCategory: 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' });
-  seedTxn(db, { id: 'refund', accountId: 'a1', date: '2026-04-04', amountCents: 1000 });
-  const res = await buildApp(deps).inject({ method: 'GET', url: '/v1/spending?period=month&date=2026-04', headers: AUTH });
-  assert.deepEqual(res.json(), {
-    from: '2026-04-01', toExclusive: '2026-05-01', totalCents: 5000,
-    categories: [{ categoryId: null, name: 'Uncategorized', spentCents: 5000 }],
+  seedTxn(db, { id: 'buy', accountId: 'a1', date: '2026-04-02', amountCents: -5000, plaidCategory: 'GENERAL_MERCHANDISE_OTHER_GENERAL_MERCHANDISE' });
+  seedTxn(db, { id: 'back', accountId: 'a1', date: '2026-04-03', amountCents: 5000, plaidCategory: 'GENERAL_MERCHANDISE_OTHER_GENERAL_MERCHANDISE' });
+  seedTxn(db, { id: 'manual-in', accountId: 'a1', date: '2026-04-04', amountCents: 1000 });
+  seedTxn(db, { id: 'card', accountId: 'a1', date: '2026-04-05', amountCents: -20000, plaidCategory: 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' });
+  seedTxn(db, { id: 'mortgage', accountId: 'a1', date: '2026-05-01', amountCents: -150000, plaidCategory: 'LOAN_PAYMENTS_MORTGAGE_PAYMENT' });
+  const app = buildApp(deps);
+  const april = await app.inject({ method: 'GET', url: '/v1/spending?period=month&date=2026-04', headers: AUTH });
+  assert.deepEqual(april.json(), { from: '2026-04-01', toExclusive: '2026-05-01', totalCents: 0, categories: [] });
+  const may = await app.inject({ method: 'GET', url: '/v1/spending?period=month&date=2026-05', headers: AUTH });
+  assert.deepEqual(may.json(), {
+    from: '2026-05-01', toExclusive: '2026-06-01', totalCents: 150000,
+    categories: [{ categoryId: null, name: 'Uncategorized', spentCents: 150000 }],
   });
 });

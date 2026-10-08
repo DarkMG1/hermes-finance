@@ -38,7 +38,7 @@ export function mapLinkSessions(sessions: LinkTokenGetSessionsResponse[]): LinkR
 export function createPlaidClient(config: Config): PlaidPort {
   const api = new PlaidApi(new Configuration({
     basePath: PlaidEnvironments[config.plaid.env],
-    baseOptions: { headers: { 'PLAID-CLIENT-ID': config.plaid.clientId, 'PLAID-SECRET': config.plaid.secret } },
+    baseOptions: { timeout: 30_000, headers: { 'PLAID-CLIENT-ID': config.plaid.clientId, 'PLAID-SECRET': config.plaid.secret } },
   }));
 
   return {
