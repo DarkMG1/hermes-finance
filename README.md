@@ -31,13 +31,7 @@ Then swap it in:
     systemctl --user start hermes.service
     curl -fsS http://127.0.0.1:<HERMES_PORT>/v1/health
 
-One-time import from Actual Budget (`ACTUAL_SERVER_URL`, `ACTUAL_PASSWORD`, `ACTUAL_SYNC_ID`):
-
-    npm run migrate:actual -- --init-mapping map.json
-    npm run migrate:actual -- --dry-run --mapping map.json --cutover YYYY-MM-DD
-    npm run migrate:actual -- --apply   --mapping map.json --cutover YYYY-MM-DD   # with the service stopped
-
-A mapping entry may set its own `"cutover": "YYYY-MM-DD"` (default: `--cutover`), and `--adjust` books any remaining gap between the imported history and a checking/savings or credit balance as one `Balance adjustment (migration)` row in Transfers, excluded from spending.
+Transaction history from before Hermes was imported once from Actual Budget (rows with `source = 'actual'`); each account's `cutover_date` marks where bank sync takes over.
 
 The iPhone app reaches the server through a reverse proxy with TLS: see `ops/nginx-hermes.conf.example`.
 The server itself stays bound to 127.0.0.1; every API call needs the bearer token.
