@@ -55,6 +55,20 @@ struct HomeView: View {
                         }
                     }
                 }
+                let home = loaded.value
+                if home.owedToYouCents > 0 || home.repaymentSuggestions > 0 {
+                    NavigationLink { WhoOwesView() } label: {
+                        Card {
+                            Text("Owed to you").textStyle(.subhead, color: Palette.secondaryText)
+                            MoneyText(cents: home.owedToYouCents, style: .display, colored: false)
+                            if home.repaymentSuggestions > 0 {
+                                Text(home.repaymentSuggestions == 1 ? "1 possible repayment" : "\(home.repaymentSuggestions) possible repayments")
+                                    .textStyle(.caption, color: Palette.accent)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
                 Card {
                     Text("Recent").textStyle(.headline)
                     if loaded.value.recent.isEmpty {
