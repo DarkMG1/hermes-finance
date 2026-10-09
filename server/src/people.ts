@@ -66,12 +66,13 @@ const SUGGESTION_DAYS = 60;
 export function suggestions(db: Db, now: Date): RepaymentSuggestion[] {
   const since = new Date(now.getTime() - SUGGESTION_DAYS * 86_400_000).toISOString().slice(0, 10);
   const people = listPeople(db, false).filter((p) => !p.archived);
-  if (people.length === 0) return [];
   const openLeft = new Map(people.map((p) => [p.id,
     (getPerson(db, p.id)?.owed ?? []).filter((o) => o.status !== 'paid').map((o) => -o.amountCents - o.paidCents)]));
   const rows = db.prepare(`SELECT ${TXN_COLS}, plaid_category FROM transactions t
      WHERE removed_at IS NULL AND person_id IS NULL AND category_id IS NULL AND amount_cents > 0 AND date >= ?
        AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
+       -- repayments land in checking; card credits (bill payments) and savings transfers never are
+       AND account_id IN (SELECT id FROM accounts WHERE subtype = 'checking')
      ORDER BY date DESC, id DESC`).all(since) as (TxnRow & { plaid_category: string | null })[];
   const out: RepaymentSuggestion[] = [];
   for (const r of rows) {

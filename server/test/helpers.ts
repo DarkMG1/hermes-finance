@@ -37,9 +37,9 @@ export function seedItem(deps: Deps, i: { id: string; plaidItemId: string; insti
     .run(i.id, i.plaidItemId, i.institutionName, encryptToken(i.accessToken, deps.config.tokenKey), i.status ?? 'ok');
 }
 
-export function seedAccount(db: Db, a: { id: string; itemId?: string; plaidAccountId?: string; type?: string; balanceCents?: number; hidden?: boolean }): void {
-  db.prepare('INSERT INTO accounts (id, item_id, plaid_account_id, name, type, balance_current_cents, hidden) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(a.id, a.itemId ?? null, a.plaidAccountId ?? null, `Account ${a.id}`, a.type ?? 'depository', a.balanceCents ?? null, a.hidden ? 1 : 0);
+export function seedAccount(db: Db, a: { id: string; itemId?: string; plaidAccountId?: string; type?: string; subtype?: string; balanceCents?: number; hidden?: boolean }): void {
+  db.prepare('INSERT INTO accounts (id, item_id, plaid_account_id, name, type, subtype, balance_current_cents, hidden) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(a.id, a.itemId ?? null, a.plaidAccountId ?? null, `Account ${a.id}`, a.type ?? 'depository', a.subtype ?? null, a.balanceCents ?? null, a.hidden ? 1 : 0);
 }
 
 export function seedTxn(db: Db, t: {

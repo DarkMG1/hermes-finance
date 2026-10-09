@@ -5,7 +5,7 @@ import { makeTestDeps, AUTH, seedAccount, seedCategory, seedPerson, seedSplit, s
 
 function setup() {
   const { deps } = makeTestDeps();
-  seedAccount(deps.db, { id: 'a1' });
+  seedAccount(deps.db, { id: 'a1', subtype: 'checking' });
   seedCategory(deps.db, { id: 'c-food', name: 'Food' });
   seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill', matchText: 'SYNTHETIC QUILLON' });
   seedPerson(deps.db, { id: 'p2', name: 'Synthetic Wren' });
@@ -157,14 +157,20 @@ test('an archived person whose balance reopens stays listed and is never suggest
   assert.equal(un.json().archived, false);
 });
 
-test('with no non-archived people nothing is suggested', async () => {
+test('suggestions come only from checking deposits, and show even before anyone is added', async () => {
   const { deps } = makeTestDeps();
-  seedAccount(deps.db, { id: 'a1' });
+  seedAccount(deps.db, { id: 'a1', subtype: 'checking' });
+  seedAccount(deps.db, { id: 'card', type: 'credit', subtype: 'credit card' });
+  seedAccount(deps.db, { id: 'sav', subtype: 'savings' });
   seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill', archived: true });
-  seedTxn(deps.db, { id: 'dep', accountId: 'a1', date: '2026-03-08', amountCents: 500, bankDescription: 'ZELLE FROM SOMEONE',
-    source: 'plaid', sourceId: 'd1', plaidCategory: 'TRANSFER_IN_ACCOUNT_TRANSFER' });
+  const dep = (id: string, accountId: string, desc: string) => seedTxn(deps.db, { id, accountId, date: '2026-03-08', amountCents: 500,
+    bankDescription: desc, source: 'plaid', sourceId: id, plaidCategory: 'TRANSFER_IN_ACCOUNT_TRANSFER' });
+  dep('dep', 'a1', 'ZELLE FROM SOMEONE');
+  dep('card-payment', 'card', 'SYNTHETIC CARD PAYMENT');
+  dep('sav-in', 'sav', 'TRANSFER FROM CHECKING');
   const app = buildApp(deps);
   const get = async (url: string) => (await app.inject({ method: 'GET', url, headers: AUTH })).json();
-  assert.deepEqual(await get('/v1/people/suggestions'), []);
-  assert.equal((await get('/v1/home')).repaymentSuggestions, 0);
+  assert.deepEqual((await get('/v1/people/suggestions')).map((x: { transaction: { id: string }; personId: string | null }) =>
+    [x.transaction.id, x.personId]), [['dep', null]]);
+  assert.equal((await get('/v1/home')).repaymentSuggestions, 1);
 });

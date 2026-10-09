@@ -8,6 +8,7 @@ struct WhoOwesView: View {
     @State private var suggestions: [RepaymentSuggestion] = []
     @State private var selected: LedgerTransaction?
     @State private var adding = false
+    @State private var addingFor: LedgerTransaction?
     @State private var showSettled = false
     @State private var writes: [String: WriteGuard] = [:]
     @State private var error: String?
@@ -54,6 +55,11 @@ struct WhoOwesView: View {
         .sheet(isPresented: $adding) {
             PersonSheet(person: nil) { _ in await load() }
         }
+        .sheet(item: $addingFor) { transaction in
+            PersonSheet(person: nil) { created in
+                if let created { await tag(transaction, created.id) } else { await load() }
+            }
+        }
     }
 
     private func personLink(_ person: Person) -> some View {
@@ -81,6 +87,7 @@ struct WhoOwesView: View {
                     ForEach(model.people.filter { !$0.archived }) { person in
                         Button(person.name) { Task { await tag(suggestion.transaction, person.id) } }
                     }
+                    Button("New person…") { addingFor = suggestion.transaction }
                 }
             }
             .textStyle(.subhead, color: Palette.accent)
