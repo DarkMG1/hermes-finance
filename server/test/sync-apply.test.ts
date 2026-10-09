@@ -358,3 +358,15 @@ test('a split that collapses to one line keeps that line person', () => {
   assert.equal(row('p1t')?.person_id, 'p1', 'the food share rounds to 0 and goes, leaving the person line');
   assert.equal(row('p1t')?.category_id, null);
 });
+
+test('a split deposit resizes in proportion too', () => {
+  const { deps, apply, row } = setup();
+  seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill' });
+  seedPerson(deps.db, { id: 'p2', name: 'Synthetic Wren' });
+  apply([page({ added: [txn({ transactionId: 'v1', amount: -100 })] })]);
+  const id = row('v1')?.id as string;
+  seedSplit(deps.db, { id: '00-a', transactionId: id, amountCents: 3000, categoryId: null, personId: 'p1' });
+  seedSplit(deps.db, { id: '01-b', transactionId: id, amountCents: 7000, categoryId: null, personId: 'p2' });
+  apply([page({ modified: [txn({ transactionId: 'v1', amount: -110 })] })]);
+  assert.deepEqual(deps.db.prepare('SELECT amount_cents AS a FROM split_lines WHERE transaction_id = ? ORDER BY id').all(id), [{ a: 3300 }, { a: 7700 }]);
+});
