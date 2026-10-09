@@ -108,10 +108,13 @@ struct WhoOwesView: View {
         guard let reader = model.reader else { return }
         do {
             let people = try await reader.read("/v1/people", as: [Person].self)
-            let found = try? await reader.read("/v1/people/suggestions", as: [RepaymentSuggestion].self)
+            var found: Loaded<[RepaymentSuggestion]>?
+            var suggestionsError: Error?
+            do { found = try await reader.read("/v1/people/suggestions", as: [RepaymentSuggestion].self) } catch { suggestionsError = error }
             await model.refreshReferenceData()
             guard !Task.isCancelled else { return }
             suggestions = found?.value ?? []
+            if let suggestionsError { error = errorMessage(suggestionsError) }
             state = .loaded(people)
         } catch {
             guard !Task.isCancelled else { return }

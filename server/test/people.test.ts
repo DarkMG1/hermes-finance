@@ -140,3 +140,31 @@ test('an amount matching exactly one person balance or open item is suggested; t
   seedTxn(deps.db, { id: 'lent2', accountId: 'a1', date: '2026-03-02', amountCents: -700, personId: 'p2' });
   assert.deepEqual((await get('/v1/people/suggestions')).map((x: { personId: string | null }) => x.personId), [null]);
 });
+
+test('an archived person whose balance reopens stays listed and is never suggested; they can be unarchived', async () => {
+  const { deps, get, send } = setup();
+  seedTxn(deps.db, { id: 'lent', accountId: 'a1', date: '2026-03-01', amountCents: -3000, personId: 'p1' });
+  seedTxn(deps.db, { id: 'back', accountId: 'a1', date: '2026-03-05', amountCents: 3000, personId: 'p1', source: 'plaid', sourceId: 'b1' });
+  assert.equal((await send('PATCH', '/v1/people/p1', 'ar-1', { archived: true })).statusCode, 200);
+  deps.db.prepare("UPDATE transactions SET removed_at = 'x' WHERE id = 'back'").run();
+  const listed = (await get('/v1/people')).find((p: { id: string }) => p.id === 'p1');
+  assert.deepEqual([listed?.balanceCents, listed?.archived], [3000, true]);
+  seedTxn(deps.db, { id: 'dep', accountId: 'a1', date: '2026-03-08', amountCents: 1234, bankDescription: 'ZELLE FROM SYNTHETIC QUILLON R',
+    source: 'plaid', sourceId: 'd1', plaidCategory: 'TRANSFER_IN_ACCOUNT_TRANSFER' });
+  assert.deepEqual((await get('/v1/people/suggestions')).map((x: { personId: string | null }) => x.personId), [null]);
+  const un = await send('PATCH', '/v1/people/p1', 'ar-2', { archived: false });
+  assert.equal(un.statusCode, 200);
+  assert.equal(un.json().archived, false);
+});
+
+test('with no non-archived people nothing is suggested', async () => {
+  const { deps } = makeTestDeps();
+  seedAccount(deps.db, { id: 'a1' });
+  seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill', archived: true });
+  seedTxn(deps.db, { id: 'dep', accountId: 'a1', date: '2026-03-08', amountCents: 500, bankDescription: 'ZELLE FROM SOMEONE',
+    source: 'plaid', sourceId: 'd1', plaidCategory: 'TRANSFER_IN_ACCOUNT_TRANSFER' });
+  const app = buildApp(deps);
+  const get = async (url: string) => (await app.inject({ method: 'GET', url, headers: AUTH })).json();
+  assert.deepEqual(await get('/v1/people/suggestions'), []);
+  assert.equal((await get('/v1/home')).repaymentSuggestions, 0);
+});

@@ -25,8 +25,10 @@ const toPerson = (r: PersonRow, balanceCents: number): Person =>
 export function listPeople(db: Db, includeArchived: boolean): Person[] {
   const balances = new Map((db.prepare(`SELECT person_id AS p, -SUM(amount) AS b FROM (${TAGGED}) GROUP BY person_id`).all() as
     { p: string; b: number }[]).map((r) => [r.p, r.b]));
-  const rows = db.prepare(`SELECT id, name, match_text, archived FROM people ${includeArchived ? '' : 'WHERE archived = 0'}`).all() as PersonRow[];
+  const rows = db.prepare('SELECT id, name, match_text, archived FROM people').all() as PersonRow[];
+  // an archived person whose balance reopened (a repayment was removed) stays visible
   return rows.map((r) => toPerson(r, balances.get(r.id) ?? 0))
+    .filter((p) => includeArchived || !p.archived || p.balanceCents !== 0)
     .sort((x, y) => y.balanceCents - x.balanceCents || x.name.localeCompare(y.name));
 }
 
@@ -63,7 +65,8 @@ const SUGGESTION_DAYS = 60;
 /** Untagged recent deposits that look like repayments, each with the person they most likely came from. */
 export function suggestions(db: Db, now: Date): RepaymentSuggestion[] {
   const since = new Date(now.getTime() - SUGGESTION_DAYS * 86_400_000).toISOString().slice(0, 10);
-  const people = listPeople(db, false);
+  const people = listPeople(db, false).filter((p) => !p.archived);
+  if (people.length === 0) return [];
   const openLeft = new Map(people.map((p) => [p.id,
     (getPerson(db, p.id)?.owed ?? []).filter((o) => o.status !== 'paid').map((o) => -o.amountCents - o.paidCents)]));
   const rows = db.prepare(`SELECT ${TXN_COLS}, plaid_category FROM transactions t

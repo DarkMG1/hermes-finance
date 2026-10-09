@@ -32,14 +32,19 @@ struct PersonSheet: View {
             .disabled(writes.unresolved || archiveWrites.unresolved)
             if let person {
                 Section {
-                    HButton(title: "Archive", kind: .destructive, busy: busy) { confirmArchive = true }
-                        .disabled(person.balanceCents != 0 || writes.unresolved)
-                        .confirmationDialog("Archive \(person.name)? They'll be hidden from pickers.", isPresented: $confirmArchive,
-                                            titleVisibility: .visible) {
-                            Button("Archive", role: .destructive) { Task { await archive(person) } }
-                        }
+                    if person.archived {
+                        HButton(title: "Unarchive", busy: busy) { Task { await archive(person, false) } }
+                            .disabled(writes.unresolved)
+                    } else {
+                        HButton(title: "Archive", kind: .destructive, busy: busy) { confirmArchive = true }
+                            .disabled(person.balanceCents != 0 || writes.unresolved)
+                            .confirmationDialog("Archive \(person.name)? They'll be hidden from pickers.", isPresented: $confirmArchive,
+                                                titleVisibility: .visible) {
+                                Button("Archive", role: .destructive) { Task { await archive(person, true) } }
+                            }
+                    }
                 } footer: {
-                    if person.balanceCents != 0 { Text("You can archive someone once they're settled up.") }
+                    if !person.archived, person.balanceCents != 0 { Text("You can archive someone once they're settled up.") }
                 }
             }
         }
@@ -81,12 +86,12 @@ struct PersonSheet: View {
         }
     }
 
-    private func archive(_ person: Person) async {
+    private func archive(_ person: Person, _ archived: Bool) async {
         guard let client = model.client else { return }
         busy = true
         defer { busy = false }
         do {
-            let result = try await client.patchPerson(id: person.id, body: PatchPersonBody(archived: true), idempotencyKey: archiveWrites.key)
+            let result = try await client.patchPerson(id: person.id, body: PatchPersonBody(archived: archived), idempotencyKey: archiveWrites.key)
             archiveWrites.didSucceed()
             await model.refreshReferenceData()
             await onDone(result)

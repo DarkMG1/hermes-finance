@@ -56,7 +56,7 @@ struct HomeView: View {
                     }
                 }
                 let home = loaded.value
-                if home.owedToYouCents > 0 || home.repaymentSuggestions > 0 {
+                if home.owedToYouCents > 0 || home.repaymentSuggestions > 0 || model.people.contains(where: { !$0.archived }) {
                     NavigationLink { WhoOwesView() } label: {
                         Card {
                             Text("Owed to you").textStyle(.subhead, color: Palette.secondaryText)
