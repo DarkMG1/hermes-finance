@@ -14,6 +14,7 @@ struct SplitSheet: View {
         var amount = ""
         var categoryId: String?
         var notes = ""
+        var personId: String?
     }
 
     @State private var lines: [Line] = []
@@ -43,8 +44,13 @@ struct SplitSheet: View {
                             // only the line being typed in rebalances, so the line it adjusts doesn't bounce the change back
                             .onChange(of: line.amount) { if focused == line.id { rebalance(edited: line.id) } }
                     }
-                    NavigationLink { CategoryPicker(selection: $line.categoryId) } label: {
-                        LabeledContent("Category", value: model.categoryName(line.categoryId))
+                    NavigationLink { PersonPicker(selection: $line.personId) } label: {
+                        LabeledContent("For", value: line.personId.map(model.personName) ?? "Me")
+                    }
+                    if line.personId == nil {
+                        NavigationLink { CategoryPicker(selection: $line.categoryId) } label: {
+                            LabeledContent("Category", value: model.categoryName(line.categoryId))
+                        }
                     }
                     Field(label: "Notes") { TextField("Notes", text: $line.notes) }
                     if lines.count > 2 {
@@ -100,9 +106,12 @@ struct SplitSheet: View {
     private func start() {
         guard lines.isEmpty else { return }
         if transaction.splitLines.isEmpty {
-            lines = [Line(amount: plain(abs(transaction.amountCents)), categoryId: transaction.categoryId), Line()]
+            lines = [Line(amount: plain(abs(transaction.amountCents)), categoryId: transaction.categoryId, personId: transaction.personId),
+                     Line()]
         } else {
-            lines = transaction.splitLines.map { Line(amount: plain(abs($0.amountCents)), categoryId: $0.categoryId, notes: $0.notes ?? "") }
+            lines = transaction.splitLines.map {
+                Line(amount: plain(abs($0.amountCents)), categoryId: $0.categoryId, notes: $0.notes ?? "", personId: $0.personId)
+            }
         }
     }
 
@@ -110,7 +119,8 @@ struct SplitSheet: View {
         guard let cents = SplitMath.cents(total: transaction.amountCents, amounts: amounts) else { return }
         let body = PutSplitsBody(lines: zip(cents, lines).map { amount, line in
             let notes = line.notes.trimmingCharacters(in: .whitespacesAndNewlines)
-            return .init(amountCents: amount, categoryId: line.categoryId, notes: notes.isEmpty ? nil : notes)
+            return .init(amountCents: amount, categoryId: line.personId == nil ? line.categoryId : nil,
+                         notes: notes.isEmpty ? nil : notes, personId: line.personId)
         })
         await write(body, guard: $writes)
     }

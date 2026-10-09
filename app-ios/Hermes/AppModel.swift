@@ -16,6 +16,7 @@ final class AppModel {
     private(set) var reader: Reader?
     var categories: [Category] = []
     var accounts: [Account] = []
+    var people: [Person] = []
 
     private let keychain = KeychainStore(service: "dev.darkmg1.hermesfinance")
     private let cache: ResponseCache
@@ -50,12 +51,14 @@ final class AppModel {
         reader = nil
         categories = []
         accounts = []
+        people = []
     }
 
     func refreshReferenceData() async {
         guard let reader else { return }
         if let loaded = try? await reader.read("/v1/categories", as: [Category].self) { categories = loaded.value }
         if let loaded = try? await reader.read("/v1/accounts", as: [Account].self) { accounts = loaded.value }
+        if let loaded = try? await reader.read("/v1/people", query: [URLQueryItem(name: "all", value: "1")], as: [Person].self) { people = loaded.value }
     }
 
     func categoryName(_ id: String?) -> String {
@@ -65,6 +68,16 @@ final class AppModel {
 
     func accountName(_ id: String) -> String {
         accounts.first { $0.id == id }?.name ?? "Account"
+    }
+
+    func personName(_ id: String) -> String {
+        people.first { $0.id == id }?.name ?? "Someone"
+    }
+
+    /// What a row or split line shows where its category would go: "Owed · Quill" / "Repaid · Quill", or the category name.
+    func tagLabel(personId: String?, categoryId: String?, amountCents: Int) -> String {
+        guard let personId else { return categoryName(categoryId) }
+        return "\(amountCents < 0 ? "Owed" : "Repaid") · \(personName(personId))"
     }
 
     private func configure(url: URL, token: String) {
