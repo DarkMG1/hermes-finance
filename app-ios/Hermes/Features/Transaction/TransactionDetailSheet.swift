@@ -48,13 +48,9 @@ struct TransactionDetailSheet: View {
                     Text("The bank changed this amount, so the split no longer adds up. Edit the split to fix it.")
                         .textStyle(.caption, color: Palette.loss)
                 }
-                if transaction.pending {
-                    Text("You can split this once it posts.").textStyle(.caption, color: Palette.secondaryText)
-                } else {
-                    // Unsaved edits would be lost when the split saves and this sheet closes, so save them first.
-                    Button(transaction.splitLines.isEmpty ? "Split transaction" : "Edit split") { splitting = true }
-                        .disabled(!patch.isEmpty || writes.unresolved || deleteWrites.unresolved)
-                }
+                // Unsaved edits would be lost when the split saves and this sheet closes, so save them first.
+                Button(transaction.splitLines.isEmpty ? "Split transaction" : "Edit split") { splitting = true }
+                    .disabled(!patch.isEmpty || writes.unresolved || deleteWrites.unresolved)
             }
             if transaction.source == "manual" {
                 Section {

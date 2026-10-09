@@ -9,7 +9,6 @@ struct AddTransactionSheet: View {
     @State private var isExpense = true
     @State private var amountText = ""
     @State private var payee = ""
-    @State private var accountId: String?
     @State private var date = Date.now
     @State private var categoryId: String?
     @State private var notes = ""
@@ -30,10 +29,6 @@ struct AddTransactionSheet: View {
                 .pickerStyle(.segmented)
                 Field(label: "Amount", error: amountError) { TextField("0.00", text: $amountText).keyboardType(.decimalPad) }
                 Field(label: "Payee") { TextField("Payee", text: $payee) }
-                Picker("Account", selection: $accountId) {
-                    Text("Choose…").tag(String?.none)
-                    ForEach(model.accounts.filter { !$0.hidden }) { account in Text(account.name).tag(Optional(account.id)) }
-                }
                 DatePicker("Date", selection: $date, displayedComponents: .date)
                 NavigationLink { CategoryPicker(selection: $categoryId) } label: {
                     LabeledContent("Category", value: model.categoryName(categoryId))
@@ -51,10 +46,10 @@ struct AddTransactionSheet: View {
     }
 
     private var request: CreateTransactionBody? {
-        guard let cents = Money.parse(amountText), cents > 0, let accountId else { return nil }
+        guard let cents = Money.parse(amountText), cents > 0 else { return nil }
         let trimmedPayee = payee.trimmingCharacters(in: .whitespaces)
         guard !trimmedPayee.isEmpty else { return nil }
-        return CreateTransactionBody(accountId: accountId, date: DayText.ymd(date), amountCents: isExpense ? -cents : cents,
+        return CreateTransactionBody(date: DayText.ymd(date), amountCents: isExpense ? -cents : cents,
                                      payee: trimmedPayee, categoryId: categoryId, notes: notes.isEmpty ? nil : notes)
     }
 

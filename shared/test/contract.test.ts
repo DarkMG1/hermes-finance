@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { CreateTransactionBody, PatchTransactionBody, SpendingQuery, ListTransactionsQuery } from '@hermes/shared';
 
 test('create body requires integer non-zero cents and a real date', () => {
-  const ok = CreateTransactionBody.safeParse({ accountId: 'a1', date: '2026-01-31', amountCents: -1250, payee: 'Coffee' });
+  const ok = CreateTransactionBody.safeParse({ date: '2026-01-31', amountCents: -1250, payee: 'Coffee' });
   assert.equal(ok.success, true);
-  assert.equal(CreateTransactionBody.safeParse({ accountId: 'a1', date: '2026-01-31', amountCents: 12.5, payee: 'x' }).success, false);
-  assert.equal(CreateTransactionBody.safeParse({ accountId: 'a1', date: '2026-01-31', amountCents: 0, payee: 'x' }).success, false);
-  assert.equal(CreateTransactionBody.safeParse({ accountId: 'a1', date: '2026-13-01', amountCents: -1, payee: 'x' }).success, false);
+  assert.equal(CreateTransactionBody.safeParse({ date: '2026-01-31', amountCents: 12.5, payee: 'x' }).success, false);
+  assert.equal(CreateTransactionBody.safeParse({ date: '2026-01-31', amountCents: 0, payee: 'x' }).success, false);
+  assert.equal(CreateTransactionBody.safeParse({ date: '2026-13-01', amountCents: -1, payee: 'x' }).success, false);
 });
 
 test('patch body needs at least one field and allows clearing with null', () => {
@@ -34,7 +34,7 @@ test('patch payee must be non-empty but may be cleared with null', () => {
 });
 
 test('dates must be real calendar dates', () => {
-  const d = (date: string) => CreateTransactionBody.safeParse({ accountId: 'a1', date, amountCents: -1, payee: 'x' }).success;
+  const d = (date: string) => CreateTransactionBody.safeParse({ date, amountCents: -1, payee: 'x' }).success;
   assert.equal(d('2026-02-31'), false);
   assert.equal(d('2026-04-31'), false);
   assert.equal(d('2026-02-29'), false);

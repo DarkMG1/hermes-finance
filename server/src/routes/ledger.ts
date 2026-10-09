@@ -61,8 +61,6 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
     const r = idempotentWrite(deps, req, () => {
       const txn = getTransaction(db, req.params.id);
       if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
-      // sync replaces a pending row with a new posted row and doesn't carry lines over
-      if (txn.pending) throw new ApiError(409, 'PENDING_TRANSACTION', 'split a transaction after it posts');
       if (!body.lines.length && !txn.splitLines.length) return { status: 200, body: txn };
       body.lines.forEach((l, i) => assertCategoryExists(db, l.categoryId, `lines.${i}.categoryId`));
       // lines share the transaction's sign: the app enters them as positive amounts, so it couldn't show anything else
@@ -87,15 +85,12 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   app.post('/v1/transactions', async (req, reply) => {
     const body = parseBody(CreateTransactionBody, req.body);
     const r = idempotentWrite(deps, req, () => {
-      if (!db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(body.accountId)) {
-        throw new ApiError(400, 'INVALID_REQUEST', 'accountId: unknown account', 'accountId');
-      }
       assertCategoryExists(db, body.categoryId, 'categoryId');
       const id = randomUUID();
       const now = deps.now().toISOString();
       db.prepare(`INSERT INTO transactions (id, account_id, source, date, amount_cents, bank_description, payee, category_id, notes, created_at, updated_at)
-        VALUES (?, ?, 'manual', ?, ?, '', ?, ?, ?, ?, ?)`)
-        .run(id, body.accountId, body.date, body.amountCents, body.payee, body.categoryId ?? null, body.notes ?? null, now, now);
+        VALUES (?, 'manual', 'manual', ?, ?, '', ?, ?, ?, ?, ?)`)
+        .run(id, body.date, body.amountCents, body.payee, body.categoryId ?? null, body.notes ?? null, now, now);
       return { status: 201, body: getTransaction(db, id) };
     });
     return reply.code(r.status).send(r.body);

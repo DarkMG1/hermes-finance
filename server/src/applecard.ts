@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { AppleCardImportResult } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
+import { fitSplitToAmount } from './ledger.ts';
 
 // Wallet's Apple Card export: purchases positive, payments and credits negative. Hermes: negative = money out.
 const AMOUNT_SIGN = -1;
@@ -101,7 +102,7 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
   }
   // only a per-account cutover applies: Actual never held this card, so the global migration cutover is irrelevant here
   const cutover = (db.prepare('SELECT cutover_date FROM accounts WHERE id = ?').get(accountId) as { cutover_date: string | null }).cutover_date;
-  const exists = db.prepare("SELECT 1 FROM transactions WHERE source = 'applecard' AND source_id = ?");
+  const exists = db.prepare("SELECT id FROM transactions WHERE source = 'applecard' AND source_id = ?");
   const upsert = db.prepare(`
     INSERT INTO transactions (id, account_id, source, source_id, date, authorized_date, amount_cents, bank_description, merchant_name, plaid_category, category_id, created_at, updated_at)
     VALUES (@id, @accountId, 'applecard', @sourceId, @date, @date, @amount, @desc, @merchant, @plaidCategory,
@@ -120,6 +121,7 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
     const plaidCategory = r.type.toLowerCase() === 'payment' ? 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' : r.category;
     upsert.run({ id: randomUUID(), accountId, sourceId, date: r.transactionDate, amount: r.amountCents, desc: r.description,
       merchant: r.merchant, plaidCategory, now: nowIso });
+    fitSplitToAmount(db, (exists.get(sourceId) as { id: string }).id, nowIso);
   });
   const sum = (db.prepare("SELECT COALESCE(SUM(amount_cents), 0) AS s FROM transactions WHERE account_id = ? AND source = 'applecard' AND removed_at IS NULL")
     .get(accountId) as { s: number }).s;

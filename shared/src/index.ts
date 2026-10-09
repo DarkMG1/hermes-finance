@@ -58,7 +58,7 @@ export const PutSplitsBody = z.object({
 export type PutSplitsBody = z.infer<typeof PutSplitsBody>;
 
 export const CreateTransactionBody = z.object({
-  accountId: Id, date: DateStr, amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'),
+  date: DateStr, amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'),
   payee: z.string().min(1).max(200), categoryId: Id.nullable().optional(), notes: z.string().max(2000).nullable().optional(),
 }).strict();
 export type CreateTransactionBody = z.infer<typeof CreateTransactionBody>;
