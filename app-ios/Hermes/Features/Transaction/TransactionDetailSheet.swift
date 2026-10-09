@@ -59,7 +59,7 @@ struct TransactionDetailSheet: View {
                 }
                 // unsaved edits would be lost when the split saves and this sheet closes, so the button saves them first
                 Button(transaction.splitLines.isEmpty ? "Split transaction" : "Edit split") { Task { await split() } }
-                    .disabled(busy || payeeInvalid || writes.unresolved || deleteWrites.unresolved)
+                    .disabled(busy || payeeInvalid || deleteWrites.unresolved)
             }
             if transaction.source == "manual" {
                 Section {
@@ -79,7 +79,10 @@ struct TransactionDetailSheet: View {
         }
         .sheet(item: $splitting, onDismiss: {
             // the edits were saved but the split was cancelled: this sheet's copy is stale, so close it
-            if savedForSplit { Task { await onChange(); dismiss() } }
+            if savedForSplit {
+                busy = true
+                Task { await onChange(); dismiss() }
+            }
         }, content: { saved in
             SplitSheet(transaction: saved) {
                 savedForSplit = false
