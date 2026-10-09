@@ -36,6 +36,7 @@ public struct SplitLine: Codable, Sendable, Identifiable, Hashable {
     public let amountCents: Int
     public let categoryId: String?
     public let notes: String?
+    public let personId: String?
 }
 
 public struct LedgerTransaction: Codable, Sendable, Identifiable, Hashable {
@@ -51,6 +52,7 @@ public struct LedgerTransaction: Codable, Sendable, Identifiable, Hashable {
     public let categoryId: String?
     public let notes: String?
     public let splitLines: [SplitLine]
+    public let personId: String?
 }
 
 public struct TransactionPage: Codable, Sendable {
@@ -68,6 +70,60 @@ public struct Home: Codable, Sendable {
     public let netWorthCents: Int
     public let recent: [LedgerTransaction]
     public let reconnect: [ReconnectItem]
+    public let owedToYouCents: Int
+    public let repaymentSuggestions: Int
+
+    // a Home cached by an older build has no Who Owes Me fields
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        netWorthCents = try container.decode(Int.self, forKey: .netWorthCents)
+        recent = try container.decode([LedgerTransaction].self, forKey: .recent)
+        reconnect = try container.decode([ReconnectItem].self, forKey: .reconnect)
+        owedToYouCents = try container.decodeIfPresent(Int.self, forKey: .owedToYouCents) ?? 0
+        repaymentSuggestions = try container.decodeIfPresent(Int.self, forKey: .repaymentSuggestions) ?? 0
+    }
+}
+
+public struct Person: Codable, Sendable, Identifiable, Hashable {
+    public let id: String
+    public let name: String
+    public let matchText: String?
+    public let archived: Bool
+    /// Positive: they owe you. Negative: they're ahead.
+    public let balanceCents: Int
+}
+
+public struct PersonItem: Codable, Sendable, Identifiable, Hashable {
+    public let transactionId: String
+    public let lineId: String?
+    public let date: String
+    public let payee: String
+    public let amountCents: Int
+    public var id: String { "\(transactionId)|\(lineId ?? "")" }
+}
+
+public struct OwedItem: Codable, Sendable, Identifiable, Hashable {
+    public let transactionId: String
+    public let lineId: String?
+    public let date: String
+    public let payee: String
+    public let amountCents: Int
+    public let paidCents: Int
+    /// "open", "partial" or "paid"
+    public let status: String
+    public var id: String { "\(transactionId)|\(lineId ?? "")" }
+}
+
+public struct PersonDetail: Codable, Sendable {
+    public let person: Person
+    public let owed: [OwedItem]
+    public let repayments: [PersonItem]
+}
+
+public struct RepaymentSuggestion: Codable, Sendable, Identifiable, Hashable {
+    public let transaction: LedgerTransaction
+    public let personId: String?
+    public var id: String { transaction.id }
 }
 
 public struct SpendingCategory: Codable, Sendable, Hashable {

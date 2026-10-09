@@ -1,0 +1,29 @@
+{
+  "person": {
+    "id": "person-1",
+    "name": "Synthetic Quill",
+    "matchText": "SYNTHETIC QUILL",
+    "archived": false,
+    "balanceCents": 500
+  },
+  "owed": [
+    {
+      "transactionId": "txn-3",
+      "lineId": "line-2",
+      "date": "2026-03-12",
+      "payee": "Synthetic Split",
+      "amountCents": -1500,
+      "paidCents": 1000,
+      "status": "partial"
+    }
+  ],
+  "repayments": [
+    {
+      "transactionId": "txn-4",
+      "lineId": null,
+      "date": "2026-03-11",
+      "payee": "SYNTHETIC TRANSFER",
+      "amountCents": 1000
+    }
+  ]
+}

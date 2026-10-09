@@ -22,7 +22,7 @@ func json(_ value: some Encodable) throws -> String {
     let health = try decode(Health.self, "health")
     #expect(health.ok && health.dbVersion >= 3)
     let home = try decode(Home.self, "home")
-    #expect(home.recent.count == 3)
+    #expect(home.recent.count == 5 && home.owedToYouCents == 500 && home.repaymentSuggestions == 1)
     #expect(home.reconnect.map(\.institutionName) == ["Synthetic Credit Union"])
     let accounts = try decode([Account].self, "accounts")
     #expect(accounts.count == 3)
@@ -66,4 +66,34 @@ func json(_ value: some Encodable) throws -> String {
 @Test func createBodyOmitsNilOptionals() throws {
     let body = CreateTransactionBody(date: "2026-03-01", amountCents: -500, payee: "Synthetic", categoryId: nil, notes: nil)
     #expect(try json(body) == #"{"amountCents":-500,"date":"2026-03-01","payee":"Synthetic"}"#)
+}
+
+@Test func peopleFixturesDecode() throws {
+    let people = try decode([Person].self, "people")
+    #expect(people.first?.name == "Synthetic Quill" && people.first?.balanceCents == 500)
+    let detail = try decode(PersonDetail.self, "person")
+    #expect(detail.owed.first?.status == "partial" && detail.owed.first?.paidCents == 1000 && detail.owed.first?.lineId == "line-2")
+    #expect(detail.repayments.map(\.transactionId) == ["txn-4"])
+    let suggestions = try decode([RepaymentSuggestion].self, "people-suggestions")
+    #expect(suggestions.map(\.id) == ["txn-5"] && suggestions.first?.personId == "person-1")
+    let split = try decode(LedgerTransaction.self, "transaction")
+    #expect(split.splitLines.map(\.personId) == [nil, "person-1"] && split.personId == nil)
+}
+
+@Test func homeCachedByAnOlderBuildStillDecodes() throws {
+    let old = #"{"netWorthCents":1,"recent":[],"reconnect":[]}"#
+    let home = try JSONDecoder().decode(Home.self, from: Data(old.utf8))
+    #expect(home.owedToYouCents == 0 && home.repaymentSuggestions == 0)
+}
+
+@Test func personBodiesEncode() throws {
+    #expect(try json(PatchTransactionBody(personId: .set("p1"))) == #"{"personId":"p1"}"#)
+    #expect(try json(PatchTransactionBody(personId: .set(nil))) == #"{"personId":null}"#)
+    #expect(PatchTransactionBody(personId: .set("p1")).isEmpty == false)
+    #expect(try json(PatchPersonBody(matchText: .set(nil))) == #"{"matchText":null}"#)
+    #expect(try json(PatchPersonBody(name: "Synthetic Quill", archived: true)) == #"{"archived":true,"name":"Synthetic Quill"}"#)
+    #expect(try json(CreatePersonBody(name: "Synthetic Quill", matchText: nil)) == #"{"name":"Synthetic Quill"}"#)
+    let withPerson = SplitLineBody(amountCents: -500, categoryId: nil, notes: nil, personId: "p1")
+    #expect(try json(withPerson) == #"{"amountCents":-500,"categoryId":null,"personId":"p1"}"#)
+    #expect(try json(SplitLineBody(amountCents: -500, categoryId: "c", notes: nil)) == #"{"amountCents":-500,"categoryId":"c"}"#)
 }

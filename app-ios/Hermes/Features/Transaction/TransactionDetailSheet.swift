@@ -10,6 +10,7 @@ struct TransactionDetailSheet: View {
     @State private var payee = ""
     @State private var notes = ""
     @State private var categoryId: String?
+    @State private var personId: String?
     @State private var writes = WriteGuard()
     @State private var deleteWrites = WriteGuard()
     @State private var error: String?
@@ -33,8 +34,13 @@ struct TransactionDetailSheet: View {
             Section {
                 Field(label: "Payee", error: payeeInvalid ? "Payee can't be empty" : nil) { TextField("Payee", text: $payee) }
                 if transaction.splitLines.isEmpty {
-                    NavigationLink { CategoryPicker(selection: $categoryId) } label: {
-                        LabeledContent("Category", value: model.categoryName(categoryId))
+                    NavigationLink { PersonPicker(selection: $personId, noneTitle: noneTitle) } label: {
+                        LabeledContent(transaction.amountCents < 0 ? "For" : "Repaid by", value: personId.map(model.personName) ?? noneTitle)
+                    }
+                    if personId == nil {
+                        NavigationLink { CategoryPicker(selection: $categoryId) } label: {
+                            LabeledContent("Category", value: model.categoryName(categoryId))
+                        }
                     }
                 }
                 Field(label: "Notes", error: error) { TextField("Notes", text: $notes, axis: .vertical).lineLimit(1...6) }
@@ -42,7 +48,9 @@ struct TransactionDetailSheet: View {
             .disabled(writes.unresolved || deleteWrites.unresolved)
             Section(transaction.splitLines.isEmpty ? "" : "Split") {
                 ForEach(transaction.splitLines) { line in
-                    ListRow(title: model.categoryName(line.categoryId), subtitle: line.notes) { MoneyText(cents: line.amountCents) }
+                    ListRow(title: model.tagLabel(personId: line.personId, categoryId: line.categoryId, amountCents: line.amountCents), subtitle: line.notes) {
+                        MoneyText(cents: line.amountCents)
+                    }
                 }
                 if splitDrifted {
                     Text("The bank changed this amount, so the split no longer adds up. Edit the split to fix it.")
@@ -66,6 +74,7 @@ struct TransactionDetailSheet: View {
             payee = transaction.payee
             notes = transaction.notes ?? ""
             categoryId = transaction.categoryId
+            personId = transaction.personId
         }
         .sheet(isPresented: $splitting) {
             SplitSheet(transaction: transaction) {
@@ -85,10 +94,14 @@ struct TransactionDetailSheet: View {
 
     private var patch: PatchTransactionBody {
         PatchTransactionBody(
-            categoryId: categoryId != transaction.categoryId ? .set(categoryId) : .unchanged,
+            // a person clears the category on the server, so the category is only sent when nobody is chosen
+            categoryId: personId == nil && categoryId != transaction.categoryId ? .set(categoryId) : .unchanged,
             payee: trimmedPayee != transaction.payee ? .set(trimmedPayee.isEmpty ? nil : trimmedPayee) : .unchanged,
-            notes: notes != (transaction.notes ?? "") ? .set(notes.isEmpty ? nil : notes) : .unchanged)
+            notes: notes != (transaction.notes ?? "") ? .set(notes.isEmpty ? nil : notes) : .unchanged,
+            personId: personId != transaction.personId ? .set(personId) : .unchanged)
     }
+
+    private var noneTitle: String { transaction.amountCents < 0 ? "Me" : "Nobody" }
 
     private func save() async {
         guard let client = model.client else { return }

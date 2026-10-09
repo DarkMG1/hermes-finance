@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.ts';
 import { upsertAccounts } from '../src/sync/apply.ts';
-import { makeTestDeps, AUTH, seedAccount, seedCategory, seedItem, seedTxn, seedSplit } from './helpers.ts';
+import { makeTestDeps, AUTH, seedAccount, seedCategory, seedItem, seedTxn, seedSplit, seedPerson } from './helpers.ts';
 
 function setup() {
   const { deps } = makeTestDeps();
@@ -264,4 +264,22 @@ test('categoryId filter matches the transaction category or any split line categ
   const ids = async (c: string) => (await app.inject({ method: 'GET', url: `/v1/transactions?categoryId=${c}`, headers: AUTH })).json().transactions.map((t: { id: string }) => t.id);
   assert.deepEqual(await ids('c-food'), ['t2', 't1']);
   assert.deepEqual(await ids('c-fun'), ['t3', 't2']);
+});
+
+test('tagged lines and tagged transactions stay out of spending; responses carry personId', async () => {
+  const { deps, app } = setup();
+  seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill' });
+  seedTxn(deps.db, { id: 'dinner', accountId: 'a1', date: '2026-03-02', amountCents: -9000 });
+  seedSplit(deps.db, { id: '00-a', transactionId: 'dinner', amountCents: -3000, categoryId: 'c-food' });
+  seedSplit(deps.db, { id: '01-b', transactionId: 'dinner', amountCents: -6000, categoryId: null, personId: 'p1' });
+  // untagged, this bank-categorized inflow would net against spending as a refund
+  seedTxn(deps.db, { id: 'repaid', accountId: 'a1', date: '2026-03-03', amountCents: 6000, personId: 'p1', source: 'plaid', sourceId: 'z1',
+    plaidCategory: 'GENERAL_MERCHANDISE_OTHER_GENERAL_MERCHANDISE' });
+  seedTxn(deps.db, { id: 'lent', accountId: 'a1', date: '2026-03-04', amountCents: -2000, personId: 'p1' });
+  const spend = (await app.inject({ method: 'GET', url: '/v1/spending?period=month&date=2026-03', headers: AUTH })).json();
+  assert.equal(spend.totalCents, 3000);
+  const dinner = (await app.inject({ method: 'GET', url: '/v1/transactions/dinner', headers: AUTH })).json();
+  assert.deepEqual(dinner.splitLines.map((l: { personId: string | null }) => l.personId), [null, 'p1']);
+  assert.equal(dinner.personId, null);
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/transactions/lent', headers: AUTH })).json().personId, 'p1');
 });

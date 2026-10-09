@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyPages, upsertAccounts } from '../src/sync/apply.ts';
 import { txn } from './fake-plaid.ts';
-import { makeTestDeps, seedCategory, seedItem, seedSplit } from './helpers.ts';
+import { makeTestDeps, seedCategory, seedItem, seedSplit, seedPerson } from './helpers.ts';
 import type { SyncPage } from '../src/plaid/port.ts';
 
 const NOW = '2026-03-15T12:00:00.000Z';
@@ -317,4 +317,27 @@ test('a sign flip ends the split with the largest line category', () => {
   apply([page({ modified: [txn({ transactionId: 'p1', amount: -10 })] })]);
   assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM split_lines WHERE transaction_id = ?').get(id) as { n: number }).n, 0);
   assert.equal(row('p1')?.category_id, 'fun');
+});
+
+test('a person on a pending row carries to the posted row', () => {
+  const { deps, apply, row } = setup();
+  seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill' });
+  apply([page({ added: [txn({ transactionId: 'pend1', pending: true, amount: 30 })] })]);
+  deps.db.prepare("UPDATE transactions SET person_id = 'p1', category_owner_set = 1 WHERE source_id = 'pend1'").run();
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', amount: 32 })], removed: [{ transactionId: 'pend1' }] })]);
+  assert.equal(row('post1')?.person_id, 'p1');
+  assert.equal(row('post1')?.category_id, null);
+});
+
+test('a split that collapses to one line keeps that line person', () => {
+  const { deps, apply, row } = setup();
+  seedCategory(deps.db, { id: 'food', name: 'Food' });
+  seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill' });
+  apply([page({ added: [txn({ transactionId: 'p1t', amount: 100 })] })]);
+  const id = row('p1t')?.id as string;
+  seedSplit(deps.db, { id: '00-a', transactionId: id, amountCents: -7000, categoryId: 'food' });
+  seedSplit(deps.db, { id: '01-b', transactionId: id, amountCents: -3000, categoryId: null, personId: 'p1' });
+  apply([page({ modified: [txn({ transactionId: 'p1t', amount: 20 })] })]);
+  assert.equal(row('p1t')?.person_id, 'p1', 'the 70 line goes first, leaving the person line at 20');
+  assert.equal(row('p1t')?.category_id, null);
 });

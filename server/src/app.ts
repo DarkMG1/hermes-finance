@@ -4,6 +4,7 @@ import type { Deps } from './deps.ts';
 import { ApiError } from './errors.ts';
 import { PlaidError } from './plaid/port.ts';
 import { ledgerRoutes } from './routes/ledger.ts';
+import { peopleRoutes } from './routes/people.ts';
 import { syncRoutes } from './routes/sync.ts';
 import { bankRoutes } from './routes/banks.ts';
 import { importRoutes } from './routes/imports.ts';
@@ -50,6 +51,7 @@ export function buildApp(deps: Deps): FastifyInstance {
   });
 
   ledgerRoutes(app, deps);
+  peopleRoutes(app, deps);
   syncRoutes(app, deps);
   bankRoutes(app, deps);
   importRoutes(app, deps);

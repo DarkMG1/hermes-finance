@@ -10,20 +10,24 @@ public struct PatchTransactionBody: Encodable, Sendable, Equatable {
     public var categoryId: FieldUpdate<String>
     public var payee: FieldUpdate<String>
     public var notes: FieldUpdate<String>
+    /// Setting a person clears the category on the server, and setting a category clears the person.
+    public var personId: FieldUpdate<String>
 
-    public init(categoryId: FieldUpdate<String> = .unchanged, payee: FieldUpdate<String> = .unchanged, notes: FieldUpdate<String> = .unchanged) {
+    public init(categoryId: FieldUpdate<String> = .unchanged, payee: FieldUpdate<String> = .unchanged, notes: FieldUpdate<String> = .unchanged,
+                personId: FieldUpdate<String> = .unchanged) {
         self.categoryId = categoryId
         self.payee = payee
         self.notes = notes
+        self.personId = personId
     }
 
-    public var isEmpty: Bool { categoryId == .unchanged && payee == .unchanged && notes == .unchanged }
+    public var isEmpty: Bool { categoryId == .unchanged && payee == .unchanged && notes == .unchanged && personId == .unchanged }
 
-    private enum Keys: String, CodingKey { case categoryId, payee, notes }
+    private enum Keys: String, CodingKey { case categoryId, payee, notes, personId }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: Keys.self)
-        for (key, update) in [(Keys.categoryId, categoryId), (.payee, payee), (.notes, notes)] {
+        for (key, update) in [(Keys.categoryId, categoryId), (.payee, payee), (.notes, notes), (.personId, personId)] {
             guard case .set(let value) = update else { continue }
             if let value { try container.encode(value, forKey: key) } else { try container.encodeNil(forKey: key) }
         }
@@ -44,25 +48,28 @@ public struct PatchAccountBody: Encodable, Sendable, Equatable {
     }
 }
 
-/// One line of a split. `categoryId: nil` sends JSON null (an uncategorized line); nil notes are left out.
+/// One line of a split. `categoryId: nil` sends JSON null (an uncategorized line); nil notes and person are left out.
 public struct SplitLineBody: Encodable, Sendable, Equatable {
     public let amountCents: Int
     public let categoryId: String?
     public let notes: String?
+    public let personId: String?
 
-    public init(amountCents: Int, categoryId: String?, notes: String?) {
+    public init(amountCents: Int, categoryId: String?, notes: String?, personId: String? = nil) {
         self.amountCents = amountCents
         self.categoryId = categoryId
         self.notes = notes
+        self.personId = personId
     }
 
-    private enum Keys: String, CodingKey { case amountCents, categoryId, notes }
+    private enum Keys: String, CodingKey { case amountCents, categoryId, notes, personId }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: Keys.self)
         try container.encode(amountCents, forKey: .amountCents)
         if let categoryId { try container.encode(categoryId, forKey: .categoryId) } else { try container.encodeNil(forKey: .categoryId) }
         try container.encodeIfPresent(notes, forKey: .notes)
+        try container.encodeIfPresent(personId, forKey: .personId)
     }
 }
 
@@ -111,4 +118,38 @@ public enum LinkSessionBody: Encodable, Sendable, Equatable {
 public struct AppleCardImportBody: Encodable, Sendable, Equatable {
     public let csv: String
     public init(csv: String) { self.csv = csv }
+}
+
+public struct CreatePersonBody: Encodable, Sendable, Equatable {
+    public let name: String
+    public let matchText: String?
+
+    public init(name: String, matchText: String?) {
+        self.name = name
+        self.matchText = matchText
+    }
+}
+
+/// Only the fields given are sent; `matchText: .set(nil)` clears it.
+public struct PatchPersonBody: Encodable, Sendable, Equatable {
+    public var name: String?
+    public var matchText: FieldUpdate<String>
+    public var archived: Bool?
+
+    public init(name: String? = nil, matchText: FieldUpdate<String> = .unchanged, archived: Bool? = nil) {
+        self.name = name
+        self.matchText = matchText
+        self.archived = archived
+    }
+
+    private enum Keys: String, CodingKey { case name, matchText, archived }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: Keys.self)
+        try container.encodeIfPresent(name, forKey: .name)
+        if case .set(let value) = matchText {
+            if let value { try container.encode(value, forKey: .matchText) } else { try container.encodeNil(forKey: .matchText) }
+        }
+        try container.encodeIfPresent(archived, forKey: .archived)
+    }
 }

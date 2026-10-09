@@ -2,22 +2,22 @@ import type { Account, Category, Home, ListTransactionsQuery, Spending, Spending
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
 
-type TxnRow = {
+export type TxnRow = {
   id: string; account_id: string; source: 'plaid' | 'manual' | 'actual' | 'applecard'; date: string; amount_cents: number;
   bank_description: string; merchant_name: string | null; pending: number; category_id: string | null;
-  payee: string | null; notes: string | null;
+  payee: string | null; notes: string | null; person_id: string | null;
 };
 
-const TXN_COLS = 'id, account_id, source, date, amount_cents, bank_description, merchant_name, pending, category_id, payee, notes';
+export const TXN_COLS = 'id, account_id, source, date, amount_cents, bank_description, merchant_name, pending, category_id, payee, notes, person_id';
 
 export function rowToTransaction(db: Db, r: TxnRow): Transaction {
-  const lines = db.prepare('SELECT id, amount_cents, category_id, notes FROM split_lines WHERE transaction_id = ? ORDER BY id').all(r.id) as
-    { id: string; amount_cents: number; category_id: string | null; notes: string | null }[];
-  const splitLines: SplitLine[] = lines.map((l) => ({ id: l.id, amountCents: l.amount_cents, categoryId: l.category_id, notes: l.notes }));
+  const lines = db.prepare('SELECT id, amount_cents, category_id, notes, person_id FROM split_lines WHERE transaction_id = ? ORDER BY id').all(r.id) as
+    { id: string; amount_cents: number; category_id: string | null; notes: string | null; person_id: string | null }[];
+  const splitLines: SplitLine[] = lines.map((l) => ({ id: l.id, amountCents: l.amount_cents, categoryId: l.category_id, notes: l.notes, personId: l.person_id }));
   return {
     id: r.id, accountId: r.account_id, source: r.source, date: r.date, amountCents: r.amount_cents,
     payee: r.payee ?? r.merchant_name ?? r.bank_description, bankDescription: r.bank_description,
-    merchantName: r.merchant_name, pending: r.pending === 1, categoryId: r.category_id, notes: r.notes, splitLines,
+    merchantName: r.merchant_name, pending: r.pending === 1, categoryId: r.category_id, notes: r.notes, personId: r.person_id, splitLines,
   };
 }
 
@@ -112,12 +112,12 @@ export function learnCategory(db: Db, transactionId: string, categoryId: string,
 /**
  * Keeps a split adding up after the bank changes the amount (a pending row posting for more, a correction). The largest line absorbs
  * the difference; when the amount shrinks the largest lines give it up first, and a line that reaches zero goes. Fewer than two lines
- * left, or a sign flip, ends the split: the transaction takes the category of the largest remaining line.
+ * left, or a sign flip, ends the split: the transaction takes the category or person of the largest remaining line.
  */
 export function fitSplitToAmount(db: Db, transactionId: string, nowIso: string): void {
   const txn = db.prepare('SELECT amount_cents AS a FROM transactions WHERE id = ?').get(transactionId) as { a: number } | undefined;
-  const lines = db.prepare('SELECT id, amount_cents AS a, category_id AS c FROM split_lines WHERE transaction_id = ? ORDER BY id')
-    .all(transactionId) as { id: string; a: number; c: string | null }[];
+  const lines = db.prepare('SELECT id, amount_cents AS a, category_id AS c, person_id AS p FROM split_lines WHERE transaction_id = ? ORDER BY id')
+    .all(transactionId) as { id: string; a: number; c: string | null; p: string | null }[];
   if (!txn || !lines.length) return;
   let diff = txn.a - lines.reduce((s, l) => s + l.a, 0);
   if (diff === 0) return;
@@ -137,7 +137,8 @@ export function fitSplitToAmount(db: Db, transactionId: string, nowIso: string):
   const kept = bySize.filter((l) => l.a !== 0);
   if (!sameSign || kept.length < 2) {
     db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(transactionId);
-    db.prepare('UPDATE transactions SET category_id = ?, updated_at = ? WHERE id = ?').run(kept[0]?.c ?? bySize[0]!.c, nowIso, transactionId);
+    const winner = kept[0] ?? bySize[0]!;
+    db.prepare('UPDATE transactions SET category_id = ?, person_id = ?, updated_at = ? WHERE id = ?').run(winner.c, winner.p, nowIso, transactionId);
     return;
   }
   const update = db.prepare('UPDATE split_lines SET amount_cents = ? WHERE id = ?');
@@ -157,7 +158,7 @@ export function periodRange(q: SpendingQuery): { from: string; toExclusive: stri
   return { from: `${q.date}-01`, toExclusive: `${next}-01` };
 }
 
-export function getHome(db: Db): Home {
+export function getHome(db: Db): Omit<Home, 'owedToYouCents' | 'repaymentSuggestions'> {
   const accounts = db.prepare('SELECT type, balance_current_cents AS b FROM accounts WHERE hidden = 0 AND balance_current_cents IS NOT NULL').all() as { type: string; b: number }[];
   const netWorthCents = accounts.reduce((sum, a) => sum + (NEGATIVE_TYPES.has(a.type) ? -a.b : a.b), 0);
   const recent = listTransactions(db, { limit: 10 }).transactions;
@@ -172,12 +173,13 @@ export function getSpending(db: Db, q: SpendingQuery): Spending {
     WITH lines AS (
       SELECT sl.category_id AS category_id, sl.amount_cents AS amount, t.plaid_category AS plaid_category, 0 AS drift
         FROM split_lines sl JOIN transactions t ON t.id = sl.transaction_id
-       WHERE t.removed_at IS NULL AND t.date >= ? AND t.date < ?
+       WHERE t.removed_at IS NULL AND t.date >= ? AND t.date < ? AND sl.person_id IS NULL
       UNION ALL
       SELECT t.category_id, t.amount_cents, t.plaid_category, 0
         FROM transactions t
        WHERE t.removed_at IS NULL AND t.date >= ? AND t.date < ?
          AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
+         AND t.person_id IS NULL
       UNION ALL
       -- the bank changed a split transaction's amount: the owner's lines stay as saved and the exact difference
       -- counts as uncategorized spending until they re-split, so the total always matches the bank
