@@ -27,6 +27,9 @@ export function upsertAccounts(db: Db, itemId: string, accounts: PlaidAccount[],
     stmt.run({ id: randomUUID(), itemId, plaidAccountId: a.accountId, name: a.name, mask: a.mask, type: a.type, subtype: a.subtype,
       cur: toCents(a.currentBalance), avail: toCents(a.availableBalance), at: nowIso });
   }
+  // rows parked on a placeholder before Plaid said the account is an investment one; sync skips investment rows from here on
+  db.prepare(`UPDATE transactions SET removed_at = ?, updated_at = ? WHERE source = 'plaid' AND removed_at IS NULL
+    AND account_id IN (SELECT id FROM accounts WHERE item_id = ? AND type = 'investment')`).run(nowIso, nowIso, itemId);
 }
 
 export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cutoverDate: string | null; nowIso: string }): ApplyCounts {

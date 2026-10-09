@@ -263,6 +263,14 @@ test('investment accounts never get transactions; their balance still syncs', ()
   assert.equal(row('div2'), undefined);
 });
 
+test('rows parked on a placeholder are retired once Plaid lists the account as an investment one', () => {
+  const { deps, apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'div1', accountId: 'pinv' })] })]);
+  assert.equal(row('div1')?.removed_at, null);
+  upsertAccounts(deps.db, 'i1', [{ accountId: 'pinv', name: 'Synthetic Roth', mask: '0003', type: 'investment', subtype: 'roth', currentBalance: 100, availableBalance: null }], NOW);
+  assert.equal(row('div1')?.removed_at, NOW);
+});
+
 test('a split made while pending moves to the posted row; the largest line absorbs a bigger amount', () => {
   const { deps, apply, row } = setup();
   seedCategory(deps.db, { id: 'food', name: 'Food' });
