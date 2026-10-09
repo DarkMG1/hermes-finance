@@ -32,8 +32,8 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
       if (body.repaymentAccountId === null) {
         db.prepare("DELETE FROM settings WHERE key = 'repayment_account_id'").run();
       } else {
-        if (!db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(body.repaymentAccountId)) {
-          throw new ApiError(400, 'INVALID_REQUEST', 'repaymentAccountId: unknown account', 'repaymentAccountId');
+        if (!db.prepare("SELECT 1 FROM accounts WHERE id = ? AND type = 'depository'").get(body.repaymentAccountId)) {
+          throw new ApiError(400, 'INVALID_REQUEST', 'repaymentAccountId: not a bank account', 'repaymentAccountId');
         }
         db.prepare("INSERT INTO settings (key, value) VALUES ('repayment_account_id', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value")
           .run(body.repaymentAccountId);

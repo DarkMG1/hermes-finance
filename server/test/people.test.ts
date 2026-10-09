@@ -202,6 +202,8 @@ test('a chosen repayment account replaces the checking default; clearing it rest
   assert.deepEqual([set.statusCode, set.json()], [200, { repaymentAccountId: 'a1' }]);
   assert.deepEqual(await ids(), ['in-a1']);
   assert.equal((await send('PUT', '/v1/people/settings', 'st-2', { repaymentAccountId: 'nope' })).statusCode, 400);
+  seedAccount(deps.db, { id: 'card', type: 'credit', subtype: 'credit card' });
+  assert.equal((await send('PUT', '/v1/people/settings', 'st-4', { repaymentAccountId: 'card' })).statusCode, 400, 'repayments land in a bank account');
   assert.equal((await send('PUT', '/v1/people/settings', 'st-3', { repaymentAccountId: null })).statusCode, 200);
   assert.deepEqual(await ids(), ['in-a1', 'in-cash']);
 });
