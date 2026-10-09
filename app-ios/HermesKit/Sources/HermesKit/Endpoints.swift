@@ -33,6 +33,15 @@ extension APIClient {
         try await write("PATCH", "/v1/people/\(id)", body: body, key: idempotencyKey)
     }
 
+    public func putPeopleSettings(_ body: PeopleSettings, idempotencyKey: String) async throws -> PeopleSettings {
+        try await write("PUT", "/v1/people/settings", body: body, key: idempotencyKey)
+    }
+
+    /// The deposit is not a repayment: it is never suggested again.
+    public func dismissSuggestion(transactionId: String, idempotencyKey: String) async throws {
+        try await send("POST", "/v1/people/suggestions/\(transactionId)/dismiss", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
+    }
+
     public func deleteTransaction(id: String, idempotencyKey: String) async throws {
         try await send("DELETE", "/v1/transactions/\(id)", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
     }

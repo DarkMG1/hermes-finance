@@ -6,6 +6,7 @@ struct WhoOwesView: View {
     @Environment(AppModel.self) private var model
     @State private var state: LoadState<[Person]> = .loading
     @State private var suggestions: [RepaymentSuggestion] = []
+    @State private var settings: PeopleSettings?
     @State private var selected: LedgerTransaction?
     @State private var adding = false
     @State private var addingFor: LedgerTransaction?
@@ -40,6 +41,7 @@ struct WhoOwesView: View {
                         .textStyle(.headline)
                     }
                 }
+                if let settings { repaymentAccountCard(settings) }
             }
         }
         .toolbar {
@@ -89,18 +91,50 @@ struct WhoOwesView: View {
                     }
                     Button("New person…") { addingFor = suggestion.transaction }
                 }
+                Button("Not a repayment") {
+                    Task {
+                        await perform("\(suggestion.id)|dismiss") { client, key in
+                            try await client.dismissSuggestion(transactionId: suggestion.id, idempotencyKey: key)
+                        }
+                    }
+                }
             }
             .textStyle(.subhead, color: Palette.accent)
         }
     }
 
+    private func repaymentAccountCard(_ settings: PeopleSettings) -> some View {
+        Card {
+            LabeledContent("Repayments land in") {
+                Menu(settings.repaymentAccountId.map(model.accountName) ?? "Any checking account") {
+                    Button("Any checking account") { Task { await setRepaymentAccount(nil) } }
+                    ForEach(model.accounts.filter { $0.type == "depository" && !$0.hidden }) { account in
+                        Button(account.name) { Task { await setRepaymentAccount(account.id) } }
+                    }
+                }
+            }
+            .textStyle(.subhead)
+        }
+    }
+
+    private func setRepaymentAccount(_ id: String?) async {
+        await perform("settings|\(id ?? "")") { client, key in
+            _ = try await client.putPeopleSettings(PeopleSettings(repaymentAccountId: id), idempotencyKey: key)
+        }
+    }
+
     private func tag(_ transaction: LedgerTransaction, _ personId: String) async {
+        await perform("\(transaction.id)|\(personId)") { client, key in
+            _ = try await client.patchTransaction(id: transaction.id, body: PatchTransactionBody(personId: .set(personId)), idempotencyKey: key)
+        }
+    }
+
+    /// One key per (target, choice): retrying an unknown outcome resends the same request, and a different choice is a new one.
+    private func perform(_ slot: String, _ write: (APIClient, String) async throws -> Void) async {
         guard let client = model.client else { return }
-        // one key per (deposit, person): retrying an unknown outcome resends the same request, and choosing someone else is a new one
-        let slot = "\(transaction.id)|\(personId)"
         var writeGuard = writes[slot] ?? WriteGuard()
         do {
-            _ = try await client.patchTransaction(id: transaction.id, body: PatchTransactionBody(personId: .set(personId)), idempotencyKey: writeGuard.key)
+            try await write(client, writeGuard.key)
             writeGuard.didSucceed()
             error = nil
         } catch {
@@ -118,9 +152,11 @@ struct WhoOwesView: View {
             var found: Loaded<[RepaymentSuggestion]>?
             var suggestionsError: Error?
             do { found = try await reader.read("/v1/people/suggestions", as: [RepaymentSuggestion].self) } catch { suggestionsError = error }
+            let loadedSettings = try? await reader.read("/v1/people/settings", as: PeopleSettings.self)
             await model.refreshReferenceData()
             guard !Task.isCancelled else { return }
             suggestions = found?.value ?? []
+            settings = loadedSettings?.value ?? settings
             if let suggestionsError { error = errorMessage(suggestionsError) }
             state = .loaded(people)
         } catch {

@@ -86,6 +86,11 @@ func json(_ value: some Encodable) throws -> String {
     #expect(home.owedToYouCents == 0 && home.repaymentSuggestions == 0)
 }
 
+@Test func peopleSettingsSendsNullToClear() throws {
+    #expect(try json(PeopleSettings(repaymentAccountId: nil)) == #"{"repaymentAccountId":null}"#)
+    #expect(try json(PeopleSettings(repaymentAccountId: "a1")) == #"{"repaymentAccountId":"a1"}"#)
+}
+
 @Test func personBodiesEncode() throws {
     #expect(try json(PatchTransactionBody(personId: .set("p1"))) == #"{"personId":"p1"}"#)
     #expect(try json(PatchTransactionBody(personId: .set(nil))) == #"{"personId":null}"#)

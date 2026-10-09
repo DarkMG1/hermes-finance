@@ -91,6 +91,10 @@ export const PatchPersonBody = z.object({
 }).strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
 export type PatchPersonBody = z.infer<typeof PatchPersonBody>;
 
+/** Where repayments land. null: every checking account. */
+export const PeopleSettings = z.object({ repaymentAccountId: Id.nullable() }).strict();
+export type PeopleSettings = z.infer<typeof PeopleSettings>;
+
 export const CreateTransactionBody = z.object({
   date: DateStr, amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'),
   payee: z.string().min(1).max(200), categoryId: Id.nullable().optional(), notes: z.string().max(2000).nullable().optional(),

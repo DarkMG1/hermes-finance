@@ -10,7 +10,7 @@ test('health needs no auth and reports sha and migration version', async () => {
   const app = buildApp(deps);
   const res = await app.inject({ method: 'GET', url: '/v1/health' });
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.json(), { ok: true, gitSha: 'test-sha', dbVersion: 7 });
+  assert.deepEqual(res.json(), { ok: true, gitSha: 'test-sha', dbVersion: 8 });
 });
 
 test('other routes need the bearer token', async () => {
