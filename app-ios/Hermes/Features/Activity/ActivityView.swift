@@ -45,6 +45,10 @@ struct ActivityView: View {
             await load(reset: true)
         }
         .refreshable { await load(reset: true) }
+        // an account that drops out of the picker mustn't stay selected where it can't be seen or cleared
+        .onChange(of: filterAccounts.map(\.id)) { _, ids in
+            if let accountId, !ids.contains(accountId) { self.accountId = nil }
+        }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) { filterMenu }
             ToolbarItem(placement: .topBarTrailing) {
@@ -59,13 +63,16 @@ struct ActivityView: View {
         }
     }
 
+    // investment accounts have no transactions; they only count toward net worth
+    private var filterAccounts: [Account] { model.accounts.filter { !$0.hidden && $0.type != "investment" } }
+
     private var filterKey: String { "\(query)|\(accountId ?? "")|\(categoryId ?? "")" }
 
     private var filterMenu: some View {
         Menu {
             Picker("Account", selection: $accountId) {
                 Text("All accounts").tag(String?.none)
-                ForEach(model.accounts.filter { !$0.hidden }) { account in Text(account.name).tag(Optional(account.id)) }
+                ForEach(filterAccounts) { account in Text(account.name).tag(Optional(account.id)) }
             }
             Picker("Category", selection: $categoryId) {
                 Text("All categories").tag(String?.none)
