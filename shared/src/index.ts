@@ -43,7 +43,10 @@ export type ListTransactionsQuery = z.infer<typeof ListTransactionsQuery>;
 
 export const PatchTransactionBody = z.object({
   categoryId: Id.nullable().optional(), payee: z.string().min(1).max(200).nullable().optional(), notes: z.string().max(2000).nullable().optional(),
-}).strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+  personId: Id.nullable().optional(),
+}).strict()
+  .refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' })
+  .refine((b) => !(b.categoryId && b.personId), { message: 'categoryId and personId cannot both be set', path: ['personId'] });
 export type PatchTransactionBody = z.infer<typeof PatchTransactionBody>;
 
 export const PatchAccountBody = z.object({ name: z.string().trim().min(1).max(100).nullable() }).strict();
@@ -53,9 +56,37 @@ export type PatchAccountBody = z.infer<typeof PatchAccountBody>;
 export const PutSplitsBody = z.object({
   lines: z.array(z.object({
     amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'), categoryId: Id.nullable(), notes: z.string().max(2000).nullable().optional(),
-  }).strict()).max(20).refine((l) => l.length !== 1, 'a split needs at least two lines'),
+    personId: Id.nullable().optional(),
+  }).strict().refine((l) => !(l.categoryId && l.personId), { message: 'a line with a person has no category', path: ['personId'] }))
+    .max(20).refine((l) => l.length !== 1, 'a split needs at least two lines'),
 }).strict();
 export type PutSplitsBody = z.infer<typeof PutSplitsBody>;
+
+export const Person = z.object({ id: Id, name: z.string(), matchText: z.string().nullable(), archived: z.boolean(), balanceCents: Cents });
+export type Person = z.infer<typeof Person>;
+
+export const PersonItem = z.object({ transactionId: Id, lineId: Id.nullable(), date: DateStr, payee: z.string(), amountCents: Cents });
+export type PersonItem = z.infer<typeof PersonItem>;
+
+export const OwedItem = PersonItem.extend({ paidCents: Cents, status: z.enum(['open', 'partial', 'paid']) });
+export type OwedItem = z.infer<typeof OwedItem>;
+
+export const PersonDetail = z.object({ person: Person, owed: z.array(OwedItem), repayments: z.array(PersonItem) });
+export type PersonDetail = z.infer<typeof PersonDetail>;
+
+export const ListPeopleQuery = z.object({ all: z.literal('1').optional() }).strict();
+export type ListPeopleQuery = z.infer<typeof ListPeopleQuery>;
+
+export const CreatePersonBody = z.object({
+  name: z.string().trim().min(1).max(100), matchText: z.string().trim().min(1).max(200).nullable().optional(),
+}).strict();
+export type CreatePersonBody = z.infer<typeof CreatePersonBody>;
+
+export const PatchPersonBody = z.object({
+  name: z.string().trim().min(1).max(100).optional(), matchText: z.string().trim().min(1).max(200).nullable().optional(),
+  archived: z.boolean().optional(),
+}).strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+export type PatchPersonBody = z.infer<typeof PatchPersonBody>;
 
 export const CreateTransactionBody = z.object({
   date: DateStr, amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'),
