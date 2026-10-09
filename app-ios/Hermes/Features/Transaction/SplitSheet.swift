@@ -85,7 +85,7 @@ struct SplitSheet: View {
             Button("Save") { Task { await save() } }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("If the amount changes when it posts, the largest line is adjusted to match.")
+            Text("If the amount changes when it posts, each line is adjusted by its share.")
         }
     }
 

@@ -271,7 +271,7 @@ test('rows parked on a placeholder are retired once Plaid lists the account as a
   assert.equal(row('div1')?.removed_at, NOW);
 });
 
-test('a split made while pending moves to the posted row; the largest line absorbs a bigger amount', () => {
+test('a split made while pending moves to the posted row; a bigger amount grows every line by its share', () => {
   const { deps, apply, row } = setup();
   seedCategory(deps.db, { id: 'food', name: 'Food' });
   seedCategory(deps.db, { id: 'fun', name: 'Fun' });
@@ -283,12 +283,12 @@ test('a split made while pending moves to the posted row; the largest line absor
   apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', amount: 125 })], removed: [{ transactionId: 'pend1' }] })]);
   const postId = row('post1')?.id as string;
   const lines = deps.db.prepare('SELECT id, amount_cents AS a, category_id AS c FROM split_lines WHERE transaction_id = ? ORDER BY id').all(postId);
-  assert.deepEqual(lines, [{ id: '00-a', a: -4000, c: 'food' }, { id: '01-b', a: -8500, c: 'fun' }]);
+  assert.deepEqual(lines, [{ id: '00-a', a: -5000, c: 'food' }, { id: '01-b', a: -7500, c: 'fun' }]);
   assert.equal(row('post1')?.category_id, null);
   assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM split_lines WHERE transaction_id = ?').get(pendId) as { n: number }).n, 0);
 });
 
-test('a smaller amount comes off the largest lines first; one line left ends the split with its category', () => {
+test('a smaller amount shrinks every line by its share; leftover cents go to the largest remainders, and one line left ends the split', () => {
   const { deps, apply, row } = setup();
   seedCategory(deps.db, { id: 'food', name: 'Food' });
   seedCategory(deps.db, { id: 'fun', name: 'Fun' });
@@ -300,10 +300,12 @@ test('a smaller amount comes off the largest lines first; one line left ends the
   seedSplit(deps.db, { id: '02-c', transactionId: id, amountCents: -2000, categoryId: 'gas' });
   const lines = () => deps.db.prepare('SELECT id, amount_cents AS a FROM split_lines WHERE transaction_id = ? ORDER BY id').all(id);
   apply([page({ modified: [txn({ transactionId: 'p1', amount: 40 })] })]);
-  assert.deepEqual(lines(), [{ id: '01-b', a: -2000 }, { id: '02-c', a: -2000 }], 'the 50 line goes, then the 30 line gives 10');
-  apply([page({ modified: [txn({ transactionId: 'p1', amount: 15 })] })]);
+  assert.deepEqual(lines(), [{ id: '00-a', a: -2000 }, { id: '01-b', a: -1200 }, { id: '02-c', a: -800 }]);
+  apply([page({ modified: [txn({ transactionId: 'p1', amount: 0.02 })] })]);
+  assert.deepEqual(lines(), [{ id: '00-a', a: -1 }, { id: '01-b', a: -1 }], 'shares 1, 0.6, 0.4: the spare cent goes to the 0.6 line, and the 0 line goes');
+  apply([page({ modified: [txn({ transactionId: 'p1', amount: 0.01 })] })]);
   assert.deepEqual(lines(), []);
-  assert.equal(row('p1')?.category_id, 'gas', 'equal lines give up in entry order, so the later one remains');
+  assert.equal(row('p1')?.category_id, 'food', 'equal remainders go in entry order, so the first line keeps the cent');
 });
 
 test('a sign flip ends the split with the largest line category', () => {
@@ -329,15 +331,30 @@ test('a person on a pending row carries to the posted row', () => {
   assert.equal(row('post1')?.category_id, null);
 });
 
+test('a pending dinner split with a person posts with a tip: each side pays its share of the difference', () => {
+  const { deps, apply, row } = setup();
+  seedCategory(deps.db, { id: 'food', name: 'Food' });
+  seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill' });
+  apply([page({ added: [txn({ transactionId: 'pend1', pending: true, amount: 60 })] })]);
+  const pendId = row('pend1')?.id as string;
+  seedSplit(deps.db, { id: '00-a', transactionId: pendId, amountCents: -2000, categoryId: 'food' });
+  seedSplit(deps.db, { id: '01-b', transactionId: pendId, amountCents: -4000, categoryId: null, personId: 'p1' });
+  deps.db.prepare('UPDATE transactions SET category_owner_set = 1 WHERE id = ?').run(pendId);
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', amount: 72 })], removed: [{ transactionId: 'pend1' }] })]);
+  const postId = row('post1')?.id as string;
+  assert.deepEqual(deps.db.prepare('SELECT amount_cents AS a, person_id AS p FROM split_lines WHERE transaction_id = ? ORDER BY id').all(postId),
+    [{ a: -2400, p: null }, { a: -4800, p: 'p1' }]);
+});
+
 test('a split that collapses to one line keeps that line person', () => {
   const { deps, apply, row } = setup();
   seedCategory(deps.db, { id: 'food', name: 'Food' });
   seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill' });
   apply([page({ added: [txn({ transactionId: 'p1t', amount: 100 })] })]);
   const id = row('p1t')?.id as string;
-  seedSplit(deps.db, { id: '00-a', transactionId: id, amountCents: -7000, categoryId: 'food' });
-  seedSplit(deps.db, { id: '01-b', transactionId: id, amountCents: -3000, categoryId: null, personId: 'p1' });
-  apply([page({ modified: [txn({ transactionId: 'p1t', amount: 20 })] })]);
-  assert.equal(row('p1t')?.person_id, 'p1', 'the 70 line goes first, leaving the person line at 20');
+  seedSplit(deps.db, { id: '00-a', transactionId: id, amountCents: -100, categoryId: 'food' });
+  seedSplit(deps.db, { id: '01-b', transactionId: id, amountCents: -9900, categoryId: null, personId: 'p1' });
+  apply([page({ modified: [txn({ transactionId: 'p1t', amount: 0.3 })] })]);
+  assert.equal(row('p1t')?.person_id, 'p1', 'the food share rounds to 0 and goes, leaving the person line');
   assert.equal(row('p1t')?.category_id, null);
 });
