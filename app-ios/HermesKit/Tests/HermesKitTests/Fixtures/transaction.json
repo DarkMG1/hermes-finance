@@ -10,18 +10,21 @@
   "pending": true,
   "categoryId": null,
   "notes": null,
+  "personId": null,
   "splitLines": [
     {
       "id": "line-1",
       "amountCents": -2500,
       "categoryId": "cat-food",
-      "notes": null
+      "notes": null,
+      "personId": null
     },
     {
       "id": "line-2",
       "amountCents": -1500,
       "categoryId": null,
-      "notes": null
+      "notes": null,
+      "personId": null
     }
   ]
 }

@@ -12,6 +12,7 @@
       "pending": false,
       "categoryId": "cat-food",
       "notes": null,
+      "personId": null,
       "splitLines": []
     },
     {
@@ -26,6 +27,7 @@
       "pending": false,
       "categoryId": "cat-pay",
       "notes": null,
+      "personId": null,
       "splitLines": []
     }
   ],
