@@ -74,6 +74,9 @@ export type OwedItem = z.infer<typeof OwedItem>;
 export const PersonDetail = z.object({ person: Person, owed: z.array(OwedItem), repayments: z.array(PersonItem) });
 export type PersonDetail = z.infer<typeof PersonDetail>;
 
+export const RepaymentSuggestion = z.object({ transaction: Transaction, personId: Id.nullable() });
+export type RepaymentSuggestion = z.infer<typeof RepaymentSuggestion>;
+
 export const ListPeopleQuery = z.object({ all: z.literal('1').optional() }).strict();
 export type ListPeopleQuery = z.infer<typeof ListPeopleQuery>;
 
@@ -96,6 +99,7 @@ export type CreateTransactionBody = z.infer<typeof CreateTransactionBody>;
 
 export const Home = z.object({
   netWorthCents: Cents, recent: z.array(Transaction),
+  owedToYouCents: Cents, repaymentSuggestions: z.number().int(),
   reconnect: z.array(z.object({ itemId: Id, institutionName: z.string() })),
 });
 export type Home = z.infer<typeof Home>;

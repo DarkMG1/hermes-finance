@@ -1,6 +1,7 @@
-import type { OwedItem, Person, PersonDetail, PersonItem } from '@hermes/shared';
+import type { OwedItem, Person, PersonDetail, PersonItem, RepaymentSuggestion } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
+import { TXN_COLS, rowToTransaction, type TxnRow } from './ledger.ts';
 
 // Every tagged, live amount: split lines with a person, and unsplit transactions with a person.
 // Money out (negative) is owed to the owner; money in (positive) is a repayment.
@@ -55,4 +56,37 @@ export function assertPersonTaggable(db: Db, personId: string | null | undefined
       UNION ALL SELECT 1 FROM split_lines WHERE transaction_id = ? AND person_id = ?`).get(transactionId, personId, transactionId, personId)) {
     throw new ApiError(400, 'INVALID_REQUEST', `${field}: person is archived`, field);
   }
+}
+
+const SUGGESTION_DAYS = 60;
+
+/** Untagged recent deposits that look like repayments, each with the person they most likely came from. */
+export function suggestions(db: Db, now: Date): RepaymentSuggestion[] {
+  const since = new Date(now.getTime() - SUGGESTION_DAYS * 86_400_000).toISOString().slice(0, 10);
+  const people = listPeople(db, false);
+  const openLeft = new Map(people.map((p) => [p.id,
+    (getPerson(db, p.id)?.owed ?? []).filter((o) => o.status !== 'paid').map((o) => -o.amountCents - o.paidCents)]));
+  const rows = db.prepare(`SELECT ${TXN_COLS}, plaid_category FROM transactions t
+     WHERE removed_at IS NULL AND person_id IS NULL AND category_id IS NULL AND amount_cents > 0 AND date >= ?
+       AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
+     ORDER BY date DESC, id DESC`).all(since) as (TxnRow & { plaid_category: string | null })[];
+  const out: RepaymentSuggestion[] = [];
+  for (const r of rows) {
+    const desc = r.bank_description.toLowerCase();
+    const byMatch = people.find((p) => p.matchText && desc.includes(p.matchText.toLowerCase()));
+    if (!byMatch && !r.plaid_category?.startsWith('TRANSFER_IN')) continue;
+    const byName = people.find((p) => {
+      const words = p.name.toLowerCase().split(/\s+/).filter(Boolean);
+      return words.length > 0 && words.every((w) => desc.includes(w));
+    });
+    const byAmount = people.filter((p) => p.balanceCents === r.amount_cents || (openLeft.get(p.id) ?? []).includes(r.amount_cents));
+    const person = byMatch ?? byName ?? (byAmount.length === 1 ? byAmount[0] : undefined);
+    out.push({ transaction: rowToTransaction(db, r), personId: person?.id ?? null });
+  }
+  return out;
+}
+
+/** What everyone together owes the owner; people who are ahead count as zero. */
+export function owedToYouCents(db: Db): number {
+  return listPeople(db, true).reduce((s, p) => s + Math.max(p.balanceCents, 0), 0);
 }

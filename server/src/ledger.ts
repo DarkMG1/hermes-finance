@@ -158,7 +158,7 @@ export function periodRange(q: SpendingQuery): { from: string; toExclusive: stri
   return { from: `${q.date}-01`, toExclusive: `${next}-01` };
 }
 
-export function getHome(db: Db): Home {
+export function getHome(db: Db): Omit<Home, 'owedToYouCents' | 'repaymentSuggestions'> {
   const accounts = db.prepare('SELECT type, balance_current_cents AS b FROM accounts WHERE hidden = 0 AND balance_current_cents IS NOT NULL').all() as { type: string; b: number }[];
   const netWorthCents = accounts.reduce((sum, a) => sum + (NEGATIVE_TYPES.has(a.type) ? -a.b : a.b), 0);
   const recent = listTransactions(db, { limit: 10 }).transactions;

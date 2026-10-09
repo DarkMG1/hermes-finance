@@ -5,7 +5,7 @@ import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
-import { assertPersonTaggable } from '../people.ts';
+import { assertPersonTaggable, owedToYouCents, suggestions } from '../people.ts';
 import { assertCategoryExists, getHome, getSpending, getTransaction, learnCategory, listAccounts, listCategories, listTransactions } from '../ledger.ts';
 
 export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
@@ -25,7 +25,10 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
     return reply.code(r.status).send(r.body);
   });
   app.get('/v1/transactions', async (req) => listTransactions(db, parseBody(ListTransactionsQuery, req.query)));
-  app.get('/v1/home', async () => getHome(db));
+  // people.ts reads through ledger.ts, so Home's Who Owes Me fields are added here rather than inside getHome
+  app.get('/v1/home', async () => ({
+    ...getHome(db), owedToYouCents: owedToYouCents(db), repaymentSuggestions: suggestions(db, deps.now()).length,
+  }));
   app.get('/v1/spending', async (req) => getSpending(db, parseBody(SpendingQuery, req.query)));
 
   app.get<{ Params: { id: string } }>('/v1/transactions/:id', async (req) => {

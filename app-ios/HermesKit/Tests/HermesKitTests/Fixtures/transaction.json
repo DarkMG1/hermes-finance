@@ -24,7 +24,7 @@
       "amountCents": -1500,
       "categoryId": null,
       "notes": null,
-      "personId": null
+      "personId": "person-1"
     }
   ]
 }

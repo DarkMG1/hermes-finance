@@ -57,9 +57,39 @@
           "amountCents": -1500,
           "categoryId": null,
           "notes": null,
-          "personId": null
+          "personId": "person-1"
         }
       ]
+    },
+    {
+      "id": "txn-4",
+      "accountId": "acct-checking",
+      "source": "plaid",
+      "date": "2026-03-11",
+      "amountCents": 1000,
+      "payee": "SYNTHETIC TRANSFER",
+      "bankDescription": "SYNTHETIC TRANSFER",
+      "merchantName": null,
+      "pending": false,
+      "categoryId": null,
+      "notes": null,
+      "personId": "person-1",
+      "splitLines": []
+    },
+    {
+      "id": "txn-5",
+      "accountId": "acct-checking",
+      "source": "plaid",
+      "date": "2026-03-10",
+      "amountCents": 500,
+      "payee": "ZELLE FROM SYNTHETIC QUILL",
+      "bankDescription": "ZELLE FROM SYNTHETIC QUILL",
+      "merchantName": null,
+      "pending": false,
+      "categoryId": null,
+      "notes": null,
+      "personId": null,
+      "splitLines": []
     }
   ],
   "reconnect": [
@@ -67,5 +97,7 @@
       "itemId": "item-2",
       "institutionName": "Synthetic Credit Union"
     }
-  ]
+  ],
+  "owedToYouCents": 500,
+  "repaymentSuggestions": 1
 }

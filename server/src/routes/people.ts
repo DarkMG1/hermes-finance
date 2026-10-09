@@ -5,12 +5,14 @@ import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
-import { getPerson, listPeople } from '../people.ts';
+import { getPerson, listPeople, suggestions } from '../people.ts';
 
 export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
   const { db } = deps;
 
   app.get('/v1/people', async (req) => listPeople(db, parseBody(ListPeopleQuery, req.query).all === '1'));
+
+  app.get('/v1/people/suggestions', async () => suggestions(db, deps.now()));
 
   app.get<{ Params: { id: string } }>('/v1/people/:id', async (req) => {
     const detail = getPerson(db, req.params.id);
