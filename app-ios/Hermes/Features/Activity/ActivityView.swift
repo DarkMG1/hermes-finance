@@ -65,7 +65,8 @@ struct ActivityView: View {
         Menu {
             Picker("Account", selection: $accountId) {
                 Text("All accounts").tag(String?.none)
-                ForEach(model.accounts.filter { !$0.hidden }) { account in Text(account.name).tag(Optional(account.id)) }
+                // investment accounts have no transactions; they only count toward net worth
+                ForEach(model.accounts.filter { !$0.hidden && $0.type != "investment" }) { account in Text(account.name).tag(Optional(account.id)) }
             }
             Picker("Category", selection: $categoryId) {
                 Text("All categories").tag(String?.none)
