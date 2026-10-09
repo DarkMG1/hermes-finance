@@ -109,6 +109,43 @@ export function learnCategory(db: Db, transactionId: string, categoryId: string,
     .run(categoryId, nowIso, row.plaid_category);
 }
 
+/**
+ * Keeps a split adding up after the bank changes the amount (a pending row posting for more, a correction). The largest line absorbs
+ * the difference; when the amount shrinks the largest lines give it up first, and a line that reaches zero goes. Fewer than two lines
+ * left, or a sign flip, ends the split: the transaction takes the category of the largest remaining line.
+ */
+export function fitSplitToAmount(db: Db, transactionId: string, nowIso: string): void {
+  const txn = db.prepare('SELECT amount_cents AS a FROM transactions WHERE id = ?').get(transactionId) as { a: number } | undefined;
+  const lines = db.prepare('SELECT id, amount_cents AS a, category_id AS c FROM split_lines WHERE transaction_id = ? ORDER BY id')
+    .all(transactionId) as { id: string; a: number; c: string | null }[];
+  if (!txn || !lines.length) return;
+  let diff = txn.a - lines.reduce((s, l) => s + l.a, 0);
+  if (diff === 0) return;
+  // sort is stable, so equal lines keep entry order
+  const bySize = [...lines].sort((x, y) => Math.abs(y.a) - Math.abs(x.a));
+  const sign = Math.sign(txn.a);
+  const sameSign = sign !== 0 && lines.every((l) => Math.sign(l.a) === sign);
+  if (sameSign && Math.sign(diff) === sign) {
+    bySize[0]!.a += diff;
+  } else if (sameSign) {
+    for (const l of bySize) {
+      const take = Math.sign(diff) * Math.min(Math.abs(diff), Math.abs(l.a));
+      l.a += take;
+      diff -= take;
+    }
+  }
+  const kept = bySize.filter((l) => l.a !== 0);
+  if (!sameSign || kept.length < 2) {
+    db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(transactionId);
+    db.prepare('UPDATE transactions SET category_id = ?, updated_at = ? WHERE id = ?').run(kept[0]?.c ?? bySize[0]!.c, nowIso, transactionId);
+    return;
+  }
+  const update = db.prepare('UPDATE split_lines SET amount_cents = ? WHERE id = ?');
+  const remove = db.prepare('DELETE FROM split_lines WHERE id = ?');
+  for (const l of lines) if (l.a === 0) remove.run(l.id); else update.run(l.a, l.id);
+  db.prepare('UPDATE transactions SET updated_at = ? WHERE id = ?').run(nowIso, transactionId);
+}
+
 export function periodRange(q: SpendingQuery): { from: string; toExclusive: string } {
   if (q.period === 'year') {
     return { from: `${q.date}-01-01`, toExclusive: `${String(Number(q.date) + 1).padStart(4, '0')}-01-01` };

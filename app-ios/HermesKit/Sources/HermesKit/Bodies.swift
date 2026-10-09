@@ -73,16 +73,15 @@ public struct PutSplitsBody: Encodable, Sendable, Equatable {
     public init(lines: [SplitLineBody]) { self.lines = lines }
 }
 
+/// Always lands in the server's hidden manual account; bank-fed accounts only change by sync or import.
 public struct CreateTransactionBody: Encodable, Sendable, Equatable {
-    public let accountId: String
     public let date: String
     public let amountCents: Int
     public let payee: String
     public let categoryId: String?
     public let notes: String?
 
-    public init(accountId: String, date: String, amountCents: Int, payee: String, categoryId: String?, notes: String?) {
-        self.accountId = accountId
+    public init(date: String, amountCents: Int, payee: String, categoryId: String?, notes: String?) {
         self.date = date
         self.amountCents = amountCents
         self.payee = payee

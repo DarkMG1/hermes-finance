@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyPages, upsertAccounts } from '../src/sync/apply.ts';
 import { txn } from './fake-plaid.ts';
-import { makeTestDeps, seedCategory, seedItem } from './helpers.ts';
+import { makeTestDeps, seedCategory, seedItem, seedSplit } from './helpers.ts';
 import type { SyncPage } from '../src/plaid/port.ts';
 
 const NOW = '2026-03-15T12:00:00.000Z';
@@ -252,4 +252,69 @@ test('a placeholder account is unhidden once Plaid lists it; an owner-hidden acc
   const get = (id: string) => deps.db.prepare('SELECT name, hidden FROM accounts WHERE plaid_account_id = ?').get(id);
   assert.deepEqual(get('pa-late'), { name: 'Synthetic Savings', hidden: 0 });
   assert.deepEqual(get('pa1'), { name: 'Synthetic Checking', hidden: 1 });
+});
+
+test('investment accounts never get transactions; their balance still syncs', () => {
+  const { deps, apply, row } = setup();
+  upsertAccounts(deps.db, 'i1', [{ accountId: 'pinv', name: 'Synthetic Roth', mask: '0003', type: 'investment', subtype: 'roth', currentBalance: 100, availableBalance: null }], NOW);
+  const counts = apply([page({ added: [txn({ transactionId: 'div1', accountId: 'pinv' })], modified: [txn({ transactionId: 'div2', accountId: 'pinv' })] })]);
+  assert.deepEqual(counts, { added: 0, modified: 0, removed: 0 });
+  assert.equal(row('div1'), undefined);
+  assert.equal(row('div2'), undefined);
+});
+
+test('rows parked on a placeholder are retired once Plaid lists the account as an investment one', () => {
+  const { deps, apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'div1', accountId: 'pinv' })] })]);
+  assert.equal(row('div1')?.removed_at, null);
+  upsertAccounts(deps.db, 'i1', [{ accountId: 'pinv', name: 'Synthetic Roth', mask: '0003', type: 'investment', subtype: 'roth', currentBalance: 100, availableBalance: null }], NOW);
+  assert.equal(row('div1')?.removed_at, NOW);
+});
+
+test('a split made while pending moves to the posted row; the largest line absorbs a bigger amount', () => {
+  const { deps, apply, row } = setup();
+  seedCategory(deps.db, { id: 'food', name: 'Food' });
+  seedCategory(deps.db, { id: 'fun', name: 'Fun' });
+  apply([page({ added: [txn({ transactionId: 'pend1', pending: true, amount: 100 })] })]);
+  const pendId = row('pend1')?.id as string;
+  seedSplit(deps.db, { id: '00-a', transactionId: pendId, amountCents: -4000, categoryId: 'food' });
+  seedSplit(deps.db, { id: '01-b', transactionId: pendId, amountCents: -6000, categoryId: 'fun' });
+  deps.db.prepare('UPDATE transactions SET category_owner_set = 1 WHERE id = ?').run(pendId);
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', amount: 125 })], removed: [{ transactionId: 'pend1' }] })]);
+  const postId = row('post1')?.id as string;
+  const lines = deps.db.prepare('SELECT id, amount_cents AS a, category_id AS c FROM split_lines WHERE transaction_id = ? ORDER BY id').all(postId);
+  assert.deepEqual(lines, [{ id: '00-a', a: -4000, c: 'food' }, { id: '01-b', a: -8500, c: 'fun' }]);
+  assert.equal(row('post1')?.category_id, null);
+  assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM split_lines WHERE transaction_id = ?').get(pendId) as { n: number }).n, 0);
+});
+
+test('a smaller amount comes off the largest lines first; one line left ends the split with its category', () => {
+  const { deps, apply, row } = setup();
+  seedCategory(deps.db, { id: 'food', name: 'Food' });
+  seedCategory(deps.db, { id: 'fun', name: 'Fun' });
+  seedCategory(deps.db, { id: 'gas', name: 'Gas' });
+  apply([page({ added: [txn({ transactionId: 'p1', amount: 100 })] })]);
+  const id = row('p1')?.id as string;
+  seedSplit(deps.db, { id: '00-a', transactionId: id, amountCents: -5000, categoryId: 'food' });
+  seedSplit(deps.db, { id: '01-b', transactionId: id, amountCents: -3000, categoryId: 'fun' });
+  seedSplit(deps.db, { id: '02-c', transactionId: id, amountCents: -2000, categoryId: 'gas' });
+  const lines = () => deps.db.prepare('SELECT id, amount_cents AS a FROM split_lines WHERE transaction_id = ? ORDER BY id').all(id);
+  apply([page({ modified: [txn({ transactionId: 'p1', amount: 40 })] })]);
+  assert.deepEqual(lines(), [{ id: '01-b', a: -2000 }, { id: '02-c', a: -2000 }], 'the 50 line goes, then the 30 line gives 10');
+  apply([page({ modified: [txn({ transactionId: 'p1', amount: 15 })] })]);
+  assert.deepEqual(lines(), []);
+  assert.equal(row('p1')?.category_id, 'gas', 'equal lines give up in entry order, so the later one remains');
+});
+
+test('a sign flip ends the split with the largest line category', () => {
+  const { deps, apply, row } = setup();
+  seedCategory(deps.db, { id: 'food', name: 'Food' });
+  seedCategory(deps.db, { id: 'fun', name: 'Fun' });
+  apply([page({ added: [txn({ transactionId: 'p1', amount: 10 })] })]);
+  const id = row('p1')?.id as string;
+  seedSplit(deps.db, { id: '00-a', transactionId: id, amountCents: -300, categoryId: 'food' });
+  seedSplit(deps.db, { id: '01-b', transactionId: id, amountCents: -700, categoryId: 'fun' });
+  apply([page({ modified: [txn({ transactionId: 'p1', amount: -10 })] })]);
+  assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM split_lines WHERE transaction_id = ?').get(id) as { n: number }).n, 0);
+  assert.equal(row('p1')?.category_id, 'fun');
 });

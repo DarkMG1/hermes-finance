@@ -16,7 +16,7 @@ import Testing
 @Test func writesSendTheKeyAndJSON() async throws {
     let transport = FakeTransport([.success(HTTPResponse(status: 201, body: try fixture("transaction")))])
     let client = APIClient(baseURL: testBase, token: "t", transport: transport)
-    let body = CreateTransactionBody(accountId: "a", date: "2026-03-01", amountCents: -1, payee: "Synthetic", categoryId: nil, notes: nil)
+    let body = CreateTransactionBody(date: "2026-03-01", amountCents: -1, payee: "Synthetic", categoryId: nil, notes: nil)
     _ = try await client.createTransaction(body, idempotencyKey: "k-1")
     let request = try #require(transport.requests.first)
     #expect(request.method == "POST" && request.headers["Idempotency-Key"] == "k-1" && request.headers["Content-Type"] == "application/json")

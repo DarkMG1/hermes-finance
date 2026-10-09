@@ -35,3 +35,12 @@ func rejectsInvalidAmounts(text: String) {
     #expect(!SplitMath.isComplete(total: -2490, amounts: ["24.90"]))
     #expect(!SplitMath.isComplete(total: -2490, amounts: ["12.45", "12.44"]))
 }
+
+@Test func splitLinesBalanceIntoTheFirstLineOrTheLastWhenTheFirstIsEdited() {
+    #expect(SplitMath.balanced(total: -9000, amounts: ["90.00", "30"], edited: 1) == ["60.00", "30"])
+    #expect(SplitMath.balanced(total: -9000, amounts: ["50", "40.00", "10"], edited: 0) == ["50", "40.00", "0.00"])
+    #expect(SplitMath.balanced(total: -9000, amounts: ["60.00", "30", "."], edited: 2) == ["60.00", "30", "."], "half-typed counts as zero")
+    #expect(SplitMath.balanced(total: -9000, amounts: ["60.00", "100"], edited: 1) == ["0.00", "100"], "never below zero")
+    #expect(SplitMath.balanced(total: -9000, amounts: ["60.00", ""], edited: 1) == ["90.00", ""])
+    #expect(SplitMath.balanced(total: -9000, amounts: ["90.00"], edited: 0) == ["90.00"])
+}

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Db } from '../db.ts';
 import type { PlaidAccount, PlaidTxn, SyncPage } from '../plaid/port.ts';
 import { plaidAmountToCents } from '../money.ts';
+import { fitSplitToAmount } from '../ledger.ts';
 
 export type ApplyCounts = { added: number; modified: number; removed: number };
 
@@ -26,6 +27,9 @@ export function upsertAccounts(db: Db, itemId: string, accounts: PlaidAccount[],
     stmt.run({ id: randomUUID(), itemId, plaidAccountId: a.accountId, name: a.name, mask: a.mask, type: a.type, subtype: a.subtype,
       cur: toCents(a.currentBalance), avail: toCents(a.availableBalance), at: nowIso });
   }
+  // rows parked on a placeholder before Plaid said the account is an investment one; sync skips investment rows from here on
+  db.prepare(`UPDATE transactions SET removed_at = ?, updated_at = ? WHERE source = 'plaid' AND removed_at IS NULL
+    AND account_id IN (SELECT id FROM accounts WHERE item_id = ? AND type = 'investment')`).run(nowIso, nowIso, itemId);
 }
 
 export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cutoverDate: string | null; nowIso: string }): ApplyCounts {
@@ -52,6 +56,8 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
     }
     return accountCutovers.get(plaidAccountId) ?? opts.cutoverDate;
   };
+  const isInvestment = db.prepare("SELECT 1 FROM accounts WHERE plaid_account_id = ? AND type = 'investment'");
+  const moveSplit = db.prepare('UPDATE split_lines SET transaction_id = ? WHERE transaction_id = ?');
   const mappedCategory = db.prepare('SELECT category_id FROM plaid_category_map WHERE plaid_category = ?');
   const checkSuperseded = db.prepare("SELECT id FROM transactions WHERE source = 'plaid' AND pending_source_id = ?");
   const getRow = db.prepare("SELECT id, category_id, category_owner_set, payee, notes FROM transactions WHERE source = 'plaid' AND source_id = ?");
@@ -73,6 +79,8 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
   const write = (t: PlaidTxn): boolean => {
     const cutover = cutoverFor(t.accountId);
     if (cutover && t.date < cutover) return false;
+    // investment accounts count toward net worth by balance alone; their buys, sells and dividends aren't spending
+    if (isInvestment.get(t.accountId)) return false;
     // If this is a pending row that is superseded by a posted row, don't insert/update it
     if (t.pending) {
       const superseded = checkSuperseded.get(t.transactionId) as { id: string } | undefined;
@@ -89,14 +97,16 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
     let ownerSet = 0;
     let payee: string | null = null;
     let notes: string | null = null;
+    let pendingId: string | null = null;
     if (!exists && t.pendingTransactionId) {
       const pending = getRow.get(t.pendingTransactionId) as
-        { category_id: string | null; category_owner_set: number; payee: string | null; notes: string | null } | undefined;
+        { id: string; category_id: string | null; category_owner_set: number; payee: string | null; notes: string | null } | undefined;
       if (pending) {
         ownerSet = pending.category_owner_set;
         categoryId = pending.category_id !== null || ownerSet ? pending.category_id : mapped?.category_id ?? null;
         payee = pending.payee;
         notes = pending.notes;
+        pendingId = pending.id;
       }
     }
     upsert.run({
@@ -107,6 +117,10 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
     if (t.pendingTransactionId) {
       markRemoved.run(opts.nowIso, opts.nowIso, t.pendingTransactionId);
     }
+    const id = (getRow.get(t.transactionId) as { id: string }).id;
+    // a split made while pending moves to the posted row
+    if (pendingId) moveSplit.run(id, pendingId);
+    fitSplitToAmount(db, id, opts.nowIso);
     return true;
   };
 

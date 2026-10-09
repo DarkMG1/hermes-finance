@@ -126,11 +126,11 @@ test('renaming an account survives a sync; null goes back to the bank name; unkn
   assert.equal(res.json().name, 'Synthetic Card');
   upsertAccounts(deps.db, 'i1', [{ ...plaidAccount, accountId: 'pa2', name: 'Synthetic Middle' }], 'now');
   const names = async () => (await app.inject({ method: 'GET', url: '/v1/accounts', headers: AUTH })).json().map((a: { name: string }) => a.name);
-  assert.deepEqual(await names(), ['Synthetic Card', 'Synthetic Middle'], 'sorted by the shown name');
+  assert.deepEqual(await names(), ['Synthetic Card', 'Synthetic Middle', 'Manual'], 'sorted by the shown name, hidden last');
   upsertAccounts(deps.db, 'i1', [plaidAccount], 'later');
   assert.equal((await names())[0], 'Synthetic Card');
   assert.equal((await rename('a-2', { name: null })).statusCode, 200);
-  assert.deepEqual(await names(), ['Synthetic Middle', 'Synthetic Rewards']);
+  assert.deepEqual(await names(), ['Synthetic Middle', 'Synthetic Rewards', 'Manual']);
   assert.equal((await rename('a-3', { name: '   ' })).statusCode, 400);
   assert.equal((await app.inject({ method: 'PATCH', url: '/v1/accounts/nope', headers: w('a-4'), payload: { name: 'x' } })).statusCode, 404);
 });
@@ -191,14 +191,14 @@ test('when the bank changes a split amount, spending still adds up to it; a spli
   assert.equal((await app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: w('d-3'), payload: { notes: 'ok' } })).statusCode, 200);
 });
 
-test('a pending transaction cannot be split; removing a split that does not exist changes nothing', async () => {
+test('a pending transaction can be split; removing a split that does not exist changes nothing', async () => {
   const { deps, app } = setup();
   seedTxn(deps.db, { id: 'pend', accountId: 'a1', date: '2026-03-01', amountCents: -2000, source: 'plaid', sourceId: 'p1', pending: true });
   seedTxn(deps.db, { id: 'plain', accountId: 'a1', date: '2026-03-01', amountCents: -2000, source: 'plaid', sourceId: 'p2', categoryId: 'c-food' });
   const lines = [{ amountCents: -1000, categoryId: null }, { amountCents: -1000, categoryId: null }];
   const pend = await app.inject({ method: 'PUT', url: '/v1/transactions/pend/splits', headers: w('sp-1'), payload: { lines } });
-  assert.equal(pend.statusCode, 409);
-  assert.equal(pend.json().code, 'PENDING_TRANSACTION');
+  assert.equal(pend.statusCode, 200);
+  assert.equal(pend.json().splitLines.length, 2);
   const res = await app.inject({ method: 'PUT', url: '/v1/transactions/plain/splits', headers: w('sp-2'), payload: { lines: [] } });
   assert.equal(res.statusCode, 200);
   assert.equal(res.json().categoryId, 'c-food');
@@ -222,20 +222,20 @@ test('patch on a removed transaction is 404', async () => {
 
 test('create adds a manual transaction once per key', async () => {
   const { deps, app } = setup();
-  const body = { accountId: 'a1', date: '2026-03-05', amountCents: -1250, payee: 'Synthetic Lunch', categoryId: 'c-food' };
+  const body = { date: '2026-03-05', amountCents: -1250, payee: 'Synthetic Lunch', categoryId: 'c-food' };
   const a = await app.inject({ method: 'POST', url: '/v1/transactions', headers: w('c-1'), payload: body });
   const b = await app.inject({ method: 'POST', url: '/v1/transactions', headers: w('c-1'), payload: body });
   assert.equal(a.statusCode, 201);
   assert.equal(b.json().id, a.json().id);
   assert.equal(a.json().source, 'manual');
+  assert.equal(a.json().accountId, 'manual');
   assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM transactions').get() as { n: number }).n, 1);
 });
 
-test('create rejects an unknown account', async () => {
+test('create rejects choosing an account: added rows always go to the manual account', async () => {
   const { app } = setup();
-  const res = await app.inject({ method: 'POST', url: '/v1/transactions', headers: w('c-2'), payload: { accountId: 'nope', date: '2026-03-05', amountCents: -1, payee: 'x' } });
+  const res = await app.inject({ method: 'POST', url: '/v1/transactions', headers: w('c-2'), payload: { accountId: 'a1', date: '2026-03-05', amountCents: -1, payee: 'x' } });
   assert.equal(res.statusCode, 400);
-  assert.equal(res.json().field, 'accountId');
 });
 
 test('delete works for manual rows only', async () => {
@@ -250,7 +250,7 @@ test('delete works for manual rows only', async () => {
 
 test('accounts and categories list', async () => {
   const { app } = setup();
-  assert.equal((await app.inject({ method: 'GET', url: '/v1/accounts', headers: AUTH })).json().length, 1);
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/accounts', headers: AUTH })).json().length, 2, 'a1 and the hidden manual account');
   assert.equal((await app.inject({ method: 'GET', url: '/v1/categories', headers: AUTH })).json().length, 2);
 });
 

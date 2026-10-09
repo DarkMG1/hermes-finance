@@ -25,7 +25,7 @@ func json(_ value: some Encodable) throws -> String {
     #expect(home.recent.count == 3)
     #expect(home.reconnect.map(\.institutionName) == ["Synthetic Credit Union"])
     let accounts = try decode([Account].self, "accounts")
-    #expect(accounts.count == 2)
+    #expect(accounts.count == 3)
     let categories = try decode([Category].self, "categories")
     #expect(categories.contains { $0.isIncome })
     let page = try decode(TransactionPage.self, "transactions-page")
@@ -64,6 +64,6 @@ func json(_ value: some Encodable) throws -> String {
 }
 
 @Test func createBodyOmitsNilOptionals() throws {
-    let body = CreateTransactionBody(accountId: "a1", date: "2026-03-01", amountCents: -500, payee: "Synthetic", categoryId: nil, notes: nil)
-    #expect(try json(body) == #"{"accountId":"a1","amountCents":-500,"date":"2026-03-01","payee":"Synthetic"}"#)
+    let body = CreateTransactionBody(date: "2026-03-01", amountCents: -500, payee: "Synthetic", categoryId: nil, notes: nil)
+    #expect(try json(body) == #"{"amountCents":-500,"date":"2026-03-01","payee":"Synthetic"}"#)
 }

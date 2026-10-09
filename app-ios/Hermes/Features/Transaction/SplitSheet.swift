@@ -2,7 +2,7 @@ import HermesKit
 import SwiftUI
 
 /// Divide a transaction into lines with their own category. Amounts are typed as positive numbers and take the
-/// transaction's sign; Save needs two or more lines that add up exactly.
+/// transaction's sign; typing in one line rebalances another (`SplitMath.balanced`). Save needs two or more lines that add up exactly.
 struct SplitSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
@@ -22,12 +22,15 @@ struct SplitSheet: View {
     @State private var error: String?
     @State private var busy = false
     @State private var confirmRemove = false
+    @State private var confirmPending = false
+    @FocusState private var focused: UUID?
 
     var body: some View {
         Sheet(
             title: "Split", canSave: SplitMath.isComplete(total: transaction.amountCents, amounts: amounts) && !removeWrites.unresolved,
             busy: busy, unresolved: writes.unresolved || removeWrites.unresolved,
-            onCancel: { if writes.unresolved || removeWrites.unresolved { Task { await onDone() } }; dismiss() }, onSave: { Task { await save() } }
+            onCancel: { if writes.unresolved || removeWrites.unresolved { Task { await onDone() } }; dismiss() },
+            onSave: { if transaction.pending { confirmPending = true } else { Task { await save() } } }
         ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
                 LabeledContent("Total") { MoneyText(cents: transaction.amountCents) }
@@ -35,13 +38,21 @@ struct SplitSheet: View {
             }
             ForEach($lines) { $line in
                 Section {
-                    Field(label: "Amount") { TextField("0.00", text: $line.amount).keyboardType(.decimalPad) }
+                    Field(label: "Amount") {
+                        TextField("0.00", text: $line.amount).keyboardType(.decimalPad).focused($focused, equals: line.id)
+                            // only the line being typed in rebalances, so the line it adjusts doesn't bounce the change back
+                            .onChange(of: line.amount) { if focused == line.id { rebalance(edited: line.id) } }
+                    }
                     NavigationLink { CategoryPicker(selection: $line.categoryId) } label: {
                         LabeledContent("Category", value: model.categoryName(line.categoryId))
                     }
                     Field(label: "Notes") { TextField("Notes", text: $line.notes) }
                     if lines.count > 2 {
-                        Button("Remove line", role: .destructive) { lines.removeAll { $0.id == line.id } }
+                        Button("Remove line", role: .destructive) {
+                            lines.removeAll { $0.id == line.id }
+                            // its amount goes back to the first line
+                            if let other = lines.last?.id { rebalance(edited: other) }
+                        }
                     }
                 }
             }
@@ -64,14 +75,27 @@ struct SplitSheet: View {
             }
         }
         .onAppear(perform: start)
+        .alert("This transaction is still pending", isPresented: $confirmPending) {
+            Button("Save") { Task { await save() } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("If the amount changes when it posts, the largest line is adjusted to match.")
+        }
     }
 
     private var amounts: [String] { lines.map(\.amount) }
 
     private var remaining: Int { SplitMath.remaining(total: transaction.amountCents, amounts: amounts) }
 
-    /// "12.45" for 1245 cents: editable text, no currency symbol or separators.
-    private func plain(_ cents: Int) -> String { String(format: "%d.%02d", cents / 100, cents % 100) }
+    private func plain(_ cents: Int) -> String { SplitMath.plain(cents) }
+
+    private func rebalance(edited id: UUID) {
+        guard let index = lines.firstIndex(where: { $0.id == id }) else { return }
+        for (i, amount) in SplitMath.balanced(total: transaction.amountCents, amounts: amounts, edited: index).enumerated()
+            where lines[i].amount != amount {
+            lines[i].amount = amount
+        }
+    }
 
     private func start() {
         guard lines.isEmpty else { return }

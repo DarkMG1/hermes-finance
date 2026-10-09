@@ -22,5 +22,17 @@
     "balanceAvailableCents": null,
     "balanceAt": null,
     "hidden": false
+  },
+  {
+    "id": "manual",
+    "itemId": null,
+    "name": "Manual",
+    "mask": null,
+    "type": "other",
+    "subtype": "manual",
+    "balanceCurrentCents": null,
+    "balanceAvailableCents": null,
+    "balanceAt": null,
+    "hidden": true
   }
 ]
