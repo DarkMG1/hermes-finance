@@ -25,6 +25,14 @@ extension APIClient {
         try await write("POST", "/v1/transactions", body: body, key: idempotencyKey)
     }
 
+    public func createPerson(_ body: CreatePersonBody, idempotencyKey: String) async throws -> Person {
+        try await write("POST", "/v1/people", body: body, key: idempotencyKey)
+    }
+
+    public func patchPerson(id: String, body: PatchPersonBody, idempotencyKey: String) async throws -> Person {
+        try await write("PATCH", "/v1/people/\(id)", body: body, key: idempotencyKey)
+    }
+
     public func deleteTransaction(id: String, idempotencyKey: String) async throws {
         try await send("DELETE", "/v1/transactions/\(id)", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
     }
