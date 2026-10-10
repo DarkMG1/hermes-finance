@@ -9,6 +9,7 @@ struct HomeView: View {
     @State private var selected: LedgerTransaction?
     @State private var renaming: Account?
     @State private var linker = BankLinker()
+    @AppStorage("hideBalances") private var hideBalances = false
 
     var body: some View {
         Screen(title: "Home") {
@@ -32,8 +33,16 @@ struct HomeView: View {
                 }
                 if let note = linker.note { Text(note).textStyle(.caption, color: Palette.secondaryText) }
                 Card {
-                    Text("Net worth").textStyle(.subhead, color: Palette.secondaryText)
+                    HStack {
+                        Text("Net worth").textStyle(.subhead, color: Palette.secondaryText)
+                        Spacer()
+                        Button { hideBalances.toggle() } label: {
+                            Image(systemName: hideBalances ? "eye" : "eye.slash")
+                        }
+                        .accessibilityLabel(hideBalances ? "Show balances" : "Hide balances")
+                    }
                     MoneyText(cents: loaded.value.netWorthCents, style: .display, colored: false, negativeIsLoss: true)
+                        .redacted(reason: hideBalances ? .placeholder : [])
                 }
                 let groups = AccountGrouping.group(model.accounts)
                 if !groups.isEmpty {
@@ -46,6 +55,7 @@ struct HomeView: View {
                                     ListRow(title: account.name, subtitle: AccountGrouping.subtitle(account)) {
                                         if let cents = AccountGrouping.netWorthCents(account) {
                                             MoneyText(cents: cents, colored: false, negativeIsLoss: true)
+                                                .redacted(reason: hideBalances ? .placeholder : [])
                                         }
                                     }
                                 }
