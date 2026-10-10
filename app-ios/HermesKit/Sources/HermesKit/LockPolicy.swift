@@ -8,6 +8,8 @@ public enum LockPolicy {
     public static func shouldLock(enabled: Bool, backgroundedAt: Date?, now: Date) -> Bool {
         guard enabled else { return false }
         guard let backgroundedAt else { return true }
-        return now.timeIntervalSince(backgroundedAt) >= grace
+        let elapsed = now.timeIntervalSince(backgroundedAt)
+        // a negative elapsed time means the clock was set back: lock rather than trust it
+        return elapsed < 0 || elapsed >= grace
     }
 }

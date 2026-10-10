@@ -13,14 +13,23 @@ final class PrivacyCover {
         window.windowLevel = .alert + 1
         // follow the app's own appearance setting, which lives on its main window
         window.overrideUserInterfaceStyle = scene.windows.first { $0 !== window }?.traitCollection.userInterfaceStyle ?? .unspecified
-        window.rootViewController = UIHostingController(rootView: CoverView(locked: locked, unlock: unlock))
-        window.isHidden = false
+        let cover = CoverView(locked: locked, unlock: unlock)
+        if let host = window.rootViewController as? UIHostingController<CoverView> {
+            host.rootView = cover
+        } else {
+            window.rootViewController = UIHostingController(rootView: cover)
+        }
+        // no keyboard may stay live under the cover, and VoiceOver must not reach the app beneath it
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        window.rootViewController?.view.accessibilityViewIsModal = true
+        window.makeKeyAndVisible()
         self.window = window
     }
 
     func hide() {
-        window?.isHidden = true
-        window = nil
+        guard let window else { return }
+        window.windowScene?.windows.first { $0 !== window }?.makeKey()
+        window.isHidden = true
     }
 }
 

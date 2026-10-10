@@ -18,14 +18,14 @@ struct ExpensePicker: View {
         NavigationStack {
             List {
                 InlineError(message: error)
-                ForEach(items.filter(Self.shareable)) { transaction in
+                ForEach(shareableItems) { transaction in
                     Button { onPick(transaction); dismiss() } label: { TransactionRow(transaction: transaction) }
                         .buttonStyle(.plain)
                 }
                 // a button, not load-on-scroll: a page can be entirely filtered out, leaving no row to trigger the next one
                 if cursor != nil && !loading { Button("Load more") { Task { await load(reset: false) } } }
                 if loading { ProgressView().frame(maxWidth: .infinity) }
-                if !loading && cursor == nil && items.filter(Self.shareable).isEmpty && error == nil {
+                if !loading && cursor == nil && shareableItems.isEmpty && error == nil {
                     Text("No expenses to share").textStyle(.subhead, color: Palette.secondaryText)
                 }
             }
@@ -42,8 +42,11 @@ struct ExpensePicker: View {
         }
     }
 
-    private static func shareable(_ transaction: LedgerTransaction) -> Bool {
+    private var shareableItems: [LedgerTransaction] { items.filter(shareable) }
+
+    private func shareable(_ transaction: LedgerTransaction) -> Bool {
         transaction.amountCents < 0 && transaction.splitLines.isEmpty && transaction.personId == nil && transaction.paidByPersonId == nil
+            && model.categories.first { $0.id == transaction.categoryId }?.isTransfer != true
     }
 
     private func load(reset: Bool) async {

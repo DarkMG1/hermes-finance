@@ -9,7 +9,7 @@ export function zellePayee(text: string): string | null {
   const words = rest.split(/\s+/);
   // the name ends at the first word with a digit: a reference code, sometimes glued to the last name
   const end = words.findIndex((word) => /\d/.test(word));
-  const first = (end === -1 ? words : words.slice(0, end))[0];
+  const first = (end === -1 ? words : words.slice(0, end))[0]?.replace(/[^\p{L}'-]/gu, '');
   if (!first) return null;
   return `Zelle - ${first.charAt(0).toUpperCase()}${first.slice(1).toLowerCase()}`;
 }

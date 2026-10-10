@@ -8,6 +8,7 @@ import Testing
     #expect(!LockPolicy.shouldLock(enabled: true, backgroundedAt: now.addingTimeInterval(-29), now: now))
     #expect(LockPolicy.shouldLock(enabled: true, backgroundedAt: now.addingTimeInterval(-30), now: now))
     #expect(LockPolicy.shouldLock(enabled: true, backgroundedAt: now.addingTimeInterval(-3600), now: now))
+    #expect(LockPolicy.shouldLock(enabled: true, backgroundedAt: now.addingTimeInterval(60), now: now))
 }
 
 @Test func lockPolicyNeverLocksWhenTurnedOff() {

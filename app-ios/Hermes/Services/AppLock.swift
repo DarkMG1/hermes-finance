@@ -16,8 +16,11 @@ final class AppLock {
 
     func phaseChanged(to phase: ScenePhase, enabled: Bool, connected: Bool) {
         guard connected else {
+            // connecting counts as unlocking, but the session is no longer fresh
+            launched = true
             locked = false
-            cover.hide()
+            backgroundedAt = nil
+            if phase == .active { cover.hide() } else { cover.show(locked: false) {} }
             return
         }
         switch phase {

@@ -76,7 +76,7 @@ struct SettingsView: View {
                 Text("Security")
             } footer: {
                 Text(AppLock.canUseFaceID
-                     ? "Asks when Hermes opens and after 30 seconds away."
+                     ? "Asks when Hermes opens and after \(Int(LockPolicy.grace)) seconds away."
                      : "Set up Face ID or a passcode in iOS Settings to lock Hermes.")
             }
             Section("Appearance") {
