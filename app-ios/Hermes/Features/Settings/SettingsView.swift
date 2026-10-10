@@ -7,6 +7,7 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.webAuthenticationSession) private var webAuth
     @AppStorage("appearance") private var appearance = Appearance.system
+    @AppStorage("requireFaceID") private var requireFaceID = true
     @State private var banks: LoadState<[Bank]> = .loading
     @State private var linker = BankLinker()
     @State private var syncWrites = WriteGuard()
@@ -67,6 +68,16 @@ struct SettingsView: View {
                 Text("Apple Card")
             } footer: {
                 Text("In Wallet: Apple Card → Card Balance → a statement → Export Transactions. Importing the same statement twice is safe.")
+            }
+            Section {
+                Toggle("Require Face ID", isOn: $requireFaceID)
+                    .disabled(!AppLock.canUseFaceID)
+            } header: {
+                Text("Security")
+            } footer: {
+                Text(AppLock.canUseFaceID
+                     ? "Asks when Hermes opens and after \(Int(LockPolicy.grace)) seconds away."
+                     : "Set up Face ID or a passcode in iOS Settings to lock Hermes.")
             }
             Section("Appearance") {
                 Picker("Appearance", selection: $appearance) {

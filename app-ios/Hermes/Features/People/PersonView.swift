@@ -8,7 +8,21 @@ struct PersonView: View {
     @State private var state: LoadState<PersonDetail> = .loading
     @State private var opening: LedgerTransaction?
     @State private var editing: Person?
-    @State private var addingPaid: Person?
+    @State private var adding: Adding?
+    @State private var picked: LedgerTransaction?
+    @State private var splitting: LedgerTransaction?
+
+    /// One + choice: log a cost they or you paid, or share an expense already in the ledger.
+    private enum Adding: Identifiable {
+        case theyPaid(Person), iPaid(Person), existing
+        var id: String {
+            switch self {
+            case .theyPaid(let person): "they-\(person.id)"
+            case .iPaid(let person): "me-\(person.id)"
+            case .existing: "existing"
+            }
+        }
+    }
     @State private var showEarlier = false
     @State private var error: String?
 
@@ -37,10 +51,16 @@ struct PersonView: View {
             }
         }
         .toolbar {
-            // separate items so iOS 26 gives each button its own glass capsule; always present so it never pops in after loading
+            // separate items so iOS 26 gives each its own glass capsule; always present so + never pops in after loading
             ToolbarItem(placement: .topBarTrailing) {
-                Button("They paid…") { if let person = payer { addingPaid = person } }
-                    .disabled(payer == nil)
+                Menu {
+                    Button("They paid…") { if let person = payer { adding = .theyPaid(person) } }
+                    Button("I paid cash…") { if let person = payer { adding = .iPaid(person) } }
+                    Button("Add existing expense…") { if payer != nil { adding = .existing } }
+                } label: {
+                    Label("Add", systemImage: "plus")
+                }
+                .disabled(payer == nil)
             }
             ToolbarSpacer(.fixed, placement: .topBarTrailing)
             ToolbarItem(placement: .topBarTrailing) {
@@ -55,12 +75,25 @@ struct PersonView: View {
         .sheet(item: $editing) { person in
             PersonSheet(person: person) { _ in await load() }
         }
-        .sheet(item: $addingPaid) { person in
-            TheyPaidSheet(person: person) { await load() }
+        .sheet(item: $adding, onDismiss: {
+            // the split opens once the picker has gone: one sheet at a time
+            if let picked {
+                splitting = picked
+                self.picked = nil
+            }
+        }, content: { adding in
+            switch adding {
+            case .theyPaid(let person): TheyPaidSheet(person: person) { await load() }
+            case .iPaid(let person): TheyPaidSheet(person: person, mePaid: true) { await load() }
+            case .existing: ExpensePicker { picked = $0 }
+            }
+        })
+        .sheet(item: $splitting) { transaction in
+            SplitSheet(transaction: transaction, sharingWith: personId) { await load() }
         }
     }
 
-    /// The loaded person, unless archived: the server refuses a new archived payer.
+    /// The loaded person, unless archived: new entries can't name an archived person.
     private var payer: Person? {
         guard case .loaded(let loaded) = state, !loaded.value.person.archived else { return nil }
         return loaded.value.person

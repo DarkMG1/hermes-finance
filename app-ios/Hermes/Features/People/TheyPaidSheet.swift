@@ -1,11 +1,13 @@
 import HermesKit
 import SwiftUI
 
-/// Log something a person paid that was partly yours. Your share becomes your own spending and their credit.
+/// Log a shared cost from a person's screen. They paid: one row for your share, paid by them.
+/// I paid (`mePaid`): one row for the total, split into your share (with the category) and theirs (owed to you).
 struct TheyPaidSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let person: Person
+    var mePaid = false
     let onDone: () async -> Void
 
     @State private var payee = ""
@@ -20,7 +22,7 @@ struct TheyPaidSheet: View {
 
     var body: some View {
         Sheet(
-            title: "\(person.name) paid", saveTitle: "Add", canSave: request != nil, busy: busy, unresolved: writes.unresolved,
+            title: mePaid ? "I paid" : "\(person.name) paid", saveTitle: "Add", canSave: request != nil, busy: busy, unresolved: writes.unresolved,
             onCancel: { if writes.unresolved { Task { await onDone() } }; dismiss() }, onSave: { Task { await save() } }
         ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
@@ -50,9 +52,17 @@ struct TheyPaidSheet: View {
 
     private var request: CreateTransactionBody? {
         let trimmed = payee.trimmingCharacters(in: .whitespaces)
-        guard let share, share > 0, !trimmed.isEmpty else { return nil }
-        return CreateTransactionBody(date: DayText.ymd(date), amountCents: -share, payee: trimmed, categoryId: categoryId,
-                                     notes: notes.isEmpty ? nil : notes, paidByPersonId: person.id)
+        guard let share, share > 0, !trimmed.isEmpty, let total = Money.parse(totalText) else { return nil }
+        let note = notes.isEmpty ? nil : notes
+        guard mePaid else {
+            return CreateTransactionBody(date: DayText.ymd(date), amountCents: -share, payee: trimmed, categoryId: categoryId,
+                                         notes: note, paidByPersonId: person.id)
+        }
+        // their share must be above zero, or there is nothing to split
+        guard share < total else { return nil }
+        return CreateTransactionBody(date: DayText.ymd(date), amountCents: -total, payee: trimmed, categoryId: nil, notes: note,
+                                     splitLines: [SplitLineBody(amountCents: -share, categoryId: categoryId, notes: nil),
+                                                  SplitLineBody(amountCents: -(total - share), categoryId: nil, notes: nil, personId: person.id)])
     }
 
     private func save() async {

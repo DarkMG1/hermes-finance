@@ -17,6 +17,9 @@ enum Appearance: String, CaseIterable, Identifiable {
 struct HermesApp: App {
     @State private var model = AppModel()
     @AppStorage("appearance") private var appearance = Appearance.system
+    @AppStorage("requireFaceID") private var requireFaceID = true
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var lock = AppLock()
 
     init() {
         // an x to clear a single-line text field (payee, account name, ...)
@@ -32,6 +35,9 @@ struct HermesApp: App {
             .tint(Palette.accent)
             .preferredColorScheme(appearance.colorScheme)
             .task { await model.refreshReferenceData() }
+            .onChange(of: scenePhase, initial: true) { _, phase in
+                lock.phaseChanged(to: phase, enabled: requireFaceID, connected: model.reader != nil)
+            }
         }
     }
 }

@@ -26,6 +26,7 @@ targets:
       path: Hermes/Info.plist
       properties:
         CFBundleDisplayName: Hermes
+        NSFaceIDUsageDescription: Unlock Hermes with Face ID
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
