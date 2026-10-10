@@ -11,6 +11,8 @@
   "categoryId": null,
   "notes": null,
   "personId": null,
+  "paidByPersonId": null,
+  "repaymentDismissed": false,
   "splitLines": [
     {
       "id": "line-1",

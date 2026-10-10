@@ -207,3 +207,56 @@ test('a chosen repayment account replaces the checking default; clearing it rest
   assert.equal((await send('PUT', '/v1/people/settings', 'st-3', { repaymentAccountId: null })).statusCode, 200);
   assert.deepEqual(await ids(), ['in-a1', 'in-cash']);
 });
+
+test('they paid: a manual row with a payer; create, edit, switch from For, refuse bank, split and archived payers', async () => {
+  const { deps, send } = setup();
+  const created = await send('POST', '/v1/transactions', 'tp-1',
+    { date: '2026-03-03', amountCents: -6000, payee: 'Synthetic Market', categoryId: 'c-food', paidByPersonId: 'p1' });
+  assert.equal(created.statusCode, 201);
+  const t = created.json();
+  assert.deepEqual([t.paidByPersonId, t.personId, t.categoryId, t.repaymentDismissed], ['p1', null, 'c-food', false]);
+  assert.equal((await send('POST', '/v1/transactions', 'tp-2', { date: '2026-03-03', amountCents: 6000, payee: 'X', paidByPersonId: 'p1' })).statusCode,
+    400, 'a payer covers money out');
+  assert.equal((await send('POST', '/v1/transactions', 'tp-3', { date: '2026-03-03', amountCents: -100, payee: 'X', paidByPersonId: 'nope' })).statusCode, 400);
+
+  const recat = await send('PATCH', `/v1/transactions/${t.id}`, 'tp-4', { categoryId: null });
+  assert.deepEqual([recat.statusCode, recat.json().paidByPersonId, recat.json().personId], [200, 'p1', null], 'editing keeps the payer');
+  assert.equal((await send('PATCH', `/v1/transactions/${t.id}`, 'tp-5', { personId: 'p2' })).statusCode, 400, 'a payer row is never tagged');
+  assert.equal((await send('PATCH', `/v1/transactions/${t.id}`, 'tp-6', { personId: 'p2', paidByPersonId: 'p1' })).statusCode, 400);
+  assert.equal((await send('PATCH', `/v1/transactions/${t.id}`, 'tp-7', { paidByPersonId: 'p2' })).json().paidByPersonId, 'p2');
+
+  const forRow = (await send('POST', '/v1/transactions', 'tp-8', { date: '2026-03-04', amountCents: -800, payee: 'Synthetic Lamp' })).json();
+  await send('PATCH', `/v1/transactions/${forRow.id}`, 'tp-9', { personId: 'p1' });
+  const switched = await send('PATCH', `/v1/transactions/${forRow.id}`, 'tp-10', { personId: null, paidByPersonId: 'p1' });
+  assert.deepEqual([switched.statusCode, switched.json().personId, switched.json().paidByPersonId], [200, null, 'p1'], 'For → Paid by in one PATCH');
+
+  const split = await send('PUT', `/v1/transactions/${t.id}/splits`, 'tp-11',
+    { lines: [{ amountCents: -3000, categoryId: null }, { amountCents: -3000, categoryId: null }] });
+  assert.deepEqual([split.statusCode, split.json().code], [409, 'PAID_BY_PERSON']);
+  const s = (await send('POST', '/v1/transactions', 'tp-12', { date: '2026-03-05', amountCents: -1000, payee: 'Synthetic Split' })).json();
+  await send('PUT', `/v1/transactions/${s.id}/splits`, 'tp-13', { lines: [{ amountCents: -500, categoryId: null }, { amountCents: -500, categoryId: null }] });
+  assert.equal((await send('PATCH', `/v1/transactions/${s.id}`, 'tp-14', { paidByPersonId: 'p1' })).json().code, 'SPLIT_TRANSACTION');
+  seedTxn(deps.db, { id: 'bank', accountId: 'a1', date: '2026-03-03', amountCents: -500, source: 'plaid', sourceId: 'b1' });
+  const bank = await send('PATCH', '/v1/transactions/bank', 'tp-15', { paidByPersonId: 'p1' });
+  assert.deepEqual([bank.statusCode, bank.json().code], [409, 'BANK_TRANSACTION']);
+  const income = (await send('POST', '/v1/transactions', 'tp-16', { date: '2026-03-05', amountCents: 900, payee: 'Synthetic Refund' })).json();
+  assert.equal((await send('PATCH', `/v1/transactions/${income.id}`, 'tp-17', { paidByPersonId: 'p1' })).statusCode, 400);
+
+  deps.db.prepare("UPDATE people SET archived = 1 WHERE id = 'p2'").run();
+  assert.equal((await send('PATCH', `/v1/transactions/${t.id}`, 'tp-18', { notes: 'still fine' })).statusCode, 200);
+  assert.equal((await send('PATCH', `/v1/transactions/${t.id}`, 'tp-19', { paidByPersonId: 'p2' })).statusCode, 200,
+    'an archived payer already on the row stays valid');
+  assert.equal((await send('PATCH', `/v1/transactions/${forRow.id}`, 'tp-20', { paidByPersonId: 'p2' })).statusCode, 400,
+    'a new archived payer is refused');
+});
+
+test('a dismissed suggestion can be restored through the transaction', async () => {
+  const { deps, get, send } = setup();
+  seedTxn(deps.db, { id: 'dep', accountId: 'a1', date: '2026-03-08', amountCents: 500, bankDescription: 'ZELLE FROM SOMEONE',
+    source: 'plaid', sourceId: 'd1', plaidCategory: 'TRANSFER_IN_ACCOUNT_TRANSFER' });
+  await send('POST', '/v1/people/suggestions/dep/dismiss', 'ud-1', {});
+  assert.equal((await get('/v1/transactions/dep')).repaymentDismissed, true);
+  const restored = await send('PATCH', '/v1/transactions/dep', 'ud-2', { repaymentDismissed: false });
+  assert.deepEqual([restored.statusCode, restored.json().repaymentDismissed], [200, false]);
+  assert.equal((await get('/v1/people/suggestions')).length, 1);
+});

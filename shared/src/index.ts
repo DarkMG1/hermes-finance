@@ -27,7 +27,7 @@ export type SplitLine = z.infer<typeof SplitLine>;
 export const Transaction = z.object({
   id: Id, accountId: Id, source: z.enum(['plaid', 'manual', 'actual', 'applecard']), date: DateStr,
   amountCents: Cents, payee: z.string(), bankDescription: z.string(), merchantName: z.string().nullable(),
-  pending: z.boolean(), categoryId: Id.nullable(), notes: z.string().nullable(), personId: Id.nullable(), splitLines: z.array(SplitLine),
+  pending: z.boolean(), categoryId: Id.nullable(), notes: z.string().nullable(), personId: Id.nullable(), paidByPersonId: Id.nullable(), repaymentDismissed: z.boolean(), splitLines: z.array(SplitLine),
 });
 export type Transaction = z.infer<typeof Transaction>;
 
@@ -43,10 +43,11 @@ export type ListTransactionsQuery = z.infer<typeof ListTransactionsQuery>;
 
 export const PatchTransactionBody = z.object({
   categoryId: Id.nullable().optional(), payee: z.string().min(1).max(200).nullable().optional(), notes: z.string().max(2000).nullable().optional(),
-  personId: Id.nullable().optional(),
+  personId: Id.nullable().optional(), paidByPersonId: Id.nullable().optional(), repaymentDismissed: z.boolean().optional(),
 }).strict()
   .refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' })
-  .refine((b) => !(b.categoryId && b.personId), { message: 'categoryId and personId cannot both be set', path: ['personId'] });
+  .refine((b) => !(b.categoryId && b.personId), { message: 'categoryId and personId cannot both be set', path: ['personId'] })
+  .refine((b) => !(b.personId && b.paidByPersonId), { message: 'a row someone else paid is your own spending', path: ['personId'] });
 export type PatchTransactionBody = z.infer<typeof PatchTransactionBody>;
 
 export const PatchAccountBody = z.object({ name: z.string().trim().min(1).max(100).nullable() }).strict();
@@ -98,7 +99,8 @@ export type PeopleSettings = z.infer<typeof PeopleSettings>;
 export const CreateTransactionBody = z.object({
   date: DateStr, amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'),
   payee: z.string().min(1).max(200), categoryId: Id.nullable().optional(), notes: z.string().max(2000).nullable().optional(),
-}).strict();
+  paidByPersonId: Id.optional(),
+}).strict().refine((b) => !b.paidByPersonId || b.amountCents < 0, { message: 'a payer covers money out', path: ['paidByPersonId'] });
 export type CreateTransactionBody = z.infer<typeof CreateTransactionBody>;
 
 export const Home = z.object({

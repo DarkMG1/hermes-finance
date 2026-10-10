@@ -14,6 +14,8 @@
       "categoryId": "cat-food",
       "notes": null,
       "personId": null,
+      "paidByPersonId": null,
+      "repaymentDismissed": false,
       "splitLines": []
     },
     {
@@ -29,6 +31,8 @@
       "categoryId": "cat-pay",
       "notes": null,
       "personId": null,
+      "paidByPersonId": null,
+      "repaymentDismissed": false,
       "splitLines": []
     },
     {
@@ -44,6 +48,8 @@
       "categoryId": null,
       "notes": null,
       "personId": null,
+      "paidByPersonId": null,
+      "repaymentDismissed": false,
       "splitLines": [
         {
           "id": "line-1",
@@ -74,6 +80,8 @@
       "categoryId": null,
       "notes": null,
       "personId": "person-1",
+      "paidByPersonId": null,
+      "repaymentDismissed": false,
       "splitLines": []
     },
     {
@@ -89,6 +97,8 @@
       "categoryId": null,
       "notes": null,
       "personId": null,
+      "paidByPersonId": null,
+      "repaymentDismissed": false,
       "splitLines": []
     }
   ],

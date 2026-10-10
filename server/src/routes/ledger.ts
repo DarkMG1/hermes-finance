@@ -48,6 +48,20 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       }
       assertCategoryExists(db, body.categoryId, 'categoryId');
       assertPersonTaggable(db, body.personId, 'personId', current.id);
+      if (body.paidByPersonId !== undefined) {
+        if (current.source !== 'manual') {
+          throw new ApiError(409, 'BANK_TRANSACTION', 'only a manual transaction can be paid by someone else', 'paidByPersonId');
+        }
+        if (current.splitLines.length) throw new ApiError(409, 'SPLIT_TRANSACTION', 'a split transaction cannot be paid by someone else', 'paidByPersonId');
+        if (body.paidByPersonId !== null && current.amountCents >= 0) {
+          throw new ApiError(400, 'INVALID_REQUEST', 'paidByPersonId: a payer covers money out', 'paidByPersonId');
+        }
+        assertPersonTaggable(db, body.paidByPersonId, 'paidByPersonId', current.id);
+      }
+      // a row someone else paid is the owner's own spending, so it never carries a person tag
+      const personAfter = body.personId !== undefined ? body.personId : body.categoryId ? null : current.personId;
+      const payerAfter = body.paidByPersonId !== undefined ? body.paidByPersonId : current.paidByPersonId;
+      if (personAfter && payerAfter) throw new ApiError(400, 'INVALID_REQUEST', 'personId: a row someone else paid is your own spending', 'personId');
       const sets: string[] = [];
       const args: unknown[] = [];
       // person and category are exclusive: setting one clears the other; either way the owner decided
@@ -63,6 +77,8 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       }
       if (body.payee !== undefined) { sets.push('payee = ?'); args.push(body.payee); }
       if (body.notes !== undefined) { sets.push('notes = ?'); args.push(body.notes); }
+      if (body.paidByPersonId !== undefined) { sets.push('paid_by_person_id = ?'); args.push(body.paidByPersonId); }
+      if (body.repaymentDismissed !== undefined) { sets.push('repayment_dismissed = ?'); args.push(body.repaymentDismissed ? 1 : 0); }
       const now = deps.now().toISOString();
       db.prepare(`UPDATE transactions SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...args, now, req.params.id);
       if (body.categoryId) learnCategory(db, req.params.id, body.categoryId, now);
@@ -76,6 +92,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
     const r = idempotentWrite(deps, req, () => {
       const txn = getTransaction(db, req.params.id);
       if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      if (txn.paidByPersonId) throw new ApiError(409, 'PAID_BY_PERSON', 'a transaction someone else paid cannot be split', 'lines');
       if (!body.lines.length && !txn.splitLines.length) return { status: 200, body: txn };
       body.lines.forEach((l, i) => assertCategoryExists(db, l.categoryId, `lines.${i}.categoryId`));
       body.lines.forEach((l, i) => assertPersonTaggable(db, l.personId, `lines.${i}.personId`, txn.id));
@@ -103,10 +120,12 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
     const r = idempotentWrite(deps, req, () => {
       assertCategoryExists(db, body.categoryId, 'categoryId');
       const id = randomUUID();
+      assertPersonTaggable(db, body.paidByPersonId, 'paidByPersonId', id);
       const now = deps.now().toISOString();
-      db.prepare(`INSERT INTO transactions (id, account_id, source, date, amount_cents, bank_description, payee, category_id, notes, created_at, updated_at)
-        VALUES (?, 'manual', 'manual', ?, ?, '', ?, ?, ?, ?, ?)`)
-        .run(id, body.date, body.amountCents, body.payee, body.categoryId ?? null, body.notes ?? null, now, now);
+      db.prepare(`INSERT INTO transactions (id, account_id, source, date, amount_cents, bank_description, payee, category_id, notes, paid_by_person_id,
+          created_at, updated_at)
+        VALUES (?, 'manual', 'manual', ?, ?, '', ?, ?, ?, ?, ?, ?)`)
+        .run(id, body.date, body.amountCents, body.payee, body.categoryId ?? null, body.notes ?? null, body.paidByPersonId ?? null, now, now);
       return { status: 201, body: getTransaction(db, id) };
     });
     return reply.code(r.status).send(r.body);

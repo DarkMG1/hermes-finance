@@ -49,13 +49,14 @@ export function getPerson(db: Db, id: string): PersonDetail | null {
   return { person: toPerson(row, balanceCents), owed: owed.reverse(), repayments: repayments.reverse() };
 }
 
-/** A new tag must name a live person; a person archived after being tagged stays valid on that same transaction. */
+/** A new tag or payer must name a live person; a person archived after being added stays valid on that same transaction. */
 export function assertPersonTaggable(db: Db, personId: string | null | undefined, field: string, transactionId: string): void {
   if (personId === null || personId === undefined) return;
   const p = db.prepare('SELECT archived FROM people WHERE id = ?').get(personId) as { archived: number } | undefined;
   if (!p) throw new ApiError(400, 'INVALID_REQUEST', `${field}: unknown person`, field);
-  if (p.archived && !db.prepare(`SELECT 1 FROM transactions WHERE id = ? AND person_id = ?
-      UNION ALL SELECT 1 FROM split_lines WHERE transaction_id = ? AND person_id = ?`).get(transactionId, personId, transactionId, personId)) {
+  if (p.archived && !db.prepare(`SELECT 1 FROM transactions WHERE id = ? AND (person_id = ? OR paid_by_person_id = ?)
+      UNION ALL SELECT 1 FROM split_lines WHERE transaction_id = ? AND person_id = ?`)
+    .get(transactionId, personId, personId, transactionId, personId)) {
     throw new ApiError(400, 'INVALID_REQUEST', `${field}: person is archived`, field);
   }
 }
