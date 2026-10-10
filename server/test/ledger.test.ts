@@ -283,3 +283,37 @@ test('tagged lines and tagged transactions stay out of spending; responses carry
   assert.equal(dinner.personId, null);
   assert.equal((await app.inject({ method: 'GET', url: '/v1/transactions/lent', headers: AUTH })).json().personId, 'p1');
 });
+
+test('a card payment tagged with a transfer category teaches every uncategorized card payment, on both sides', async () => {
+  const { deps, app } = setup();
+  const pc = 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT';
+  seedCategory(deps.db, { id: 'c-ccp', name: 'Card Payment', isTransfer: true });
+  seedAccount(deps.db, { id: 'card', type: 'credit' });
+  seedTxn(deps.db, { id: 'pay', accountId: 'a1', date: '2026-03-01', amountCents: -5000, source: 'plaid', sourceId: 'p1', plaidCategory: pc });
+  seedTxn(deps.db, { id: 'credit', accountId: 'card', date: '2026-03-01', amountCents: 5000, source: 'plaid', sourceId: 'p2', plaidCategory: pc });
+  seedTxn(deps.db, { id: 'apple', accountId: 'card', date: '2026-03-02', amountCents: 3000, source: 'applecard', sourceId: 'ac1', plaidCategory: pc });
+  seedTxn(deps.db, { id: 'mine', accountId: 'a1', date: '2026-03-02', amountCents: -100, source: 'plaid', sourceId: 'p3', plaidCategory: pc, categoryId: 'c-fun' });
+  seedTxn(deps.db, { id: 'split', accountId: 'a1', date: '2026-03-02', amountCents: -100, source: 'plaid', sourceId: 'p4', plaidCategory: pc });
+  seedSplit(deps.db, { id: 's1', transactionId: 'split', amountCents: -100, categoryId: null });
+  const res = await app.inject({ method: 'PATCH', url: '/v1/transactions/pay', headers: w('ccp-1'), payload: { categoryId: 'c-ccp' } });
+  assert.equal(res.statusCode, 200);
+  const cat = (id: string) => (deps.db.prepare('SELECT category_id AS c FROM transactions WHERE id = ?').get(id) as { c: string | null }).c;
+  assert.deepEqual(['pay', 'credit', 'apple', 'mine', 'split'].map(cat), ['c-ccp', 'c-ccp', 'c-ccp', 'c-fun', null]);
+  assert.deepEqual(deps.db.prepare('SELECT plaid_category, category_id FROM plaid_category_map').all(), [{ plaid_category: pc, category_id: 'c-ccp' }]);
+});
+
+test('a transfer category still teaches nothing from transfer or income rows', async () => {
+  const { deps, app } = setup();
+  seedCategory(deps.db, { id: 'c-xfer', name: 'Moves', isTransfer: true });
+  const pcs = ['TRANSFER_OUT_ACCOUNT_TRANSFER', 'TRANSFER_IN_DEPOSIT', 'INCOME_SALARY'];
+  pcs.forEach((pc, i) => {
+    seedTxn(deps.db, { id: `t${i}`, accountId: 'a1', date: '2026-03-01', amountCents: -1, source: 'plaid', sourceId: `p${i}`, plaidCategory: pc });
+    seedTxn(deps.db, { id: `o${i}`, accountId: 'a1', date: '2026-03-01', amountCents: -1, source: 'plaid', sourceId: `q${i}`, plaidCategory: pc });
+  });
+  for (const i of pcs.keys()) {
+    const res = await app.inject({ method: 'PATCH', url: `/v1/transactions/t${i}`, headers: w(`xfer-${i}`), payload: { categoryId: 'c-xfer' } });
+    assert.equal(res.statusCode, 200);
+  }
+  assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM plaid_category_map').get() as { n: number }).n, 0);
+  assert.equal((deps.db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE id LIKE 'o%' AND category_id IS NOT NULL").get() as { n: number }).n, 0);
+});
