@@ -53,6 +53,9 @@ public struct LedgerTransaction: Codable, Sendable, Identifiable, Hashable {
     public let notes: String?
     public let splitLines: [SplitLine]
     public let personId: String?
+    public let paidByPersonId: String?
+    /// nil from builds before v1.2; true once the owner said the deposit is not a repayment
+    public let repaymentDismissed: Bool?
 }
 
 public struct TransactionPage: Codable, Sendable {
@@ -71,6 +74,7 @@ public struct Home: Codable, Sendable {
     public let recent: [LedgerTransaction]
     public let reconnect: [ReconnectItem]
     public let owedToYouCents: Int
+    public let youOweCents: Int
     public let repaymentSuggestions: Int
 
     // a Home cached by an older build has no Who Owes Me fields
@@ -80,6 +84,7 @@ public struct Home: Codable, Sendable {
         recent = try container.decode([LedgerTransaction].self, forKey: .recent)
         reconnect = try container.decode([ReconnectItem].self, forKey: .reconnect)
         owedToYouCents = try container.decodeIfPresent(Int.self, forKey: .owedToYouCents) ?? 0
+        youOweCents = try container.decodeIfPresent(Int.self, forKey: .youOweCents) ?? 0
         repaymentSuggestions = try container.decodeIfPresent(Int.self, forKey: .repaymentSuggestions) ?? 0
     }
 }
@@ -93,31 +98,24 @@ public struct Person: Codable, Sendable, Identifiable, Hashable {
     public let balanceCents: Int
 }
 
-public struct PersonItem: Codable, Sendable, Identifiable, Hashable {
+public struct HistoryEntry: Codable, Sendable, Identifiable, Hashable {
     public let transactionId: String
     public let lineId: String?
     public let date: String
     public let payee: String
-    public let amountCents: Int
-    public var id: String { "\(transactionId)|\(lineId ?? "")" }
-}
-
-public struct OwedItem: Codable, Sendable, Identifiable, Hashable {
-    public let transactionId: String
-    public let lineId: String?
-    public let date: String
-    public let payee: String
-    public let amountCents: Int
-    public let paidCents: Int
-    /// "open", "partial" or "paid"
-    public let status: String
+    /// "forThem", "fromThem" or "paidByThem"
+    public let kind: String
+    /// How this entry moved the balance: positive means they owe you more.
+    public let effectCents: Int
+    public let balanceAfterCents: Int
+    public let settled: Bool
     public var id: String { "\(transactionId)|\(lineId ?? "")" }
 }
 
 public struct PersonDetail: Codable, Sendable {
     public let person: Person
-    public let owed: [OwedItem]
-    public let repayments: [PersonItem]
+    /// Newest first.
+    public let history: [HistoryEntry]
 }
 
 /// Where repayments land; nil means every checking account.

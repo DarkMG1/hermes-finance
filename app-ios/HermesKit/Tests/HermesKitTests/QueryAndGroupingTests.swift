@@ -47,3 +47,7 @@ import Testing
     #expect(AccountGrouping.subtitle(masked) == "••0001")
     #expect(AccountGrouping.subtitle(groups[1].accounts[0]) == "Credit card")
 }
+
+@Test func personFilterIsSent() {
+    #expect(TransactionQuery(personId: "p1").items == [URLQueryItem(name: "personId", value: "p1"), URLQueryItem(name: "limit", value: "50")])
+}

@@ -16,7 +16,7 @@ private func tempCache() -> ResponseCache {
 
     let offline = Reader(client: APIClient(baseURL: testBase, token: "t", transport: FakeTransport([])), cache: cache)
     let cached = try await offline.read("/v1/home", as: Home.self)
-    #expect(cached.fromCache && cached.savedAt == t1 && cached.value.recent.count == 5)
+    #expect(cached.fromCache && cached.savedAt == t1 && cached.value.recent.count == 6)
 
     let denied = FakeTransport([FakeTransport.json(401, #"{"code":"UNAUTHORIZED","message":"missing or invalid token"}"#)])
     let unauthorized = Reader(client: APIClient(baseURL: testBase, token: "bad", transport: denied), cache: cache)
@@ -42,7 +42,7 @@ private func tempCache() -> ResponseCache {
 
     let bad = FakeTransport([FakeTransport.json(502, "<html>Bad Gateway</html>")])
     let cached = try await Reader(client: APIClient(baseURL: testBase, token: "t", transport: bad), cache: cache).read("/v1/home", as: Home.self)
-    #expect(cached.fromCache && cached.value.recent.count == 5)
+    #expect(cached.fromCache && cached.value.recent.count == 6)
 
     let broken = FakeTransport([FakeTransport.json(500, #"{"code":"INTERNAL","message":"x"}"#)])
     let reader = Reader(client: APIClient(baseURL: testBase, token: "t", transport: broken), cache: cache)
