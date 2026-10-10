@@ -58,10 +58,9 @@ struct PersonView: View {
     @ViewBuilder private func entryView(_ entry: HistoryEntry) -> some View {
         row(entry)
         if entry.settled {
-            HStack {
+            VStack(spacing: Space.xs) {
                 Divider()
                 Text("Settled").textStyle(.caption, color: Palette.secondaryText).frame(maxWidth: .infinity)
-                Divider()
             }
         }
     }
