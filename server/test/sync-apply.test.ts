@@ -378,3 +378,9 @@ test('a pending deposit dismissed as not a repayment stays dismissed once it pos
   apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', amount: -25 })], removed: [{ transactionId: 'pend1' }] })]);
   assert.equal(row('post1')?.repayment_dismissed, 1);
 });
+
+test('applying pages names new Zelle rows', () => {
+  const { apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'z1', name: 'Zelle payment from QUILL WREN 12345', merchantName: null, category: 'TRANSFER_IN_DEPOSIT' })] })]);
+  assert.equal(row('z1')?.payee, 'Zelle - Quill');
+});

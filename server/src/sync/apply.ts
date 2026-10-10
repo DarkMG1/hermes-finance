@@ -3,6 +3,7 @@ import type { Db } from '../db.ts';
 import type { PlaidAccount, PlaidTxn, SyncPage } from '../plaid/port.ts';
 import { plaidAmountToCents } from '../money.ts';
 import { fitSplitToAmount } from '../ledger.ts';
+import { nameZellePayees } from '../zelle.ts';
 
 export type ApplyCounts = { added: number; modified: number; removed: number };
 
@@ -134,5 +135,7 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
     for (const t of p.modified) if (write(t)) counts.modified += 1;
     for (const r of p.removed) counts.removed += markRemoved.run(opts.nowIso, opts.nowIso, r.transactionId).changes;
   }
+  // new rows get their name, and history is backfilled on the first sync after deploy
+  nameZellePayees(db, opts.nowIso);
   return counts;
 }
