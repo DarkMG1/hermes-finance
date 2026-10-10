@@ -5,10 +5,11 @@ import { ApiError } from './errors.ts';
 export type TxnRow = {
   id: string; account_id: string; source: 'plaid' | 'manual' | 'actual' | 'applecard'; date: string; amount_cents: number;
   bank_description: string; merchant_name: string | null; pending: number; category_id: string | null;
-  payee: string | null; notes: string | null; person_id: string | null;
+  payee: string | null; notes: string | null; person_id: string | null; paid_by_person_id: string | null; repayment_dismissed: number;
 };
 
-export const TXN_COLS = 'id, account_id, source, date, amount_cents, bank_description, merchant_name, pending, category_id, payee, notes, person_id';
+export const TXN_COLS = 'id, account_id, source, date, amount_cents, bank_description, merchant_name, pending, category_id, payee, notes, person_id, '
+  + 'paid_by_person_id, repayment_dismissed';
 
 export function rowToTransaction(db: Db, r: TxnRow): Transaction {
   const lines = db.prepare('SELECT id, amount_cents, category_id, notes, person_id FROM split_lines WHERE transaction_id = ? ORDER BY id').all(r.id) as
@@ -17,7 +18,7 @@ export function rowToTransaction(db: Db, r: TxnRow): Transaction {
   return {
     id: r.id, accountId: r.account_id, source: r.source, date: r.date, amountCents: r.amount_cents,
     payee: r.payee ?? r.merchant_name ?? r.bank_description, bankDescription: r.bank_description,
-    merchantName: r.merchant_name, pending: r.pending === 1, categoryId: r.category_id, notes: r.notes, personId: r.person_id, splitLines,
+    merchantName: r.merchant_name, pending: r.pending === 1, categoryId: r.category_id, notes: r.notes, personId: r.person_id, paidByPersonId: r.paid_by_person_id, repaymentDismissed: r.repayment_dismissed === 1, splitLines,
   };
 }
 
@@ -62,12 +63,21 @@ export function listTransactions(db: Db, q: ListTransactionsQuery): TransactionP
     where.push('(category_id = ? OR EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = transactions.id AND sl.category_id = ?))');
     args.push(q.categoryId, q.categoryId);
   }
+  if (q.personId) {
+    where.push(`(person_id = ? OR paid_by_person_id = ?
+      OR EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = transactions.id AND sl.person_id = ?))`);
+    args.push(q.personId, q.personId, q.personId);
+  }
   if (q.from) { where.push('date >= ?'); args.push(q.from); }
   if (q.to) { where.push('date <= ?'); args.push(q.to); }
   if (q.q) {
     const like = `%${q.q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
-    where.push("(COALESCE(payee, '') LIKE ? ESCAPE '\\' OR COALESCE(merchant_name, '') LIKE ? ESCAPE '\\' OR bank_description LIKE ? ESCAPE '\\' OR COALESCE(notes, '') LIKE ? ESCAPE '\\')");
-    args.push(like, like, like, like);
+    // people's names count too: a row tagged with them, paid by them, or with a split line for them
+    where.push(`(COALESCE(payee, '') LIKE ? ESCAPE '\\' OR COALESCE(merchant_name, '') LIKE ? ESCAPE '\\' OR bank_description LIKE ? ESCAPE '\\'
+      OR COALESCE(notes, '') LIKE ? ESCAPE '\\'
+      OR EXISTS (SELECT 1 FROM people p WHERE p.name LIKE ? ESCAPE '\\' AND (p.id = transactions.person_id OR p.id = transactions.paid_by_person_id
+        OR EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = transactions.id AND sl.person_id = p.id))))`);
+    args.push(like, like, like, like, like);
   }
   if (q.cursor) {
     const [d, id] = decodeCursor(q.cursor);
@@ -161,7 +171,7 @@ export function periodRange(q: SpendingQuery): { from: string; toExclusive: stri
   return { from: `${q.date}-01`, toExclusive: `${next}-01` };
 }
 
-export function getHome(db: Db): Omit<Home, 'owedToYouCents' | 'repaymentSuggestions'> {
+export function getHome(db: Db): Omit<Home, 'owedToYouCents' | 'youOweCents' | 'repaymentSuggestions'> {
   const accounts = db.prepare('SELECT type, balance_current_cents AS b FROM accounts WHERE hidden = 0 AND balance_current_cents IS NOT NULL').all() as { type: string; b: number }[];
   const netWorthCents = accounts.reduce((sum, a) => sum + (NEGATIVE_TYPES.has(a.type) ? -a.b : a.b), 0);
   const recent = listTransactions(db, { limit: 10 }).transactions;

@@ -18,6 +18,8 @@ struct SplitSheet: View {
     }
 
     @State private var lines: [Line] = []
+    @State private var shareWith: String?
+    @State private var justMine = ""
     @State private var writes = WriteGuard()
     @State private var removeWrites = WriteGuard()
     @State private var error: String?
@@ -36,6 +38,16 @@ struct SplitSheet: View {
             Section {
                 LabeledContent("Total") { MoneyText(cents: transaction.amountCents) }
                 LabeledContent("Left to assign") { Text(Money.format(remaining)).monospacedDigit() }
+            }
+            if transaction.amountCents < 0 {
+                Section("Split with someone") {
+                    NavigationLink { PersonPicker(selection: $shareWith, noneTitle: "Nobody", title: "Split with") } label: {
+                        LabeledContent("Person", value: shareWith.map(model.personName) ?? "Nobody")
+                    }
+                    Field(label: "Just mine") { TextField("0.00", text: $justMine).keyboardType(.decimalPad) }
+                    Button("Fill in lines") { fillShared() }
+                        .disabled(sharedLines == nil || writes.unresolved || removeWrites.unresolved)
+                }
             }
             ForEach($lines) { $line in
                 Section {
@@ -94,6 +106,20 @@ struct SplitSheet: View {
     private var remaining: Int { SplitMath.remaining(total: transaction.amountCents, amounts: amounts) }
 
     private func plain(_ cents: Int) -> String { SplitMath.plain(cents) }
+
+    /// Yours and theirs for 50/50 apart from a part that is only yours, or nil until a person and a valid amount leave them a share.
+    private var sharedLines: (yours: Int, theirs: Int)? {
+        let total = abs(transaction.amountCents)
+        guard shareWith != nil, let mine = justMine.isEmpty ? 0 : Money.parse(justMine),
+              let yours = SharedCost.yourShare(totalCents: total, justMineCents: mine), yours < total else { return nil }
+        return (yours, total - yours)
+    }
+
+    private func fillShared() {
+        guard let shared = sharedLines else { return }
+        let category = lines.first { $0.personId == nil }?.categoryId ?? transaction.categoryId
+        lines = [Line(amount: plain(shared.yours), categoryId: category), Line(amount: plain(shared.theirs), personId: shareWith)]
+    }
 
     private func rebalance(edited id: UUID) {
         guard let index = lines.firstIndex(where: { $0.id == id }) else { return }

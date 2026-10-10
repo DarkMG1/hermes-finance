@@ -24,6 +24,8 @@ export async function buildFixtures(): Promise<Record<string, string>> {
     bankDescription: 'SYNTHETIC TRANSFER' });
   seedTxn(db, { id: 'txn-5', accountId: 'acct-checking', date: '2026-03-10', amountCents: 500, source: 'plaid', sourceId: 'ps-5',
     plaidCategory: 'TRANSFER_IN_ACCOUNT_TRANSFER', bankDescription: 'ZELLE FROM SYNTHETIC QUILL' });
+  seedTxn(db, { id: 'txn-6', accountId: 'manual', date: '2026-03-09', amountCents: -300, categoryId: 'cat-food', payee: 'Synthetic Market',
+    paidByPersonId: 'person-1' });
   plaid.linkResults.set('link-create-1', { status: 'complete', publicToken: 'public-x', institutionName: 'Synthetic Bank' });
 
   const app = buildApp(deps);

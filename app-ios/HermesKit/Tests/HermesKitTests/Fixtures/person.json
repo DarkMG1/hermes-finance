@@ -4,26 +4,38 @@
     "name": "Synthetic Quill",
     "matchText": "SYNTHETIC QUILL",
     "archived": false,
-    "balanceCents": 500
+    "balanceCents": 200
   },
-  "owed": [
+  "history": [
     {
       "transactionId": "txn-3",
       "lineId": "line-2",
       "date": "2026-03-12",
       "payee": "Synthetic Split",
-      "amountCents": -1500,
-      "paidCents": 1000,
-      "status": "partial"
-    }
-  ],
-  "repayments": [
+      "kind": "forThem",
+      "effectCents": 1500,
+      "balanceAfterCents": 200,
+      "settled": false
+    },
     {
       "transactionId": "txn-4",
       "lineId": null,
       "date": "2026-03-11",
       "payee": "SYNTHETIC TRANSFER",
-      "amountCents": 1000
+      "kind": "fromThem",
+      "effectCents": -1000,
+      "balanceAfterCents": -1300,
+      "settled": false
+    },
+    {
+      "transactionId": "txn-6",
+      "lineId": null,
+      "date": "2026-03-09",
+      "payee": "Synthetic Market",
+      "kind": "paidByThem",
+      "effectCents": -300,
+      "balanceAfterCents": -300,
+      "settled": false
     }
   ]
 }

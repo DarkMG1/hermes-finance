@@ -12,9 +12,10 @@ struct TransactionRow: View {
     }
 
     private var subtitle: String {
-        let tag = transaction.splitLines.isEmpty
+        var tag = transaction.splitLines.isEmpty
             ? model.tagLabel(personId: transaction.personId, categoryId: transaction.categoryId, amountCents: transaction.amountCents)
             : "Split"
+        if let payer = transaction.paidByPersonId { tag += " · Paid by \(model.personName(payer))" }
         return [DayText.display(transaction.date), tag, transaction.pending ? "Pending" : nil].compactMap { $0 }.joined(separator: " · ")
     }
 }

@@ -22,7 +22,7 @@ func json(_ value: some Encodable) throws -> String {
     let health = try decode(Health.self, "health")
     #expect(health.ok && health.dbVersion >= 3)
     let home = try decode(Home.self, "home")
-    #expect(home.recent.count == 5 && home.owedToYouCents == 500 && home.repaymentSuggestions == 1)
+    #expect(home.recent.count == 6 && home.owedToYouCents == 200 && home.youOweCents == 0 && home.repaymentSuggestions == 1)
     #expect(home.reconnect.map(\.institutionName) == ["Synthetic Credit Union"])
     let accounts = try decode([Account].self, "accounts")
     #expect(accounts.count == 3)
@@ -70,10 +70,10 @@ func json(_ value: some Encodable) throws -> String {
 
 @Test func peopleFixturesDecode() throws {
     let people = try decode([Person].self, "people")
-    #expect(people.first?.name == "Synthetic Quill" && people.first?.balanceCents == 500)
+    #expect(people.first?.name == "Synthetic Quill" && people.first?.balanceCents == 200)
     let detail = try decode(PersonDetail.self, "person")
-    #expect(detail.owed.first?.status == "partial" && detail.owed.first?.paidCents == 1000 && detail.owed.first?.lineId == "line-2")
-    #expect(detail.repayments.map(\.transactionId) == ["txn-4"])
+    #expect(detail.person.balanceCents == 200 && detail.history.map(\.kind) == ["forThem", "fromThem", "paidByThem"])
+    #expect(detail.history.first?.lineId == "line-2" && detail.history.first?.balanceAfterCents == 200 && detail.history.last?.effectCents == -300)
     let suggestions = try decode([RepaymentSuggestion].self, "people-suggestions")
     #expect(suggestions.map(\.id) == ["txn-5"] && suggestions.first?.personId == "person-1")
     let split = try decode(LedgerTransaction.self, "transaction")
@@ -83,7 +83,7 @@ func json(_ value: some Encodable) throws -> String {
 @Test func homeCachedByAnOlderBuildStillDecodes() throws {
     let old = #"{"netWorthCents":1,"recent":[],"reconnect":[]}"#
     let home = try JSONDecoder().decode(Home.self, from: Data(old.utf8))
-    #expect(home.owedToYouCents == 0 && home.repaymentSuggestions == 0)
+    #expect(home.owedToYouCents == 0 && home.youOweCents == 0 && home.repaymentSuggestions == 0)
 }
 
 @Test func peopleSettingsSendsNullToClear() throws {
@@ -101,4 +101,35 @@ func json(_ value: some Encodable) throws -> String {
     let withPerson = SplitLineBody(amountCents: -500, categoryId: nil, notes: nil, personId: "p1")
     #expect(try json(withPerson) == #"{"amountCents":-500,"categoryId":null,"personId":"p1"}"#)
     #expect(try json(SplitLineBody(amountCents: -500, categoryId: "c", notes: nil)) == #"{"amountCents":-500,"categoryId":"c"}"#)
+}
+
+@Test func transactionCachedByAnOlderBuildStillDecodes() throws {
+    let old = #"{"id":"t","accountId":"a","source":"manual","date":"2026-03-01","amountCents":-100,"payee":"P","bankDescription":"","#
+        + #""merchantName":null,"pending":false,"categoryId":null,"notes":null,"splitLines":[]}"#
+    let transaction = try JSONDecoder().decode(LedgerTransaction.self, from: Data(old.utf8))
+    #expect(transaction.paidByPersonId == nil && transaction.repaymentDismissed == nil && transaction.personId == nil)
+}
+
+@Test func sharedCostGivesTheOwnerTheOddCent() {
+    #expect(SharedCost.yourShare(totalCents: 10000, justMineCents: 2000) == 6000)
+    #expect(SharedCost.yourShare(totalCents: 101, justMineCents: 0) == 51)
+    #expect(SharedCost.yourShare(totalCents: 100, justMineCents: 100) == 100)
+    #expect(SharedCost.yourShare(totalCents: 0, justMineCents: 0) == nil)
+    #expect(SharedCost.yourShare(totalCents: 100, justMineCents: 101) == nil)
+    #expect(SharedCost.yourShare(totalCents: 100, justMineCents: -1) == nil)
+}
+
+@Test func balancePhrases() {
+    #expect(Balance.phrase(500) == "Owes you $5.00")
+    #expect(Balance.phrase(-1250) == "You owe $12.50")
+    #expect(Balance.phrase(0) == "Settled up")
+}
+
+@Test func sharedBalanceBodiesEncode() throws {
+    #expect(try json(PatchTransactionBody(paidByPersonId: .set("p1"))) == #"{"paidByPersonId":"p1"}"#)
+    #expect(try json(PatchTransactionBody(personId: .set(nil), paidByPersonId: .set("p1"))) == #"{"paidByPersonId":"p1","personId":null}"#)
+    #expect(try json(PatchTransactionBody(repaymentDismissed: false)) == #"{"repaymentDismissed":false}"#)
+    #expect(PatchTransactionBody(repaymentDismissed: false).isEmpty == false)
+    let paid = CreateTransactionBody(date: "2026-03-03", amountCents: -6000, payee: "M", categoryId: nil, notes: nil, paidByPersonId: "p1")
+    #expect(try json(paid) == #"{"amountCents":-6000,"date":"2026-03-03","paidByPersonId":"p1","payee":"M"}"#)
 }

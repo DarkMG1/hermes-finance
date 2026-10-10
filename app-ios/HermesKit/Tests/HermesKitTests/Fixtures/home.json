@@ -14,6 +14,8 @@
       "categoryId": "cat-food",
       "notes": null,
       "personId": null,
+      "paidByPersonId": null,
+      "repaymentDismissed": false,
       "splitLines": []
     },
     {
@@ -29,6 +31,8 @@
       "categoryId": "cat-pay",
       "notes": null,
       "personId": null,
+      "paidByPersonId": null,
+      "repaymentDismissed": false,
       "splitLines": []
     },
     {
@@ -44,6 +48,8 @@
       "categoryId": null,
       "notes": null,
       "personId": null,
+      "paidByPersonId": null,
+      "repaymentDismissed": false,
       "splitLines": [
         {
           "id": "line-1",
@@ -74,6 +80,8 @@
       "categoryId": null,
       "notes": null,
       "personId": "person-1",
+      "paidByPersonId": null,
+      "repaymentDismissed": false,
       "splitLines": []
     },
     {
@@ -89,6 +97,25 @@
       "categoryId": null,
       "notes": null,
       "personId": null,
+      "paidByPersonId": null,
+      "repaymentDismissed": false,
+      "splitLines": []
+    },
+    {
+      "id": "txn-6",
+      "accountId": "manual",
+      "source": "manual",
+      "date": "2026-03-09",
+      "amountCents": -300,
+      "payee": "Synthetic Market",
+      "bankDescription": "SYNTHETIC",
+      "merchantName": null,
+      "pending": false,
+      "categoryId": "cat-food",
+      "notes": null,
+      "personId": null,
+      "paidByPersonId": "person-1",
+      "repaymentDismissed": false,
       "splitLines": []
     }
   ],
@@ -98,6 +125,7 @@
       "institutionName": "Synthetic Credit Union"
     }
   ],
-  "owedToYouCents": 500,
+  "owedToYouCents": 200,
+  "youOweCents": 0,
   "repaymentSuggestions": 1
 }

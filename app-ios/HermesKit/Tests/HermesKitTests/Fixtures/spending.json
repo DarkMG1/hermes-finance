@@ -1,12 +1,12 @@
 {
   "from": "2026-03-01",
   "toExclusive": "2026-04-01",
-  "totalCents": 3750,
+  "totalCents": 4050,
   "categories": [
     {
       "categoryId": "cat-food",
       "name": "Synthetic Food",
-      "spentCents": 3750
+      "spentCents": 4050
     }
   ]
 }

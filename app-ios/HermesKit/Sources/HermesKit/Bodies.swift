@@ -12,25 +12,34 @@ public struct PatchTransactionBody: Encodable, Sendable, Equatable {
     public var notes: FieldUpdate<String>
     /// Setting a person clears the category on the server, and setting a category clears the person.
     public var personId: FieldUpdate<String>
+    /// Manual rows only: someone else paid; it stays the owner's spending.
+    public var paidByPersonId: FieldUpdate<String>
+    public var repaymentDismissed: Bool?
 
     public init(categoryId: FieldUpdate<String> = .unchanged, payee: FieldUpdate<String> = .unchanged, notes: FieldUpdate<String> = .unchanged,
-                personId: FieldUpdate<String> = .unchanged) {
+                personId: FieldUpdate<String> = .unchanged, paidByPersonId: FieldUpdate<String> = .unchanged, repaymentDismissed: Bool? = nil) {
         self.categoryId = categoryId
         self.payee = payee
         self.notes = notes
         self.personId = personId
+        self.paidByPersonId = paidByPersonId
+        self.repaymentDismissed = repaymentDismissed
     }
 
-    public var isEmpty: Bool { categoryId == .unchanged && payee == .unchanged && notes == .unchanged && personId == .unchanged }
+    public var isEmpty: Bool {
+        categoryId == .unchanged && payee == .unchanged && notes == .unchanged && personId == .unchanged && paidByPersonId == .unchanged
+            && repaymentDismissed == nil
+    }
 
-    private enum Keys: String, CodingKey { case categoryId, payee, notes, personId }
+    private enum Keys: String, CodingKey { case categoryId, payee, notes, personId, paidByPersonId, repaymentDismissed }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: Keys.self)
-        for (key, update) in [(Keys.categoryId, categoryId), (.payee, payee), (.notes, notes), (.personId, personId)] {
+        for (key, update) in [(Keys.categoryId, categoryId), (.payee, payee), (.notes, notes), (.personId, personId), (.paidByPersonId, paidByPersonId)] {
             guard case .set(let value) = update else { continue }
             if let value { try container.encode(value, forKey: key) } else { try container.encodeNil(forKey: key) }
         }
+        try container.encodeIfPresent(repaymentDismissed, forKey: .repaymentDismissed)
     }
 }
 
@@ -87,13 +96,16 @@ public struct CreateTransactionBody: Encodable, Sendable, Equatable {
     public let payee: String
     public let categoryId: String?
     public let notes: String?
+    /// Someone else paid this; the amount is the owner's share.
+    public let paidByPersonId: String?
 
-    public init(date: String, amountCents: Int, payee: String, categoryId: String?, notes: String?) {
+    public init(date: String, amountCents: Int, payee: String, categoryId: String?, notes: String?, paidByPersonId: String? = nil) {
         self.date = date
         self.amountCents = amountCents
         self.payee = payee
         self.categoryId = categoryId
         self.notes = notes
+        self.paidByPersonId = paidByPersonId
     }
 }
 

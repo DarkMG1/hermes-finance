@@ -6,6 +6,7 @@ struct ActivityView: View {
     @State private var query = ""
     @State private var accountId: String?
     @State private var categoryId: String?
+    @State private var personId: String?
     @State private var items: [LedgerTransaction] = []
     @State private var cursor: String?
     @State private var loading = false
@@ -66,7 +67,7 @@ struct ActivityView: View {
     // investment accounts have no transactions; they only count toward net worth
     private var filterAccounts: [Account] { model.accounts.filter { !$0.hidden && $0.type != "investment" } }
 
-    private var filterKey: String { "\(query)|\(accountId ?? "")|\(categoryId ?? "")" }
+    private var filterKey: String { "\(query)|\(accountId ?? "")|\(categoryId ?? "")|\(personId ?? "")" }
 
     private var filterMenu: some View {
         Menu {
@@ -78,8 +79,12 @@ struct ActivityView: View {
                 Text("All categories").tag(String?.none)
                 ForEach(model.categories.filter { !$0.hidden }) { category in Text(category.name).tag(Optional(category.id)) }
             }
+            Picker("Person", selection: $personId) {
+                Text("Everyone").tag(String?.none)
+                ForEach(model.people.filter { !$0.archived || $0.id == personId }) { person in Text(person.name).tag(Optional(person.id)) }
+            }
         } label: {
-            let active = accountId != nil || categoryId != nil
+            let active = accountId != nil || categoryId != nil || personId != nil
             Label("Filter", systemImage: active ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
         }
     }
@@ -90,7 +95,7 @@ struct ActivityView: View {
         let gen = generation
         loading = true
         defer { if gen == generation { loading = false } }
-        let request = TransactionQuery(accountId: accountId, categoryId: categoryId, q: query, cursor: reset ? nil : cursor)
+        let request = TransactionQuery(accountId: accountId, categoryId: categoryId, q: query, cursor: reset ? nil : cursor, personId: personId)
         do {
             let page = try await reader.read("/v1/transactions", query: request.items, as: TransactionPage.self)
             guard gen == generation, !Task.isCancelled else { return }

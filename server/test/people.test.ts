@@ -16,31 +16,6 @@ function setup() {
   return { deps, app, get, send };
 }
 
-test('repayments pay the oldest items first; a removed repayment re-opens them; overpaying puts the person ahead', async () => {
-  const { deps, get } = setup();
-  seedTxn(deps.db, { id: 'dinner', accountId: 'a1', date: '2026-03-01', amountCents: -6000 });
-  seedSplit(deps.db, { id: '00-a', transactionId: 'dinner', amountCents: -3000, categoryId: 'c-food' });
-  seedSplit(deps.db, { id: '01-b', transactionId: 'dinner', amountCents: -3000, categoryId: null, personId: 'p1' });
-  seedTxn(deps.db, { id: 'tickets', accountId: 'a1', date: '2026-03-05', amountCents: -2000, personId: 'p1' });
-  seedTxn(deps.db, { id: 'snacks', accountId: 'a1', date: '2026-03-09', amountCents: -1000, personId: 'p1' });
-  seedTxn(deps.db, { id: 'zelle', accountId: 'a1', date: '2026-03-10', amountCents: 4000, personId: 'p1', source: 'plaid', sourceId: 'z1' });
-  const d = await get('/v1/people/p1');
-  assert.equal(d.person.balanceCents, 2000);
-  assert.deepEqual(d.owed.map((o: { transactionId: string; status: string; paidCents: number }) => [o.transactionId, o.status, o.paidCents]),
-    [['snacks', 'open', 0], ['tickets', 'partial', 1000], ['dinner', 'paid', 3000]], 'newest first; settled oldest first');
-  assert.equal(d.owed[2].lineId, '01-b');
-  assert.deepEqual(d.repayments.map((r: { transactionId: string }) => r.transactionId), ['zelle']);
-  deps.db.prepare("UPDATE transactions SET removed_at = 'x' WHERE id = 'zelle'").run();
-  const removed = await get('/v1/people/p1');
-  assert.equal(removed.person.balanceCents, 6000);
-  assert.ok(removed.owed.every((o: { status: string }) => o.status === 'open'));
-  seedTxn(deps.db, { id: 'big', accountId: 'a1', date: '2026-03-11', amountCents: 7000, personId: 'p1' });
-  const ahead = await get('/v1/people/p1');
-  assert.equal(ahead.person.balanceCents, -1000);
-  assert.ok(ahead.owed.every((o: { status: string }) => o.status === 'paid'));
-  assert.equal((await get('/v1/people/nope')).code, 'NOT_FOUND');
-});
-
 test('people: create, list by balance, archive only when settled, archived people hidden unless all=1', async () => {
   const { deps, get, send } = setup();
   seedTxn(deps.db, { id: 'lent', accountId: 'a1', date: '2026-03-01', amountCents: -500, personId: 'p2' });
@@ -206,4 +181,127 @@ test('a chosen repayment account replaces the checking default; clearing it rest
   assert.equal((await send('PUT', '/v1/people/settings', 'st-4', { repaymentAccountId: 'card' })).statusCode, 400, 'repayments land in a bank account');
   assert.equal((await send('PUT', '/v1/people/settings', 'st-3', { repaymentAccountId: null })).statusCode, 200);
   assert.deepEqual(await ids(), ['in-a1', 'in-cash']);
+});
+
+test('they paid: a manual row with a payer; create, edit, switch from For, refuse bank, split and archived payers', async () => {
+  const { deps, send } = setup();
+  const created = await send('POST', '/v1/transactions', 'tp-1',
+    { date: '2026-03-03', amountCents: -6000, payee: 'Synthetic Market', categoryId: 'c-food', paidByPersonId: 'p1' });
+  assert.equal(created.statusCode, 201);
+  const t = created.json();
+  assert.deepEqual([t.paidByPersonId, t.personId, t.categoryId, t.repaymentDismissed], ['p1', null, 'c-food', false]);
+  assert.equal((await send('POST', '/v1/transactions', 'tp-2', { date: '2026-03-03', amountCents: 6000, payee: 'X', paidByPersonId: 'p1' })).statusCode,
+    400, 'a payer covers money out');
+  assert.equal((await send('POST', '/v1/transactions', 'tp-3', { date: '2026-03-03', amountCents: -100, payee: 'X', paidByPersonId: 'nope' })).statusCode, 400);
+
+  const recat = await send('PATCH', `/v1/transactions/${t.id}`, 'tp-4', { categoryId: null });
+  assert.deepEqual([recat.statusCode, recat.json().paidByPersonId, recat.json().personId], [200, 'p1', null], 'editing keeps the payer');
+  assert.equal((await send('PATCH', `/v1/transactions/${t.id}`, 'tp-5', { personId: 'p2' })).statusCode, 400, 'a payer row is never tagged');
+  assert.equal((await send('PATCH', `/v1/transactions/${t.id}`, 'tp-6', { personId: 'p2', paidByPersonId: 'p1' })).statusCode, 400);
+  assert.equal((await send('PATCH', `/v1/transactions/${t.id}`, 'tp-7', { paidByPersonId: 'p2' })).json().paidByPersonId, 'p2');
+
+  const forRow = (await send('POST', '/v1/transactions', 'tp-8', { date: '2026-03-04', amountCents: -800, payee: 'Synthetic Lamp' })).json();
+  await send('PATCH', `/v1/transactions/${forRow.id}`, 'tp-9', { personId: 'p1' });
+  const switched = await send('PATCH', `/v1/transactions/${forRow.id}`, 'tp-10', { personId: null, paidByPersonId: 'p1' });
+  assert.deepEqual([switched.statusCode, switched.json().personId, switched.json().paidByPersonId], [200, null, 'p1'], 'For → Paid by in one PATCH');
+
+  const split = await send('PUT', `/v1/transactions/${t.id}/splits`, 'tp-11',
+    { lines: [{ amountCents: -3000, categoryId: null }, { amountCents: -3000, categoryId: null }] });
+  assert.deepEqual([split.statusCode, split.json().code], [409, 'PAID_BY_PERSON']);
+  const s = (await send('POST', '/v1/transactions', 'tp-12', { date: '2026-03-05', amountCents: -1000, payee: 'Synthetic Split' })).json();
+  await send('PUT', `/v1/transactions/${s.id}/splits`, 'tp-13', { lines: [{ amountCents: -500, categoryId: null }, { amountCents: -500, categoryId: null }] });
+  assert.equal((await send('PATCH', `/v1/transactions/${s.id}`, 'tp-14', { paidByPersonId: 'p1' })).json().code, 'SPLIT_TRANSACTION');
+  seedTxn(deps.db, { id: 'bank', accountId: 'a1', date: '2026-03-03', amountCents: -500, source: 'plaid', sourceId: 'b1' });
+  const bank = await send('PATCH', '/v1/transactions/bank', 'tp-15', { paidByPersonId: 'p1' });
+  assert.deepEqual([bank.statusCode, bank.json().code], [409, 'BANK_TRANSACTION']);
+  const income = (await send('POST', '/v1/transactions', 'tp-16', { date: '2026-03-05', amountCents: 900, payee: 'Synthetic Refund' })).json();
+  assert.equal((await send('PATCH', `/v1/transactions/${income.id}`, 'tp-17', { paidByPersonId: 'p1' })).statusCode, 400);
+
+  deps.db.prepare("UPDATE people SET archived = 1 WHERE id = 'p2'").run();
+  assert.equal((await send('PATCH', `/v1/transactions/${t.id}`, 'tp-18', { notes: 'still fine' })).statusCode, 200);
+  assert.equal((await send('PATCH', `/v1/transactions/${t.id}`, 'tp-19', { paidByPersonId: 'p2' })).statusCode, 200,
+    'an archived payer already on the row stays valid');
+  assert.equal((await send('PATCH', `/v1/transactions/${forRow.id}`, 'tp-20', { paidByPersonId: 'p2' })).statusCode, 400,
+    'a new archived payer is refused');
+});
+
+test('a dismissed suggestion can be restored through the transaction', async () => {
+  const { deps, get, send } = setup();
+  seedTxn(deps.db, { id: 'dep', accountId: 'a1', date: '2026-03-08', amountCents: 500, bankDescription: 'ZELLE FROM SOMEONE',
+    source: 'plaid', sourceId: 'd1', plaidCategory: 'TRANSFER_IN_ACCOUNT_TRANSFER' });
+  await send('POST', '/v1/people/suggestions/dep/dismiss', 'ud-1', {});
+  assert.equal((await get('/v1/transactions/dep')).repaymentDismissed, true);
+  const restored = await send('PATCH', '/v1/transactions/dep', 'ud-2', { repaymentDismissed: false });
+  assert.deepEqual([restored.statusCode, restored.json().repaymentDismissed], [200, false]);
+  assert.equal((await get('/v1/people/suggestions')).length, 1);
+});
+
+test('the feed: each entry with its effect and the balance after it, newest first, settled where it reaches 0', async () => {
+  const { deps, get } = setup();
+  seedTxn(deps.db, { id: 'supplies', accountId: 'a1', date: '2026-03-01', amountCents: -4000 });
+  seedSplit(deps.db, { id: '00-a', transactionId: 'supplies', amountCents: -2000, categoryId: 'c-food' });
+  seedSplit(deps.db, { id: '01-b', transactionId: 'supplies', amountCents: -2000, categoryId: null, personId: 'p1' });
+  seedTxn(deps.db, { id: 'groceries', accountId: 'manual', date: '2026-03-03', amountCents: -6000, categoryId: 'c-food', paidByPersonId: 'p1' });
+  seedTxn(deps.db, { id: 'settle', accountId: 'a1', date: '2026-03-31', amountCents: -4000, personId: 'p1', source: 'plaid', sourceId: 'v1' });
+  seedTxn(deps.db, { id: 'zelle', accountId: 'a1', date: '2026-04-02', amountCents: 1500, personId: 'p1', source: 'plaid', sourceId: 'z1' });
+  const d = await get('/v1/people/p1');
+  assert.equal(d.person.balanceCents, -1500);
+  assert.deepEqual(d.history.map((h: { transactionId: string; lineId: string | null; kind: string; effectCents: number;
+    balanceAfterCents: number; settled: boolean }) => [h.transactionId, h.lineId, h.kind, h.effectCents, h.balanceAfterCents, h.settled]), [
+    ['zelle', null, 'fromThem', -1500, -1500, false],
+    ['settle', null, 'forThem', 4000, 0, true],
+    ['groceries', null, 'paidByThem', -6000, -4000, false],
+    ['supplies', '01-b', 'forThem', 2000, 2000, false],
+  ]);
+  assert.equal((await get('/v1/spending?period=month&date=2026-03')).totalCents, 8000, 'my half of supplies plus my share of groceries');
+  const home = await get('/v1/home');
+  assert.deepEqual([home.owedToYouCents, home.youOweCents], [0, 1500]);
+  deps.db.prepare("DELETE FROM transactions WHERE id = 'groceries'").run();
+  assert.equal((await get('/v1/people/p1')).person.balanceCents, 4500, 'a deleted they-paid row leaves balance and feed');
+  deps.db.prepare("UPDATE transactions SET removed_at = 'x' WHERE id = 'settle'").run();
+  assert.equal((await get('/v1/people/p1')).person.balanceCents, 500);
+  assert.equal((await get('/v1/people/nope')).code, 'NOT_FOUND');
+});
+
+test('people come owed-to-you first, then people you owe, then settled', async () => {
+  const { deps, get } = setup();
+  seedPerson(deps.db, { id: 'p3', name: 'Synthetic Moss' });
+  seedPerson(deps.db, { id: 'p4', name: 'Synthetic Fern' });
+  seedTxn(deps.db, { id: 'a', accountId: 'a1', date: '2026-03-01', amountCents: -500, personId: 'p2' });
+  seedTxn(deps.db, { id: 'b', accountId: 'manual', date: '2026-03-01', amountCents: -900, categoryId: 'c-food', paidByPersonId: 'p3' });
+  seedTxn(deps.db, { id: 'c', accountId: 'manual', date: '2026-03-01', amountCents: -100, categoryId: 'c-food', paidByPersonId: 'p1' });
+  seedTxn(deps.db, { id: 'd', accountId: 'manual', date: '2026-03-01', amountCents: 300, paidByPersonId: 'p4' });
+  seedTxn(deps.db, { id: 'e', accountId: 'a1', date: '2026-03-01', amountCents: -200, source: 'plaid', sourceId: 'e1', paidByPersonId: 'p4' });
+  assert.deepEqual((await get('/v1/people')).map((p: { id: string; balanceCents: number }) => [p.id, p.balanceCents]),
+    [['p2', 500], ['p3', -900], ['p1', -100], ['p4', 0]], 'a payer row that is not manual money out moves nothing');
+  const home = await get('/v1/home');
+  assert.deepEqual([home.owedToYouCents, home.youOweCents], [500, 1000]);
+});
+
+test('a hidden repayment account falls back to every checking account', async () => {
+  const { deps, get, send } = setup();
+  seedAccount(deps.db, { id: 'cash', subtype: 'checking' });
+  const dep = (id: string, accountId: string) => seedTxn(deps.db, { id, accountId, date: '2026-03-08', amountCents: 500,
+    bankDescription: 'ZELLE FROM SOMEONE', source: 'plaid', sourceId: id, plaidCategory: 'TRANSFER_IN_ACCOUNT_TRANSFER' });
+  dep('in-a1', 'a1');
+  dep('in-cash', 'cash');
+  const ids = async () => (await get('/v1/people/suggestions')).map((x: { transaction: { id: string } }) => x.transaction.id).sort();
+  await send('PUT', '/v1/people/settings', 'hf-1', { repaymentAccountId: 'cash' });
+  assert.deepEqual(await ids(), ['in-cash']);
+  deps.db.prepare("UPDATE accounts SET hidden = 1 WHERE id = 'cash'").run();
+  assert.deepEqual(await ids(), ['in-a1', 'in-cash']);
+});
+
+test('activity filters by person and finds people by name', async () => {
+  const { deps, get } = setup();
+  seedTxn(deps.db, { id: 'tag', accountId: 'a1', date: '2026-03-01', amountCents: -500, personId: 'p1' });
+  seedTxn(deps.db, { id: 'paid', accountId: 'manual', date: '2026-03-02', amountCents: -700, categoryId: 'c-food', paidByPersonId: 'p1' });
+  seedTxn(deps.db, { id: 'split', accountId: 'a1', date: '2026-03-03', amountCents: -1000 });
+  seedSplit(deps.db, { id: '00-a', transactionId: 'split', amountCents: -500, categoryId: 'c-food' });
+  seedSplit(deps.db, { id: '01-b', transactionId: 'split', amountCents: -500, categoryId: null, personId: 'p1' });
+  seedTxn(deps.db, { id: 'other', accountId: 'a1', date: '2026-03-04', amountCents: -300, personId: 'p2' });
+  const ids = async (qs: string) => (await get(`/v1/transactions?${qs}`)).transactions.map((t: { id: string }) => t.id);
+  assert.deepEqual(await ids('personId=p1'), ['split', 'paid', 'tag']);
+  assert.deepEqual(await ids('q=quill'), ['split', 'paid', 'tag']);
+  assert.deepEqual(await ids('q=wren'), ['other']);
 });
