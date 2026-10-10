@@ -57,7 +57,7 @@ struct ActivityView: View {
             }
         }
         .sheet(item: $selected) { transaction in
-            TransactionDetailSheet(transaction: transaction) { await load(reset: true) }
+            TransactionDetailSheet(transaction: transaction) { await refresh(transaction.id) }
         }
         .sheet(isPresented: $adding) {
             AddTransactionSheet { await load(reset: true) }
@@ -86,6 +86,19 @@ struct ActivityView: View {
         } label: {
             let active = accountId != nil || categoryId != nil || personId != nil
             Label("Filter", systemImage: active ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+        }
+    }
+
+    /// Re-reads one edited row in place: reloading from the first page drops the later pages and jumps the list.
+    private func refresh(_ id: String) async {
+        guard let reader = model.reader else { return }
+        do {
+            let fresh = try await reader.read("/v1/transactions/\(id)", as: LedgerTransaction.self).value
+            if let index = items.firstIndex(where: { $0.id == id }) { items[index] = fresh }
+        } catch ClientError.api(status: 404, _) {
+            items.removeAll { $0.id == id }
+        } catch {
+            self.error = errorMessage(error)
         }
     }
 

@@ -37,10 +37,13 @@ struct PersonView: View {
             }
         }
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                if case .loaded(let loaded) = state, !loaded.value.person.archived {
-                    Button("They paid…") { addingPaid = loaded.value.person }
-                }
+            // separate items so iOS 26 gives each button its own glass capsule; always present so it never pops in after loading
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("They paid…") { if let person = payer { addingPaid = person } }
+                    .disabled(payer == nil)
+            }
+            ToolbarSpacer(.fixed, placement: .topBarTrailing)
+            ToolbarItem(placement: .topBarTrailing) {
                 Button("Edit") { if case .loaded(let loaded) = state { editing = loaded.value.person } }
             }
         }
@@ -55,6 +58,12 @@ struct PersonView: View {
         .sheet(item: $addingPaid) { person in
             TheyPaidSheet(person: person) { await load() }
         }
+    }
+
+    /// The loaded person, unless archived: the server refuses a new archived payer.
+    private var payer: Person? {
+        guard case .loaded(let loaded) = state, !loaded.value.person.archived else { return nil }
+        return loaded.value.person
     }
 
     @ViewBuilder private func entryView(_ entry: HistoryEntry) -> some View {

@@ -37,4 +37,13 @@ targets:
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_PREVIEWS: YES
-    scheme: {}
+schemes:
+  Hermes:
+    build:
+      targets:
+        Hermes: all
+    # Release by default: the Debug build lags on keyboard focus. Switch Run back to Debug when you need the debugger.
+    run:
+      config: Release
+    archive:
+      config: Release

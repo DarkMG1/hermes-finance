@@ -22,7 +22,6 @@ struct ConnectView: View {
                 Section {
                     HButton(title: "Connect", busy: busy) { Task { await connect() } }
                         .disabled(url.isEmpty || token.isEmpty)
-                        .listRowBackground(Color.clear)
                 }
             }
             .themedForm()
