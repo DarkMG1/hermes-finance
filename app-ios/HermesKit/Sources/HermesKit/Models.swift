@@ -120,6 +120,25 @@ public struct PersonDetail: Codable, Sendable {
     public let repayments: [PersonItem]
 }
 
+/// Where repayments land; nil means every checking account.
+public struct PeopleSettings: Codable, Sendable, Equatable {
+    public let repaymentAccountId: String?
+
+    public init(repaymentAccountId: String?) {
+        self.repaymentAccountId = repaymentAccountId
+    }
+
+    private enum CodingKeys: String, CodingKey { case repaymentAccountId }
+
+    // the server needs the key even when clearing it
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let repaymentAccountId { try container.encode(repaymentAccountId, forKey: .repaymentAccountId) } else {
+            try container.encodeNil(forKey: .repaymentAccountId)
+        }
+    }
+}
+
 public struct RepaymentSuggestion: Codable, Sendable, Identifiable, Hashable {
     public let transaction: LedgerTransaction
     public let personId: String?

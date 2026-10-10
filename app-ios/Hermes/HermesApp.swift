@@ -18,6 +18,11 @@ struct HermesApp: App {
     @State private var model = AppModel()
     @AppStorage("appearance") private var appearance = Appearance.system
 
+    init() {
+        // an x to clear a single-line text field (payee, account name, ...)
+        UITextField.appearance().clearButtonMode = .whileEditing
+    }
+
     var body: some Scene {
         WindowGroup {
             Group {

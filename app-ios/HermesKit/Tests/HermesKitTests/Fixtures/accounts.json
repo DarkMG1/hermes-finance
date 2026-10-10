@@ -17,7 +17,7 @@
     "name": "Account acct-checking",
     "mask": null,
     "type": "depository",
-    "subtype": null,
+    "subtype": "checking",
     "balanceCurrentCents": 250000,
     "balanceAvailableCents": null,
     "balanceAt": null,

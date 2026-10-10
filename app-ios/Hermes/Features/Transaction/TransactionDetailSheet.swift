@@ -16,7 +16,8 @@ struct TransactionDetailSheet: View {
     @State private var error: String?
     @State private var busy = false
     @State private var confirmDelete = false
-    @State private var splitting = false
+    @State private var splitting: LedgerTransaction?
+    @State private var savedForSplit = false
 
     var body: some View {
         Sheet(
@@ -56,9 +57,9 @@ struct TransactionDetailSheet: View {
                     Text("The bank changed this amount, so the split no longer adds up. Edit the split to fix it.")
                         .textStyle(.caption, color: Palette.loss)
                 }
-                // Unsaved edits would be lost when the split saves and this sheet closes, so save them first.
-                Button(transaction.splitLines.isEmpty ? "Split transaction" : "Edit split") { splitting = true }
-                    .disabled(!patch.isEmpty || writes.unresolved || deleteWrites.unresolved)
+                // unsaved edits would be lost when the split saves and this sheet closes, so the button saves them first
+                Button(transaction.splitLines.isEmpty ? "Split transaction" : "Edit split") { Task { await split() } }
+                    .disabled(busy || payeeInvalid || deleteWrites.unresolved)
             }
             if transaction.source == "manual" {
                 Section {
@@ -76,12 +77,19 @@ struct TransactionDetailSheet: View {
             categoryId = transaction.categoryId
             personId = transaction.personId
         }
-        .sheet(isPresented: $splitting) {
-            SplitSheet(transaction: transaction) {
+        .sheet(item: $splitting, onDismiss: {
+            // the edits were saved but the split was cancelled: this sheet's copy is stale, so close it
+            if savedForSplit {
+                busy = true
+                Task { await onChange(); dismiss() }
+            }
+        }, content: { saved in
+            SplitSheet(transaction: saved) {
+                savedForSplit = false
                 await onChange()
                 dismiss()
             }
-        }
+        })
     }
 
     private var splitDrifted: Bool {
@@ -115,6 +123,22 @@ struct TransactionDetailSheet: View {
         } catch {
             writes.didFail(error)
             self.error = writes.unresolved ? "Couldn't confirm the save. Tap Save to retry." : errorMessage(error)
+        }
+    }
+
+    private func split() async {
+        guard !patch.isEmpty else { splitting = transaction; return }
+        guard let client = model.client else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let saved = try await client.patchTransaction(id: transaction.id, body: patch, idempotencyKey: writes.key)
+            writes.didSucceed()
+            savedForSplit = true
+            splitting = saved
+        } catch {
+            writes.didFail(error)
+            self.error = writes.unresolved ? "Couldn't confirm the save. Try again." : errorMessage(error)
         }
     }
 

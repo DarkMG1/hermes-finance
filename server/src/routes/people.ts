@@ -1,11 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
-import { CreatePersonBody, ListPeopleQuery, PatchPersonBody } from '@hermes/shared';
+import { CreatePersonBody, ListPeopleQuery, PatchPersonBody, PeopleSettings } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
-import { getPerson, listPeople, suggestions } from '../people.ts';
+import { getPerson, listPeople, peopleSettings, suggestions } from '../people.ts';
 
 export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
   const { db } = deps;
@@ -13,6 +13,35 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
   app.get('/v1/people', async (req) => listPeople(db, parseBody(ListPeopleQuery, req.query).all === '1'));
 
   app.get('/v1/people/suggestions', async () => suggestions(db, deps.now()));
+
+  app.post<{ Params: { id: string } }>('/v1/people/suggestions/:id/dismiss', async (req, reply) => {
+    const r = idempotentWrite(deps, req, () => {
+      const res = db.prepare('UPDATE transactions SET repayment_dismissed = 1, updated_at = ? WHERE id = ? AND removed_at IS NULL')
+        .run(deps.now().toISOString(), req.params.id);
+      if (!res.changes) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      return { status: 200, body: { ok: true } };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+
+  app.get('/v1/people/settings', async () => peopleSettings(db));
+
+  app.put('/v1/people/settings', async (req, reply) => {
+    const body = parseBody(PeopleSettings, req.body);
+    const r = idempotentWrite(deps, req, () => {
+      if (body.repaymentAccountId === null) {
+        db.prepare("DELETE FROM settings WHERE key = 'repayment_account_id'").run();
+      } else {
+        if (!db.prepare("SELECT 1 FROM accounts WHERE id = ? AND type = 'depository'").get(body.repaymentAccountId)) {
+          throw new ApiError(400, 'INVALID_REQUEST', 'repaymentAccountId: not a bank account', 'repaymentAccountId');
+        }
+        db.prepare("INSERT INTO settings (key, value) VALUES ('repayment_account_id', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value")
+          .run(body.repaymentAccountId);
+      }
+      return { status: 200, body: peopleSettings(db) };
+    });
+    return reply.code(r.status).send(r.body);
+  });
 
   app.get<{ Params: { id: string } }>('/v1/people/:id', async (req) => {
     const detail = getPerson(db, req.params.id);

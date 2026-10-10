@@ -5,7 +5,7 @@ import { makeTestDeps, AUTH, seedAccount, seedCategory, seedPerson, seedSplit, s
 
 function setup() {
   const { deps } = makeTestDeps();
-  seedAccount(deps.db, { id: 'a1' });
+  seedAccount(deps.db, { id: 'a1', subtype: 'checking' });
   seedCategory(deps.db, { id: 'c-food', name: 'Food' });
   seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill', matchText: 'SYNTHETIC QUILLON' });
   seedPerson(deps.db, { id: 'p2', name: 'Synthetic Wren' });
@@ -157,14 +157,53 @@ test('an archived person whose balance reopens stays listed and is never suggest
   assert.equal(un.json().archived, false);
 });
 
-test('with no non-archived people nothing is suggested', async () => {
+test('suggestions come only from checking deposits, and show even before anyone is added', async () => {
   const { deps } = makeTestDeps();
-  seedAccount(deps.db, { id: 'a1' });
+  seedAccount(deps.db, { id: 'a1', subtype: 'checking' });
+  seedAccount(deps.db, { id: 'card', type: 'credit', subtype: 'credit card' });
+  seedAccount(deps.db, { id: 'sav', subtype: 'savings' });
   seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill', archived: true });
-  seedTxn(deps.db, { id: 'dep', accountId: 'a1', date: '2026-03-08', amountCents: 500, bankDescription: 'ZELLE FROM SOMEONE',
-    source: 'plaid', sourceId: 'd1', plaidCategory: 'TRANSFER_IN_ACCOUNT_TRANSFER' });
+  const dep = (id: string, accountId: string, desc: string) => seedTxn(deps.db, { id, accountId, date: '2026-03-08', amountCents: 500,
+    bankDescription: desc, source: 'plaid', sourceId: id, plaidCategory: 'TRANSFER_IN_ACCOUNT_TRANSFER' });
+  dep('dep', 'a1', 'ZELLE FROM SOMEONE');
+  dep('card-payment', 'card', 'SYNTHETIC CARD PAYMENT');
+  dep('sav-in', 'sav', 'TRANSFER FROM CHECKING');
   const app = buildApp(deps);
   const get = async (url: string) => (await app.inject({ method: 'GET', url, headers: AUTH })).json();
+  assert.deepEqual((await get('/v1/people/suggestions')).map((x: { transaction: { id: string }; personId: string | null }) =>
+    [x.transaction.id, x.personId]), [['dep', null]]);
+  assert.equal((await get('/v1/home')).repaymentSuggestions, 1);
+});
+
+test('a dismissed deposit is never suggested again; dismissing an unknown row is 404', async () => {
+  const { deps, get, send } = setup();
+  seedTxn(deps.db, { id: 'dep', accountId: 'a1', date: '2026-03-08', amountCents: 500, bankDescription: 'ZELLE FROM SOMEONE',
+    source: 'plaid', sourceId: 'd1', plaidCategory: 'TRANSFER_IN_ACCOUNT_TRANSFER' });
+  assert.equal((await get('/v1/people/suggestions')).length, 1);
+  assert.equal((await send('POST', '/v1/people/suggestions/dep/dismiss', 'ds-1', {})).statusCode, 200);
   assert.deepEqual(await get('/v1/people/suggestions'), []);
   assert.equal((await get('/v1/home')).repaymentSuggestions, 0);
+  assert.equal((await send('POST', '/v1/people/suggestions/nope/dismiss', 'ds-2', {})).statusCode, 404);
+});
+
+test('a chosen repayment account replaces the checking default; clearing it restores the default', async () => {
+  const { deps, get, send } = setup();
+  seedAccount(deps.db, { id: 'cash', subtype: 'checking' });
+  seedAccount(deps.db, { id: 'other' });
+  const dep = (id: string, accountId: string) => seedTxn(deps.db, { id, accountId, date: '2026-03-08', amountCents: 500,
+    bankDescription: 'ZELLE FROM SOMEONE', source: 'plaid', sourceId: id, plaidCategory: 'TRANSFER_IN_ACCOUNT_TRANSFER' });
+  dep('in-a1', 'a1');
+  dep('in-cash', 'cash');
+  dep('in-other', 'other');
+  const ids = async () => (await get('/v1/people/suggestions')).map((x: { transaction: { id: string } }) => x.transaction.id).sort();
+  assert.deepEqual(await get('/v1/people/settings'), { repaymentAccountId: null });
+  assert.deepEqual(await ids(), ['in-a1', 'in-cash'], 'unset: every checking account');
+  const set = await send('PUT', '/v1/people/settings', 'st-1', { repaymentAccountId: 'a1' });
+  assert.deepEqual([set.statusCode, set.json()], [200, { repaymentAccountId: 'a1' }]);
+  assert.deepEqual(await ids(), ['in-a1']);
+  assert.equal((await send('PUT', '/v1/people/settings', 'st-2', { repaymentAccountId: 'nope' })).statusCode, 400);
+  seedAccount(deps.db, { id: 'card', type: 'credit', subtype: 'credit card' });
+  assert.equal((await send('PUT', '/v1/people/settings', 'st-4', { repaymentAccountId: 'card' })).statusCode, 400, 'repayments land in a bank account');
+  assert.equal((await send('PUT', '/v1/people/settings', 'st-3', { repaymentAccountId: null })).statusCode, 200);
+  assert.deepEqual(await ids(), ['in-a1', 'in-cash']);
 });

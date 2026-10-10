@@ -1,4 +1,4 @@
-import type { OwedItem, Person, PersonDetail, PersonItem, RepaymentSuggestion } from '@hermes/shared';
+import type { OwedItem, PeopleSettings, Person, PersonDetail, PersonItem, RepaymentSuggestion } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
 import { TXN_COLS, rowToTransaction, type TxnRow } from './ledger.ts';
@@ -66,12 +66,15 @@ const SUGGESTION_DAYS = 60;
 export function suggestions(db: Db, now: Date): RepaymentSuggestion[] {
   const since = new Date(now.getTime() - SUGGESTION_DAYS * 86_400_000).toISOString().slice(0, 10);
   const people = listPeople(db, false).filter((p) => !p.archived);
-  if (people.length === 0) return [];
   const openLeft = new Map(people.map((p) => [p.id,
     (getPerson(db, p.id)?.owed ?? []).filter((o) => o.status !== 'paid').map((o) => -o.amountCents - o.paidCents)]));
   const rows = db.prepare(`SELECT ${TXN_COLS}, plaid_category FROM transactions t
      WHERE removed_at IS NULL AND person_id IS NULL AND category_id IS NULL AND amount_cents > 0 AND date >= ?
        AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
+       AND repayment_dismissed = 0
+       -- repayments land in the owner's chosen account, or any checking account; card credits (bill payments) never are
+       AND account_id IN (SELECT id FROM accounts WHERE COALESCE(id = (SELECT value FROM settings WHERE key = 'repayment_account_id'),
+                                                                 subtype = 'checking'))
      ORDER BY date DESC, id DESC`).all(since) as (TxnRow & { plaid_category: string | null })[];
   const out: RepaymentSuggestion[] = [];
   for (const r of rows) {
@@ -92,4 +95,9 @@ export function suggestions(db: Db, now: Date): RepaymentSuggestion[] {
 /** What everyone together owes the owner; people who are ahead count as zero. */
 export function owedToYouCents(db: Db): number {
   return listPeople(db, true).reduce((s, p) => s + Math.max(p.balanceCents, 0), 0);
+}
+
+export function peopleSettings(db: Db): PeopleSettings {
+  const row = db.prepare("SELECT value FROM settings WHERE key = 'repayment_account_id'").get() as { value: string } | undefined;
+  return { repaymentAccountId: row?.value ?? null };
 }

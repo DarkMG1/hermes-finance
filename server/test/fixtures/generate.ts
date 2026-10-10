@@ -10,7 +10,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   seedItem(deps, { id: 'item-1', plaidItemId: 'p-item-1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
   db.prepare("UPDATE items SET last_synced_at = '2026-03-15T11:00:00.000Z' WHERE id = 'item-1'").run();
   seedItem(deps, { id: 'item-2', plaidItemId: 'p-item-2', institutionName: 'Synthetic Credit Union', accessToken: 'tok2', status: 'login_required' });
-  seedAccount(db, { id: 'acct-checking', itemId: 'item-1', plaidAccountId: 'pa-1', type: 'depository', balanceCents: 250000 });
+  seedAccount(db, { id: 'acct-checking', itemId: 'item-1', plaidAccountId: 'pa-1', type: 'depository', subtype: 'checking', balanceCents: 250000 });
   seedAccount(db, { id: 'acct-card', itemId: 'item-1', plaidAccountId: 'pa-2', type: 'credit', balanceCents: 4200 });
   seedCategory(db, { id: 'cat-food', name: 'Synthetic Food' });
   seedCategory(db, { id: 'cat-pay', name: 'Synthetic Pay', isIncome: true });

@@ -56,19 +56,21 @@ struct HomeView: View {
                     }
                 }
                 let home = loaded.value
-                if home.owedToYouCents > 0 || home.repaymentSuggestions > 0 || model.people.contains(where: { !$0.archived }) {
-                    NavigationLink { WhoOwesView() } label: {
-                        Card {
-                            Text("Owed to you").textStyle(.subhead, color: Palette.secondaryText)
+                NavigationLink { WhoOwesView() } label: {
+                    Card {
+                        Text("Owed to you").textStyle(.subhead, color: Palette.secondaryText)
+                        if home.owedToYouCents == 0 && home.repaymentSuggestions == 0 {
+                            Text("Nobody owes you anything").textStyle(.body, color: Palette.secondaryText)
+                        } else {
                             MoneyText(cents: home.owedToYouCents, style: .display, colored: false)
-                            if home.repaymentSuggestions > 0 {
-                                Text(home.repaymentSuggestions == 1 ? "1 possible repayment" : "\(home.repaymentSuggestions) possible repayments")
-                                    .textStyle(.caption, color: Palette.accent)
-                            }
+                        }
+                        if home.repaymentSuggestions > 0 {
+                            Text(home.repaymentSuggestions == 1 ? "1 possible repayment" : "\(home.repaymentSuggestions) possible repayments")
+                                .textStyle(.caption, color: Palette.accent)
                         }
                     }
-                    .buttonStyle(.plain)
                 }
+                .buttonStyle(.plain)
                 Card {
                     Text("Recent").textStyle(.headline)
                     if loaded.value.recent.isEmpty {

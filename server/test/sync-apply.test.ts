@@ -370,3 +370,11 @@ test('a split deposit resizes in proportion too', () => {
   apply([page({ modified: [txn({ transactionId: 'v1', amount: -110 })] })]);
   assert.deepEqual(deps.db.prepare('SELECT amount_cents AS a FROM split_lines WHERE transaction_id = ? ORDER BY id').all(id), [{ a: 3300 }, { a: 7700 }]);
 });
+
+test('a pending deposit dismissed as not a repayment stays dismissed once it posts', () => {
+  const { deps, apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'pend1', pending: true, amount: -25 })] })]);
+  deps.db.prepare("UPDATE transactions SET repayment_dismissed = 1 WHERE source_id = 'pend1'").run();
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', amount: -25 })], removed: [{ transactionId: 'pend1' }] })]);
+  assert.equal(row('post1')?.repayment_dismissed, 1);
+});
