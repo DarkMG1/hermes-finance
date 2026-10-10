@@ -41,7 +41,7 @@ struct SplitSheet: View {
             }
             if transaction.amountCents < 0 {
                 Section("Split with someone") {
-                    NavigationLink { PersonPicker(selection: $shareWith, noneTitle: "Nobody") } label: {
+                    NavigationLink { PersonPicker(selection: $shareWith, noneTitle: "Nobody", title: "Split with") } label: {
                         LabeledContent("Person", value: shareWith.map(model.personName) ?? "Nobody")
                     }
                     Field(label: "Just mine") { TextField("0.00", text: $justMine).keyboardType(.decimalPad) }
@@ -117,7 +117,7 @@ struct SplitSheet: View {
 
     private func fillShared() {
         guard let shared = sharedLines else { return }
-        let category = lines.first?.categoryId ?? transaction.categoryId
+        let category = lines.first { $0.personId == nil }?.categoryId ?? transaction.categoryId
         lines = [Line(amount: plain(shared.yours), categoryId: category), Line(amount: plain(shared.theirs), personId: shareWith)]
     }
 

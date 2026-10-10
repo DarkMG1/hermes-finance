@@ -25,7 +25,8 @@ struct TransactionDetailSheet: View {
         Sheet(
             title: "Transaction", canSave: !patch.isEmpty && !payeeInvalid && !deleteWrites.unresolved, busy: busy,
             unresolved: writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved,
-            onCancel: { if writes.unresolved || deleteWrites.unresolved { Task { await onChange() } }; dismiss() }, onSave: { Task { await save() } }
+            onCancel: { if writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved { Task { await onChange() } }; dismiss() },
+            onSave: { Task { await save() } }
         ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
                 LabeledContent("Amount") { MoneyText(cents: transaction.amountCents) }
@@ -44,7 +45,7 @@ struct TransactionDetailSheet: View {
                     }
                     // someone else paid this manual expense: it stays your spending, and counts as their credit
                     if canHavePayer && personId == nil {
-                        NavigationLink { PersonPicker(selection: $paidById, noneTitle: "Me") } label: {
+                        NavigationLink { PersonPicker(selection: $paidById, noneTitle: "Me", title: "Paid by") } label: {
                             LabeledContent("Paid by", value: paidById.map(model.personName) ?? "Me")
                         }
                     }

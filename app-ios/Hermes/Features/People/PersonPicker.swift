@@ -7,6 +7,7 @@ struct PersonPicker: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var selection: String?
     var noneTitle = "Me"
+    var title = "For"
     @State private var adding = false
 
     var body: some View {
@@ -20,7 +21,7 @@ struct PersonPicker: View {
             }
         }
         .themedForm()
-        .navigationTitle("For")
+        .navigationTitle(title)
         .sheet(isPresented: $adding) {
             // stays on this list after adding, with the new person ticked, so two sheets never dismiss at once
             PersonSheet(person: nil) { created in if let created { selection = created.id } }

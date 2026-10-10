@@ -38,7 +38,9 @@ struct PersonView: View {
         }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button("They paid…") { if case .loaded(let loaded) = state { addingPaid = loaded.value.person } }
+                if case .loaded(let loaded) = state, !loaded.value.person.archived {
+                    Button("They paid…") { addingPaid = loaded.value.person }
+                }
                 Button("Edit") { if case .loaded(let loaded) = state { editing = loaded.value.person } }
             }
         }
@@ -102,6 +104,7 @@ struct PersonView: View {
             let loaded = try await reader.read("/v1/people/\(personId)", as: PersonDetail.self)
             guard !Task.isCancelled else { return }
             state = .loaded(loaded)
+            error = nil
         } catch {
             guard !Task.isCancelled else { return }
             state = .failed(errorMessage(error))

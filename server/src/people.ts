@@ -18,7 +18,7 @@ export const TAGGED = `
   UNION ALL
   SELECT t.paid_by_person_id, t.id, NULL, t.date, COALESCE(t.payee, t.merchant_name, t.bank_description), -t.amount_cents, 1
     FROM transactions t
-   WHERE t.paid_by_person_id IS NOT NULL AND t.removed_at IS NULL`;
+   WHERE t.paid_by_person_id IS NOT NULL AND t.removed_at IS NULL AND t.source = 'manual' AND t.amount_cents < 0`;
 
 type Tagged = { person_id: string; transaction_id: string; line_id: string | null; date: string; payee: string; amount: number; paid_by: number };
 type PersonRow = { id: string; name: string; match_text: string | null; archived: number };

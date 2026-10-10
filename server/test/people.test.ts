@@ -270,8 +270,10 @@ test('people come owed-to-you first, then people you owe, then settled', async (
   seedTxn(deps.db, { id: 'a', accountId: 'a1', date: '2026-03-01', amountCents: -500, personId: 'p2' });
   seedTxn(deps.db, { id: 'b', accountId: 'manual', date: '2026-03-01', amountCents: -900, categoryId: 'c-food', paidByPersonId: 'p3' });
   seedTxn(deps.db, { id: 'c', accountId: 'manual', date: '2026-03-01', amountCents: -100, categoryId: 'c-food', paidByPersonId: 'p1' });
+  seedTxn(deps.db, { id: 'd', accountId: 'manual', date: '2026-03-01', amountCents: 300, paidByPersonId: 'p4' });
+  seedTxn(deps.db, { id: 'e', accountId: 'a1', date: '2026-03-01', amountCents: -200, source: 'plaid', sourceId: 'e1', paidByPersonId: 'p4' });
   assert.deepEqual((await get('/v1/people')).map((p: { id: string; balanceCents: number }) => [p.id, p.balanceCents]),
-    [['p2', 500], ['p3', -900], ['p1', -100], ['p4', 0]]);
+    [['p2', 500], ['p3', -900], ['p1', -100], ['p4', 0]], 'a payer row that is not manual money out moves nothing');
   const home = await get('/v1/home');
   assert.deepEqual([home.owedToYouCents, home.youOweCents], [500, 1000]);
 });
