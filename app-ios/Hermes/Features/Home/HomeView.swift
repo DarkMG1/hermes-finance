@@ -68,11 +68,15 @@ struct HomeView: View {
                 let home = loaded.value
                 NavigationLink { WhoOwesView() } label: {
                     Card {
-                        Text("Owed to you").textStyle(.subhead, color: Palette.secondaryText)
-                        if home.owedToYouCents == 0 && home.repaymentSuggestions == 0 {
+                        Text("Who Owes Me").textStyle(.subhead, color: Palette.secondaryText)
+                        if home.owedToYouCents == 0 && home.youOweCents == 0 {
                             Text("Nobody owes you anything").textStyle(.body, color: Palette.secondaryText)
-                        } else {
-                            MoneyText(cents: home.owedToYouCents, style: .display, colored: false)
+                        }
+                        if home.owedToYouCents > 0 {
+                            LabeledContent("Owed to you") { MoneyText(cents: home.owedToYouCents, colored: false) }.textStyle(.body)
+                        }
+                        if home.youOweCents > 0 {
+                            LabeledContent("You owe") { MoneyText(cents: home.youOweCents, colored: false) }.textStyle(.body)
                         }
                         if home.repaymentSuggestions > 0 {
                             Text(home.repaymentSuggestions == 1 ? "1 possible repayment" : "\(home.repaymentSuggestions) possible repayments")

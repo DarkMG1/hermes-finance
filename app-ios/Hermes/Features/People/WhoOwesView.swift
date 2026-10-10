@@ -12,6 +12,7 @@ struct WhoOwesView: View {
     @State private var addingFor: LedgerTransaction?
     @State private var showSettled = false
     @State private var writes: [String: WriteGuard] = [:]
+    @State private var busyIds: Set<String> = []
     @State private var error: String?
 
     var body: some View {
@@ -66,8 +67,8 @@ struct WhoOwesView: View {
 
     private func personLink(_ person: Person) -> some View {
         NavigationLink { PersonView(personId: person.id) } label: {
-            ListRow(title: person.name, subtitle: person.balanceCents < 0 ? "Ahead by \(Money.format(-person.balanceCents))" : nil) {
-                MoneyText(cents: max(person.balanceCents, 0), colored: false)
+            ListRow(title: person.name, subtitle: Balance.phrase(person.balanceCents)) {
+                MoneyText(cents: abs(person.balanceCents), colored: false)
             }
         }
         .buttonStyle(.plain)
@@ -93,13 +94,14 @@ struct WhoOwesView: View {
                 }
                 Button("Not a repayment") {
                     Task {
-                        await perform("\(suggestion.id)|dismiss") { client, key in
+                        await perform("\(suggestion.id)|dismiss", lock: suggestion.id) { client, key in
                             try await client.dismissSuggestion(transactionId: suggestion.id, idempotencyKey: key)
                         }
                     }
                 }
             }
             .textStyle(.subhead, color: Palette.accent)
+            .disabled(busyIds.contains(suggestion.id))
         }
     }
 
@@ -118,20 +120,23 @@ struct WhoOwesView: View {
     }
 
     private func setRepaymentAccount(_ id: String?) async {
-        await perform("settings|\(id ?? "")") { client, key in
+        await perform("settings|\(id ?? "")", lock: "settings") { client, key in
             _ = try await client.putPeopleSettings(PeopleSettings(repaymentAccountId: id), idempotencyKey: key)
         }
     }
 
     private func tag(_ transaction: LedgerTransaction, _ personId: String) async {
-        await perform("\(transaction.id)|\(personId)") { client, key in
+        await perform("\(transaction.id)|\(personId)", lock: transaction.id) { client, key in
             _ = try await client.patchTransaction(id: transaction.id, body: PatchTransactionBody(personId: .set(personId)), idempotencyKey: key)
         }
     }
 
     /// One key per (target, choice): retrying an unknown outcome resends the same request, and a different choice is a new one.
-    private func perform(_ slot: String, _ write: (APIClient, String) async throws -> Void) async {
-        guard let client = model.client else { return }
+    /// `lock` keeps a second tap on the same suggestion from sending while the first is in flight.
+    private func perform(_ slot: String, lock: String, _ write: (APIClient, String) async throws -> Void) async {
+        guard let client = model.client, !busyIds.contains(lock) else { return }
+        busyIds.insert(lock)
+        defer { busyIds.remove(lock) }
         var writeGuard = writes[slot] ?? WriteGuard()
         do {
             try await write(client, writeGuard.key)
