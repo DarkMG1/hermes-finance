@@ -20,6 +20,8 @@ struct HButton: View {
         }
         .buttonStyle(.plain)
         .disabled(busy)
+        // in a Form the button draws its own background, so the row's would show around it
+        .listRowBackground(Color.clear)
     }
 
     private var foreground: Color {
