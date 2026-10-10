@@ -11,8 +11,10 @@ struct TransactionDetailSheet: View {
     @State private var notes = ""
     @State private var categoryId: String?
     @State private var personId: String?
+    @State private var paidById: String?
     @State private var writes = WriteGuard()
     @State private var deleteWrites = WriteGuard()
+    @State private var undoWrites = WriteGuard()
     @State private var error: String?
     @State private var busy = false
     @State private var confirmDelete = false
@@ -22,7 +24,7 @@ struct TransactionDetailSheet: View {
     var body: some View {
         Sheet(
             title: "Transaction", canSave: !patch.isEmpty && !payeeInvalid && !deleteWrites.unresolved, busy: busy,
-            unresolved: writes.unresolved || deleteWrites.unresolved,
+            unresolved: writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved,
             onCancel: { if writes.unresolved || deleteWrites.unresolved { Task { await onChange() } }; dismiss() }, onSave: { Task { await save() } }
         ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
@@ -35,8 +37,16 @@ struct TransactionDetailSheet: View {
             Section {
                 Field(label: "Payee", error: payeeInvalid ? "Payee can't be empty" : nil) { TextField("Payee", text: $payee) }
                 if transaction.splitLines.isEmpty {
-                    NavigationLink { PersonPicker(selection: $personId, noneTitle: noneTitle) } label: {
-                        LabeledContent(transaction.amountCents < 0 ? "For" : "Repaid by", value: personId.map(model.personName) ?? noneTitle)
+                    if paidById == nil {
+                        NavigationLink { PersonPicker(selection: $personId, noneTitle: noneTitle) } label: {
+                            LabeledContent(transaction.amountCents < 0 ? "For" : "Repaid by", value: personId.map(model.personName) ?? noneTitle)
+                        }
+                    }
+                    // someone else paid this manual expense: it stays your spending, and counts as their credit
+                    if canHavePayer && personId == nil {
+                        NavigationLink { PersonPicker(selection: $paidById, noneTitle: "Me") } label: {
+                            LabeledContent("Paid by", value: paidById.map(model.personName) ?? "Me")
+                        }
                     }
                     if personId == nil {
                         NavigationLink { CategoryPicker(selection: $categoryId) } label: {
@@ -58,8 +68,17 @@ struct TransactionDetailSheet: View {
                         .textStyle(.caption, color: Palette.loss)
                 }
                 // unsaved edits would be lost when the split saves and this sheet closes, so the button saves them first
-                Button(transaction.splitLines.isEmpty ? "Split transaction" : "Edit split") { Task { await split() } }
-                    .disabled(busy || payeeInvalid || deleteWrites.unresolved)
+                if transaction.paidByPersonId == nil && paidById == nil {
+                    Button(transaction.splitLines.isEmpty ? "Split transaction" : "Edit split") { Task { await split() } }
+                        .disabled(busy || payeeInvalid || deleteWrites.unresolved)
+                }
+            }
+            if transaction.repaymentDismissed == true {
+                Section {
+                    Text("Hidden from repayment suggestions").textStyle(.subhead, color: Palette.secondaryText)
+                    HButton(title: "Undo", busy: busy) { Task { await undoDismiss() } }
+                        .disabled(writes.unresolved || deleteWrites.unresolved)
+                }
             }
             if transaction.source == "manual" {
                 Section {
@@ -76,6 +95,7 @@ struct TransactionDetailSheet: View {
             notes = transaction.notes ?? ""
             categoryId = transaction.categoryId
             personId = transaction.personId
+            paidById = transaction.paidByPersonId
         }
         .sheet(item: $splitting, onDismiss: {
             // the edits were saved but the split was cancelled: this sheet's copy is stale, so close it
@@ -106,10 +126,13 @@ struct TransactionDetailSheet: View {
             categoryId: personId == nil && categoryId != transaction.categoryId ? .set(categoryId) : .unchanged,
             payee: trimmedPayee != transaction.payee ? .set(trimmedPayee.isEmpty ? nil : trimmedPayee) : .unchanged,
             notes: notes != (transaction.notes ?? "") ? .set(notes.isEmpty ? nil : notes) : .unchanged,
-            personId: personId != transaction.personId ? .set(personId) : .unchanged)
+            personId: personId != transaction.personId ? .set(personId) : .unchanged,
+            paidByPersonId: paidById != transaction.paidByPersonId ? .set(paidById) : .unchanged)
     }
 
     private var noneTitle: String { transaction.amountCents < 0 ? "Me" : "Nobody" }
+
+    private var canHavePayer: Bool { transaction.source == "manual" && transaction.amountCents < 0 }
 
     private func save() async {
         guard let client = model.client else { return }
@@ -139,6 +162,22 @@ struct TransactionDetailSheet: View {
         } catch {
             writes.didFail(error)
             self.error = writes.unresolved ? "Couldn't confirm the save. Try again." : errorMessage(error)
+        }
+    }
+
+    private func undoDismiss() async {
+        guard let client = model.client else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            _ = try await client.patchTransaction(id: transaction.id, body: PatchTransactionBody(repaymentDismissed: false),
+                                                  idempotencyKey: undoWrites.key)
+            undoWrites.didSucceed()
+            await onChange()
+            dismiss()
+        } catch {
+            undoWrites.didFail(error)
+            self.error = undoWrites.unresolved ? "Couldn't confirm. Try again." : errorMessage(error)
         }
     }
 
