@@ -1,14 +1,16 @@
 import HermesKit
 import SwiftUI
 
-/// One person: balance, open items (oldest repaid first), history, edit.
+/// One person: who owes whom, and every entry newest first with the balance after it.
 struct PersonView: View {
     @Environment(AppModel.self) private var model
     let personId: String
     @State private var state: LoadState<PersonDetail> = .loading
     @State private var opening: LedgerTransaction?
     @State private var editing: Person?
-    @State private var showHistory = false
+    @State private var addingPaid: Person?
+    @State private var showEarlier = false
+    @State private var error: String?
 
     var body: some View {
         Screen(title: model.personName(personId)) {
@@ -16,30 +18,18 @@ struct PersonView: View {
             LoadingContent(state: state, retry: { Task { await load() } }) { loaded in
                 let detail = loaded.value
                 LastUpdated(loaded: loaded)
+                InlineError(message: error)
+                Card { Text(Balance.phrase(detail.person.balanceCents)).textStyle(.headline) }
+                // entries up to and including the latest settle-up are the current period; older ones fold away
+                let cut = (detail.history.firstIndex(where: \.settled) ?? detail.history.count - 1) + 1
                 Card {
-                    Text(detail.person.balanceCents < 0 ? "\(detail.person.name) is ahead by" : "Owes you")
-                        .textStyle(.subhead, color: Palette.secondaryText)
-                    MoneyText(cents: abs(detail.person.balanceCents), style: .display, colored: false)
+                    if detail.history.isEmpty { Text("Nothing yet").textStyle(.subhead, color: Palette.secondaryText) }
+                    ForEach(detail.history.prefix(cut)) { entry in entryView(entry) }
                 }
-                let open = detail.owed.filter { $0.status != "paid" }
-                Card {
-                    Text("Open").textStyle(.headline)
-                    if open.isEmpty { Text("Nothing open").textStyle(.subhead, color: Palette.secondaryText) }
-                    ForEach(open) { item in
-                        row(item.payee, subtitle: openSubtitle(item), cents: item.amountCents, transactionId: item.transactionId)
-                    }
-                }
-                let paid = detail.owed.filter { $0.status == "paid" }
-                if !paid.isEmpty || !detail.repayments.isEmpty {
+                if cut < detail.history.count {
                     Card {
-                        DisclosureGroup("History", isExpanded: $showHistory) {
-                            ForEach(paid) { item in
-                                row(item.payee, subtitle: "\(DayText.display(item.date)) · Paid", cents: item.amountCents, transactionId: item.transactionId)
-                            }
-                            ForEach(detail.repayments) { item in
-                                row(item.payee, subtitle: "\(DayText.display(item.date)) · Repayment", cents: item.amountCents,
-                                    transactionId: item.transactionId)
-                            }
+                        DisclosureGroup("Earlier", isExpanded: $showEarlier) {
+                            ForEach(detail.history.dropFirst(cut)) { entry in entryView(entry) }
                         }
                         .textStyle(.headline)
                     }
@@ -47,7 +37,8 @@ struct PersonView: View {
             }
         }
         .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button("They paid…") { if case .loaded(let loaded) = state { addingPaid = loaded.value.person } }
                 Button("Edit") { if case .loaded(let loaded) = state { editing = loaded.value.person } }
             }
         }
@@ -59,25 +50,51 @@ struct PersonView: View {
         .sheet(item: $editing) { person in
             PersonSheet(person: person) { _ in await load() }
         }
+        .sheet(item: $addingPaid) { person in
+            TheyPaidSheet(person: person) { await load() }
+        }
     }
 
-    private func openSubtitle(_ item: OwedItem) -> String {
-        let date = DayText.display(item.date)
-        guard item.status == "partial" else { return date }
-        return "\(date) · Partly paid \(Money.format(item.paidCents)) of \(Money.format(-item.amountCents))"
+    @ViewBuilder private func entryView(_ entry: HistoryEntry) -> some View {
+        row(entry)
+        if entry.settled {
+            HStack {
+                Divider()
+                Text("Settled").textStyle(.caption, color: Palette.secondaryText).frame(maxWidth: .infinity)
+                Divider()
+            }
+        }
     }
 
-    private func row(_ title: String, subtitle: String, cents: Int, transactionId: String) -> some View {
-        Button { Task { await open(transactionId) } } label: {
-            ListRow(title: title, subtitle: subtitle) { MoneyText(cents: cents) }
+    private func row(_ entry: HistoryEntry) -> some View {
+        Button { Task { await open(entry.transactionId) } } label: {
+            ListRow(title: entry.payee, subtitle: subtitle(entry)) {
+                VStack(alignment: .trailing, spacing: Space.xs) {
+                    Text(Money.format(entry.effectCents, showPlus: true)).textStyle(.body).monospacedDigit()
+                    Text(Balance.phrase(entry.balanceAfterCents)).textStyle(.caption, color: Palette.secondaryText)
+                }
+            }
         }
         .buttonStyle(.plain)
     }
 
+    private func subtitle(_ entry: HistoryEntry) -> String {
+        let kind = switch entry.kind {
+        case "forThem": "For them"
+        case "fromThem": "From them"
+        default: "Paid by them"
+        }
+        return [DayText.display(entry.date), kind].joined(separator: " · ")
+    }
+
     private func open(_ transactionId: String) async {
-        guard let reader = model.reader,
-              let loaded = try? await reader.read("/v1/transactions/\(transactionId)", as: LedgerTransaction.self) else { return }
-        opening = loaded.value
+        guard let reader = model.reader else { return }
+        do {
+            opening = try await reader.read("/v1/transactions/\(transactionId)", as: LedgerTransaction.self).value
+            error = nil
+        } catch {
+            self.error = errorMessage(error)
+        }
     }
 
     private func load() async {
