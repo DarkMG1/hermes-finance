@@ -37,10 +37,14 @@ struct PersonView: View {
             }
         }
         .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                if case .loaded(let loaded) = state, !loaded.value.person.archived {
+            // separate items so iOS 26 gives each button its own glass capsule
+            if case .loaded(let loaded) = state, !loaded.value.person.archived {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button("They paid…") { addingPaid = loaded.value.person }
                 }
+                ToolbarSpacer(.fixed, placement: .topBarTrailing)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Button("Edit") { if case .loaded(let loaded) = state { editing = loaded.value.person } }
             }
         }
