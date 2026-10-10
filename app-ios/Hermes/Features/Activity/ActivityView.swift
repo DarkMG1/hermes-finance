@@ -15,10 +15,11 @@ struct ActivityView: View {
     @State private var selected: LedgerTransaction?
     @State private var adding = false
     @State private var generation = 0
+    @State private var choosingCategory = false
 
     var body: some View {
         List {
-            // plain-list rows draw the system background (pure black in dark mode) unless told otherwise
+            // rows sit on the same surface as the other tabs' cards
             Group {
                 if let lastLoad { LastUpdated(loaded: lastLoad) }
                 InlineError(message: error)
@@ -34,12 +35,15 @@ struct ActivityView: View {
                     Text("No transactions").textStyle(.subhead, color: Palette.secondaryText)
                 }
             }
-            .listRowBackground(Palette.background)
+            .listRowBackground(Palette.surface)
         }
-        .listStyle(.plain)
         .themedForm()
         .navigationTitle("Activity")
         .searchable(text: $query)
+        .safeAreaInset(edge: .top) { filterChips }
+        .sheet(isPresented: $choosingCategory) {
+            NavigationStack { CategoryPicker(selection: $categoryId, noneTitle: "All categories") }
+        }
         .task(id: filterKey) {
             try? await Task.sleep(for: .milliseconds(300))
             guard !Task.isCancelled else { return }
@@ -51,7 +55,6 @@ struct ActivityView: View {
             if let accountId, !ids.contains(accountId) { self.accountId = nil }
         }
         .toolbar {
-            ToolbarItem(placement: .topBarLeading) { filterMenu }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { adding = true } label: { Label("Add", systemImage: "plus") }
             }
@@ -69,24 +72,43 @@ struct ActivityView: View {
 
     private var filterKey: String { "\(query)|\(accountId ?? "")|\(categoryId ?? "")|\(personId ?? "")" }
 
-    private var filterMenu: some View {
-        Menu {
-            Picker("Account", selection: $accountId) {
-                Text("All accounts").tag(String?.none)
-                ForEach(filterAccounts) { account in Text(account.name).tag(Optional(account.id)) }
+    private var filterChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Space.s) {
+                Menu {
+                    Picker("Account", selection: $accountId) {
+                        Text("All accounts").tag(String?.none)
+                        ForEach(filterAccounts) { account in Text(account.name).tag(Optional(account.id)) }
+                    }
+                } label: {
+                    chip(filterAccounts.first { $0.id == accountId }?.name ?? "Account", active: accountId != nil)
+                }
+                Button { choosingCategory = true } label: {
+                    chip(categoryId == nil ? "Category" : model.categoryName(categoryId), active: categoryId != nil)
+                }
+                .buttonStyle(.plain)
+                Menu {
+                    Picker("Person", selection: $personId) {
+                        Text("Everyone").tag(String?.none)
+                        ForEach(model.people.filter { !$0.archived || $0.id == personId }) { person in Text(person.name).tag(Optional(person.id)) }
+                    }
+                } label: {
+                    chip(personId.map(model.personName) ?? "Person", active: personId != nil)
+                }
             }
-            Picker("Category", selection: $categoryId) {
-                Text("All categories").tag(String?.none)
-                ForEach(model.categories.filter { !$0.hidden }) { category in Text(category.name).tag(Optional(category.id)) }
-            }
-            Picker("Person", selection: $personId) {
-                Text("Everyone").tag(String?.none)
-                ForEach(model.people.filter { !$0.archived || $0.id == personId }) { person in Text(person.name).tag(Optional(person.id)) }
-            }
-        } label: {
-            let active = accountId != nil || categoryId != nil || personId != nil
-            Label("Filter", systemImage: active ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+            .padding(.horizontal, Space.l)
+            .padding(.vertical, Space.xs)
         }
+    }
+
+    private func chip(_ title: String, active: Bool) -> some View {
+        HStack(spacing: Space.xs) {
+            Text(title).textStyle(.subhead, color: active ? Palette.background : Palette.text).lineLimit(1)
+            Image(systemName: "chevron.down").textStyle(.caption, color: active ? Palette.background : Palette.secondaryText)
+        }
+        .padding(.horizontal, Space.m)
+        .padding(.vertical, Space.s)
+        .background(active ? Palette.accent : Palette.surface, in: Capsule())
     }
 
     /// Re-reads one edited row in place: reloading from the first page drops the later pages and jumps the list.
