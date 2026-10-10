@@ -35,7 +35,7 @@ export const TransactionPage = z.object({ transactions: z.array(Transaction), ne
 export type TransactionPage = z.infer<typeof TransactionPage>;
 
 export const ListTransactionsQuery = z.object({
-  accountId: Id.optional(), categoryId: Id.optional(), from: DateStr.optional(), to: DateStr.optional(),
+  accountId: Id.optional(), categoryId: Id.optional(), personId: Id.optional(), from: DateStr.optional(), to: DateStr.optional(),
   q: z.string().min(1).max(100).optional(), cursor: z.string().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 }).strict();

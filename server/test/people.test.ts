@@ -289,3 +289,17 @@ test('a hidden repayment account falls back to every checking account', async ()
   deps.db.prepare("UPDATE accounts SET hidden = 1 WHERE id = 'cash'").run();
   assert.deepEqual(await ids(), ['in-a1', 'in-cash']);
 });
+
+test('activity filters by person and finds people by name', async () => {
+  const { deps, get } = setup();
+  seedTxn(deps.db, { id: 'tag', accountId: 'a1', date: '2026-03-01', amountCents: -500, personId: 'p1' });
+  seedTxn(deps.db, { id: 'paid', accountId: 'manual', date: '2026-03-02', amountCents: -700, categoryId: 'c-food', paidByPersonId: 'p1' });
+  seedTxn(deps.db, { id: 'split', accountId: 'a1', date: '2026-03-03', amountCents: -1000 });
+  seedSplit(deps.db, { id: '00-a', transactionId: 'split', amountCents: -500, categoryId: 'c-food' });
+  seedSplit(deps.db, { id: '01-b', transactionId: 'split', amountCents: -500, categoryId: null, personId: 'p1' });
+  seedTxn(deps.db, { id: 'other', accountId: 'a1', date: '2026-03-04', amountCents: -300, personId: 'p2' });
+  const ids = async (qs: string) => (await get(`/v1/transactions?${qs}`)).transactions.map((t: { id: string }) => t.id);
+  assert.deepEqual(await ids('personId=p1'), ['split', 'paid', 'tag']);
+  assert.deepEqual(await ids('q=quill'), ['split', 'paid', 'tag']);
+  assert.deepEqual(await ids('q=wren'), ['other']);
+});
