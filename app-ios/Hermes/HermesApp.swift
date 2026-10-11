@@ -48,6 +48,7 @@ struct HermesApp: App {
                 if connected { lock.didConnect(enabled: requireFaceID) }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
+                if phase == .active { model.loadStoredConnection() }
                 lock.phaseChanged(to: phase, enabled: requireFaceID, connected: model.reader != nil)
             }
         }
