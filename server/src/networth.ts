@@ -17,10 +17,10 @@ export function snapshotBalances(db: Db, day: string): void {
     ON CONFLICT (account_id, date) DO UPDATE SET balance_cents = excluded.balance_cents`).run(day);
 }
 
-const MONTHS: Record<Exclude<NetWorthQuery['range'], 'all'>, number> = { '1m': 1, '3m': 3, '1y': 12 };
+export const MONTHS: Record<Exclude<NetWorthQuery['range'], 'all'>, number> = { '1m': 1, '3m': 3, '1y': 12 };
 
 /** `day` minus `n` months, clamped to the last day of the target month (Mar 31 - 1 month = Feb 28). */
-function minusMonths(day: string, n: number): string {
+export function minusMonths(day: string, n: number): string {
   const [y, m, d] = day.split('-').map(Number) as [number, number, number];
   const total = y * 12 + (m - 1) - n;
   const ty = Math.floor(total / 12);
@@ -29,7 +29,7 @@ function minusMonths(day: string, n: number): string {
   return `${String(ty).padStart(4, '0')}-${pad(tm + 1)}-${pad(Math.min(d, last))}`;
 }
 
-function nextDay(day: string): string {
+export function nextDay(day: string): string {
   const [y, m, d] = day.split('-').map(Number) as [number, number, number];
   return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
 }
@@ -37,13 +37,19 @@ function nextDay(day: string): string {
 /** Rebuilt from transactions before their first snapshot; every other type holds flat at it. */
 const REBUILT_TYPES = ['depository', 'credit', 'loan'];
 
-export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string): NetWorthHistory {
+/** The live balance total of visible accounts of one type, signed as on Home. */
+function liveTypeCents(db: Db, type: string): number {
+  const row = db.prepare('SELECT COALESCE(SUM(balance_current_cents), 0) AS c FROM accounts WHERE hidden = 0 AND type = ?').get(type) as { c: number };
+  return NEGATIVE_TYPES.has(type) ? -row.c : row.c;
+}
+
+export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string, onlyType: string | null = null): NetWorthHistory {
   const snaps = db.prepare(`
     SELECT s.account_id AS accountId, s.date, s.balance_cents AS cents, a.type FROM balance_snapshots s
-    JOIN accounts a ON a.id = s.account_id WHERE a.hidden = 0 AND s.date <= ? ORDER BY s.date`).all(today) as
+    JOIN accounts a ON a.id = s.account_id WHERE a.hidden = 0 AND s.date <= ? AND (? IS NULL OR a.type = ?) ORDER BY s.date`).all(today, onlyType, onlyType) as
     { accountId: string; date: string; cents: number; type: string }[];
   const first = snaps[0];
-  if (!first) return { points: [], currentCents: liveNetWorthCents(db), changeCents: 0, estimatedThrough: null };
+  if (!first) return { points: [], currentCents: onlyType === null ? liveNetWorthCents(db) : liveTypeCents(db, onlyType), changeCents: 0, estimatedThrough: null };
   const signed = (s: { cents: number; type: string }) => (NEGATIVE_TYPES.has(s.type) ? -s.cents : s.cents);
   // each account's first snapshot (S) anchors its estimate for every earlier day
   const anchors = new Map<string, string>();
@@ -57,9 +63,9 @@ export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string
   const moves = db.prepare(`
     SELECT t.account_id AS accountId, t.date, SUM(t.amount_cents) AS cents FROM transactions t
     JOIN accounts a ON a.id = t.account_id
-    WHERE a.hidden = 0 AND a.type IN (${REBUILT_TYPES.map(() => '?').join(', ')}) AND t.pending = 0 AND t.removed_at IS NULL
+    WHERE a.hidden = 0 AND a.type IN (${REBUILT_TYPES.map(() => '?').join(', ')}) AND (? IS NULL OR a.type = ?) AND t.pending = 0 AND t.removed_at IS NULL
       AND t.date <= (SELECT MIN(s.date) FROM balance_snapshots s WHERE s.account_id = t.account_id AND s.date <= ?)
-    GROUP BY t.account_id, t.date ORDER BY t.date`).all(...REBUILT_TYPES, today) as { accountId: string; date: string; cents: number }[];
+    GROUP BY t.account_id, t.date ORDER BY t.date`).all(...REBUILT_TYPES, onlyType, onlyType, today) as { accountId: string; date: string; cents: number }[];
   // start every account at its balance before anything recorded, then add each day's moves walking forward
   for (const m of moves) latest.set(m.accountId, latest.get(m.accountId)! - m.cents);
   const lastAnchor = [...anchors.values()].reduce((a, b) => (b > a ? b : a));

@@ -42,3 +42,13 @@ import Testing
     let result = try await client.completeLinkSession(id: "s", idempotencyKey: "k")
     #expect(result == .pending)
 }
+
+@Test func holdingKeyWithSlashStaysInTheQuery() async throws {
+    let transport = FakeTransport([FakeTransport.json(200, "{}")])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    let holding = Holding(key: "SYN/D", name: "Synthetic D Class", ticker: "SYN/D", type: "equity", quantity: 1, priceCents: 1, valueCents: 1,
+                          costBasisCents: nil, gainCents: nil, accounts: [])
+    _ = try await client.getData("/v1/investments/holding-history", query: holding.historyQuery + NetWorthRange.all.queryItems)
+    let request = try #require(transport.requests.first)
+    #expect(request.url.absoluteString == "https://hermes.example.com/v1/investments/holding-history?key=SYN/D&range=all")
+}

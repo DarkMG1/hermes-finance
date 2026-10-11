@@ -147,6 +147,9 @@ export type Spending = z.infer<typeof Spending>;
 export const NetWorthQuery = z.object({ range: z.enum(['1m', '3m', '1y', 'all']) }).strict();
 export type NetWorthQuery = z.infer<typeof NetWorthQuery>;
 
+export const HoldingHistoryQuery = z.object({ key: z.string().min(1), range: NetWorthQuery.shape.range }).strict();
+export type HoldingHistoryQuery = z.infer<typeof HoldingHistoryQuery>;
+
 /** One point per day from the window start to today; each account's latest snapshot carries forward.
  * Before an account's first snapshot its value is estimated; estimatedThrough is the last such day shown, or null. */
 export const NetWorthHistory = z.object({
@@ -154,6 +157,22 @@ export const NetWorthHistory = z.object({
   currentCents: Cents, changeCents: Cents, estimatedThrough: DateStr.nullable(),
 });
 export type NetWorthHistory = z.infer<typeof NetWorthHistory>;
+
+export const HoldingAccount = z.object({ accountId: Id, accountName: z.string(), quantity: z.number(), valueCents: Cents, costBasisCents: Cents.nullable() });
+export type HoldingAccount = z.infer<typeof HoldingAccount>;
+
+/** One holding combined across accounts by ticker (or Plaid security id); all cash is one holding keyed "_cash". */
+export const Holding = z.object({
+  key: z.string().min(1), name: z.string(), ticker: z.string().nullable(), type: z.string().nullable(), quantity: z.number(),
+  priceCents: Cents.nullable(), valueCents: Cents, costBasisCents: Cents.nullable(), gainCents: Cents.nullable(), accounts: z.array(HoldingAccount),
+});
+export type Holding = z.infer<typeof Holding>;
+
+export const Investments = z.object({
+  totalCents: Cents, costBasisCents: Cents.nullable(), gainCents: Cents.nullable(), asOf: z.string().nullable(),
+  holdings: z.array(Holding), reconnect: z.array(z.object({ itemId: Id, institutionName: z.string() })),
+});
+export type Investments = z.infer<typeof Investments>;
 
 /** The rows behind a Spending number. categoryId 'uncategorized' selects the Uncategorized bucket. */
 export const ExpensesQuery = z.object({

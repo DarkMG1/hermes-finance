@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { AppleCardImportResult, Bank, Home, LinkSession, NetWorthHistory, Spending, SyncStatus, Transaction, TransactionPage } from '@hermes/shared';
+import { AppleCardImportResult, Bank, Home, Investments, LinkSession, NetWorthHistory, Spending, SyncStatus, Transaction, TransactionPage } from '@hermes/shared';
 import { buildFixtures, FIXTURE_DIR } from './fixtures/generate.ts';
 
 const root = join(import.meta.dirname, '..', '..');
@@ -21,6 +21,9 @@ test('fixtures satisfy the shared contract', async () => {
   Transaction.parse(f['transaction.json']);
   Spending.parse(f['spending.json']);
   NetWorthHistory.parse(f['net-worth.json']);
+  Investments.parse(f['investments.json']);
+  NetWorthHistory.parse(f['investments-history.json']);
+  NetWorthHistory.parse(f['holding-history.json']);
   Bank.array().parse(f['banks.json']);
   SyncStatus.parse(f['sync-status.json']);
   LinkSession.parse(f['link-session.json']);

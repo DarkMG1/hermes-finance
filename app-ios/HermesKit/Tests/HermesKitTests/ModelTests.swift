@@ -183,3 +183,20 @@ func json(_ value: some Encodable) throws -> String {
     #expect(NetWorthRange.allCases.map(\.title) == ["1M", "3M", "1Y", "All"])
     #expect(NetWorthRange.quarter.queryItems == [URLQueryItem(name: "range", value: "3m")])
 }
+
+@Test func investmentsDecode() throws {
+    let investments = try decode(Investments.self, "investments")
+    #expect(investments.totalCents == 200000 && investments.costBasisCents == 180000 && investments.gainCents == 20000)
+    #expect(investments.holdings.map(\.key) == ["SYNA", "_cash"])
+    let fund = try #require(investments.holdings.first)
+    #expect(fund.quantity == 3 && fund.priceCents == 50000 && fund.gainCents == 20000)
+    #expect(fund.accounts.map(\.accountId) == ["acct-brokerage", "acct-retirement"])
+    #expect(abs((fund.gainPercent ?? 0) - 20000.0 / 130000.0) < 0.000001)
+    #expect(investments.holdings[1].priceCents == nil && investments.holdings[1].ticker == nil && investments.holdings[1].isCash && !fund.isCash)
+    #expect(abs((investments.gainPercent ?? 0) - 20000.0 / 180000.0) < 0.000001)
+    #expect(fund.historyQuery == [URLQueryItem(name: "key", value: "SYNA")])
+    let history = try decode(NetWorthHistory.self, "investments-history")
+    #expect(history.points.map(\.netWorthCents) == [190000, 200000])
+    let holding = try decode(NetWorthHistory.self, "holding-history")
+    #expect(holding.changeCents == 7000 && holding.estimatedThrough == nil)
+}

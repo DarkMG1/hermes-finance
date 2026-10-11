@@ -7,6 +7,7 @@ struct HomeView: View {
     @Environment(AppLock.self) private var lock
     @Environment(\.webAuthenticationSession) private var webAuth
     @State private var state: LoadState<Home> = .loading
+    @State private var investments: Investments?
     @State private var selected: LedgerTransaction?
     @State private var renaming: Account?
     @State private var linker = BankLinker()
@@ -59,6 +60,9 @@ struct HomeView: View {
                     .buttonStyle(.plain)
                 }
                 if let showBalancesError { Text(showBalancesError).textStyle(.caption, color: Palette.secondaryText) }
+                if let investments, hasInvestments || !investments.reconnect.isEmpty {
+                    investmentsCard(investments, signInAgain: loaded.value.reconnect)
+                }
                 let groups = AccountGrouping.group(model.accounts)
                 if !groups.isEmpty {
                     Card {
@@ -123,6 +127,35 @@ struct HomeView: View {
         }
     }
 
+    private var hasInvestments: Bool { model.accounts.contains { $0.type == "investment" && !$0.hidden } }
+
+    @ViewBuilder private func investmentsCard(_ investments: Investments, signInAgain: [ReconnectItem]) -> some View {
+        NavigationLink { InvestmentsView() } label: {
+            Card {
+                Text("Investments").textStyle(.subhead, color: Palette.secondaryText)
+                MoneyText(cents: investments.totalCents, style: .display, colored: false, negativeIsLoss: true)
+                    .redacted(reason: hideBalances ? .placeholder : [])
+                GainText(gainCents: investments.gainCents, percent: investments.gainPercent)
+            }
+        }
+        .buttonStyle(.plain)
+        // a bank already asking to sign in again has its own card above
+        ForEach(investments.reconnect.filter { item in !signInAgain.contains { $0.itemId == item.itemId } }) { item in
+            Card {
+                HButton(title: "Reconnect \(item.institutionName) to show holdings", busy: linker.busy) {
+                    Task {
+                        await linker.reconnect(itemId: item.itemId, model: model) { url in
+                            try await webAuth.authenticate(using: url, callback: .customScheme(HermesKit.callbackScheme),
+                                                           preferredBrowserSession: nil, additionalHeaderFields: [:])
+                        }
+                        await load()
+                    }
+                }
+                InlineError(message: linker.error)
+            }
+        }
+    }
+
     /// Showing needs Face ID wherever the hardware exists, even with the app lock off: hiding guards a glance at the screen.
     private func showBalances() async {
         guard AppLock.hasBiometricHardware else {
@@ -149,8 +182,10 @@ struct HomeView: View {
         do {
             let loaded = try await reader.read("/v1/home", as: Home.self)
             await model.refreshReferenceData()
+            let loadedInvestments = try? await reader.read("/v1/investments", as: Investments.self).value
             guard !Task.isCancelled else { return }
             state = .loaded(loaded)
+            investments = loadedInvestments
         } catch {
             guard !Task.isCancelled else { return }
             state = .failed(errorMessage(error))

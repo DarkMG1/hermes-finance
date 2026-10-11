@@ -7,6 +7,11 @@ export type PlaidAccount = {
   accountId: string; name: string; mask: string | null; type: string; subtype: string | null;
   currentBalance: number | null; availableBalance: number | null;
 };
+/** Amounts in dollars, as Plaid sends them (positive values). */
+export type PlaidHolding = { accountId: string; securityId: string; quantity: number; price: number; value: number; costBasis: number | null };
+export type PlaidSecurity = { securityId: string; name: string | null; ticker: string | null; type: string | null; isCash: boolean; closePrice: number | null };
+export type PlaidHoldings = { holdings: PlaidHolding[]; securities: PlaidSecurity[] };
+export type LinkTokenOpts = { mode: 'create' } | { mode: 'update'; accessToken: string; addInvestments?: boolean };
 export type LinkResult =
   | { status: 'pending' }
   | { status: 'exited' }
@@ -15,7 +20,8 @@ export type LinkResult =
 export interface PlaidPort {
   transactionsSync(accessToken: string, cursor: string | null): Promise<SyncPage>;
   accountsGet(accessToken: string): Promise<PlaidAccount[]>;
-  createLinkToken(opts: { mode: 'create' } | { mode: 'update'; accessToken: string }): Promise<{ linkToken: string; hostedLinkUrl: string; expiration: string }>;
+  investmentsHoldingsGet(accessToken: string): Promise<PlaidHoldings>;
+  createLinkToken(opts: LinkTokenOpts): Promise<{ linkToken: string; hostedLinkUrl: string; expiration: string }>;
   getLinkResult(linkToken: string): Promise<LinkResult>;
   exchangePublicToken(publicToken: string): Promise<{ accessToken: string; itemId: string }>;
 }

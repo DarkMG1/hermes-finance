@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { LinkTokenGetSessionsResponse } from 'plaid';
-import { mapLinkSessions } from '../src/plaid/client.ts';
+import { buildLinkTokenRequest, mapLinkSessions } from '../src/plaid/client.ts';
 
 const T = '2026-03-15T12:00:00Z';
 const exited: LinkTokenGetSessionsResponse = { link_session_id: 'ls-exit', finished_at: T, exit: { error: null, metadata: null } };
@@ -32,4 +32,18 @@ test('unfinished or no session is pending; only exits is exited', () => {
 
 test('a finished update-mode session with no results completes without a token', () => {
   assert.deepEqual(mapLinkSessions([updateMode]), { status: 'complete', publicToken: null, institutionName: null });
+});
+
+test('link tokens ask for Investments: optional on create, consent on update only when asked', () => {
+  const create = buildLinkTokenRequest({ mode: 'create' });
+  assert.deepEqual(create.products, ['transactions']);
+  assert.deepEqual(create.optional_products, ['investments']);
+  assert.equal(create.access_token, undefined);
+  const update = buildLinkTokenRequest({ mode: 'update', accessToken: 'tok' });
+  assert.equal(update.access_token, 'tok');
+  assert.equal(update.products, undefined);
+  assert.equal(update.additional_consented_products, undefined);
+  const consent = buildLinkTokenRequest({ mode: 'update', accessToken: 'tok', addInvestments: true });
+  assert.deepEqual(consent.additional_consented_products, ['investments']);
+  assert.equal(consent.products, undefined);
 });
