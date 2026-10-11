@@ -70,7 +70,18 @@ struct SettingsView: View {
                 Text("In Wallet: Apple Card → Card Balance → a statement → Export Transactions. Importing the same statement twice is safe.")
             }
             Section {
-                Toggle("Require Face ID", isOn: $requireFaceID)
+                Toggle("Require Face ID", isOn: Binding(
+                    get: { requireFaceID },
+                    set: { on in
+                        if on {
+                            requireFaceID = true
+                        } else {
+                            Task {
+                                if await AppLock.confirmOwner(reason: "Turn off Face ID for Hermes") { requireFaceID = false }
+                            }
+                        }
+                    }
+                ))
                     .disabled(!AppLock.canUseFaceID)
             } header: {
                 Text("Security")

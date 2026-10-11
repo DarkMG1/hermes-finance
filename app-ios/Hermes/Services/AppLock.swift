@@ -14,6 +14,10 @@ final class AppLock {
     /// False when the device has neither Face ID nor a passcode, so there is nothing to unlock with.
     static var canUseFaceID: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) }
 
+    static func confirmOwner(reason: String) async -> Bool {
+        (try? await LAContext().evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) ?? false
+    }
+
     func phaseChanged(to phase: ScenePhase, enabled: Bool, connected: Bool) {
         guard connected else {
             // connecting counts as unlocking, but the session is no longer fresh
@@ -57,8 +61,7 @@ final class AppLock {
         authenticating = true
         Task {
             defer { authenticating = false }
-            let unlocked = (try? await LAContext().evaluatePolicy(.deviceOwnerAuthentication, localizedReason: "Unlock Hermes")) ?? false
-            if unlocked {
+            if await Self.confirmOwner(reason: "Unlock Hermes") {
                 locked = false
                 cover.hide()
             }
