@@ -19,13 +19,15 @@ struct KeychainStore {
         return String(data: data, encoding: .utf8)
     }
 
+    // the app only reads the token in the foreground. Add-then-update (not delete-then-add) so a failed
+    // re-save of an existing token under the new class can never lose it.
     func write(_ account: String, _ value: String) throws {
-        delete(account)
-        let item: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account,
-            kSecValueData as String: Data(value.utf8), kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        let key: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
+        let attrs: [String: Any] = [
+            kSecValueData as String: Data(value.utf8), kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
-        let status = SecItemAdd(item as CFDictionary, nil)
+        var status = SecItemAdd(key.merging(attrs) { $1 } as CFDictionary, nil)
+        if status == errSecDuplicateItem { status = SecItemUpdate(key as CFDictionary, attrs as CFDictionary) }
         guard status == errSecSuccess else { throw KeychainError(status: status) }
     }
 

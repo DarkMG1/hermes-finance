@@ -26,7 +26,10 @@ final class AppModel {
     init() {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         cache = ResponseCache(directory: caches.appending(path: "api-cache"))
+        URLCache.shared.removeAllCachedResponses()
+        if serverURL.isEmpty { keychain.delete("apiToken") }
         if let url = URL(string: serverURL), !serverURL.isEmpty, let token = keychain.read("apiToken") {
+            try? keychain.write("apiToken", token)
             configure(url: url, token: token)
         }
     }
@@ -47,6 +50,7 @@ final class AppModel {
 
     func disconnect() {
         session += 1
+        URLCache.shared.removeAllCachedResponses()
         keychain.delete("apiToken")
         UserDefaults.standard.removeObject(forKey: "serverURL")
         cache.clear()

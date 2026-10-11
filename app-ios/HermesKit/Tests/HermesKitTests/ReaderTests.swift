@@ -71,3 +71,14 @@ private func tempCache() -> ResponseCache {
     let other = Reader(client: APIClient(baseURL: otherServer, token: "t", transport: down), cache: cache)
     await #expect(throws: ClientError.self) { try await other.read("/v1/home", as: Home.self) }
 }
+
+@Test func aStoreStartedBeforeAClearIsDropped() throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: "cache-gen-\(UUID().uuidString)")
+    let cache = ResponseCache(directory: dir)
+    let before = cache.currentGeneration
+    cache.clear()
+    cache.store(Data("{}".utf8), key: "k", savedAt: Date(timeIntervalSince1970: 0), generation: before)
+    #expect(cache.load(key: "k") == nil)
+    cache.store(Data("{}".utf8), key: "k", savedAt: Date(timeIntervalSince1970: 0), generation: cache.currentGeneration)
+    #expect(cache.load(key: "k") != nil)
+}
