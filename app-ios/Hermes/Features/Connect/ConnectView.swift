@@ -6,6 +6,7 @@ struct ConnectView: View {
     @State private var token = ""
     @State private var error: String?
     @State private var busy = false
+    @AppStorage("faceIDChanged") private var faceIDChanged = false
 
     var body: some View {
         NavigationStack {
@@ -18,6 +19,8 @@ struct ConnectView: View {
                     Field(label: "API token", error: error) {
                         SecureField("Paste the token", text: $token)
                     }
+                } footer: {
+                    if faceIDChanged { Text("Face ID changed on this iPhone. Enter the server token to continue.") }
                 }
                 Section {
                     HButton(title: "Connect", busy: busy) { Task { await connect() } }
@@ -36,6 +39,7 @@ struct ConnectView: View {
         defer { busy = false }
         do {
             try await model.connect(urlText: url, token: token)
+            faceIDChanged = false
         } catch {
             self.error = errorMessage(error)
         }

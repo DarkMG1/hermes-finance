@@ -14,10 +14,23 @@ final class AppLock {
     /// False when no Face ID is enrolled or available, so there is nothing to unlock with. No passcode fallback.
     static var canUseFaceID: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) }
 
-    static func confirmOwner(reason: String) async -> Bool {
+    enum OwnerCheck { case confirmed, failed, facesChanged }
+
+    var onFacesChanged: () -> Void = {}
+
+    /// Someone who knows the passcode can add a face in iOS Settings; a changed enrolled-face state means Face ID no longer proves the owner.
+    static func confirmOwner(reason: String) async -> OwnerCheck {
         let context = LAContext()
         context.localizedFallbackTitle = ""
-        return (try? await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason)) ?? false
+        guard (try? await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason)) == true else { return .failed }
+        let key = "faceIDDomainState"
+        let current = context.domainState.biometry.stateHash
+        if let saved = UserDefaults.standard.data(forKey: key), saved != current {
+            UserDefaults.standard.removeObject(forKey: key)
+            return .facesChanged
+        }
+        UserDefaults.standard.set(current, forKey: key)
+        return .confirmed
     }
 
     /// Called when the Connect screen succeeds: ask for Face ID right away, as a cold launch does.
@@ -75,9 +88,16 @@ final class AppLock {
         authenticating = true
         Task {
             defer { authenticating = false }
-            if await Self.confirmOwner(reason: "Unlock Hermes") {
+            switch await Self.confirmOwner(reason: "Unlock Hermes") {
+            case .confirmed:
                 locked = false
                 cover.hide()
+            case .failed:
+                break
+            case .facesChanged:
+                locked = false
+                cover.hide()
+                onFacesChanged()
             }
         }
     }

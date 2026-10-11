@@ -34,7 +34,13 @@ struct HermesApp: App {
             .environment(model)
             .tint(Palette.accent)
             .preferredColorScheme(appearance.colorScheme)
-            .task { await model.refreshReferenceData() }
+            .task {
+                lock.onFacesChanged = {
+                    UserDefaults.standard.set(true, forKey: "faceIDChanged")
+                    model.disconnect()
+                }
+                await model.refreshReferenceData()
+            }
             .onChange(of: model.reader != nil) { _, connected in
                 if connected { lock.didConnect(enabled: requireFaceID) }
             }

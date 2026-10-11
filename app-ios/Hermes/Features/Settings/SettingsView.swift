@@ -77,7 +77,13 @@ struct SettingsView: View {
                             requireFaceID = true
                         } else {
                             Task {
-                                if await AppLock.confirmOwner(reason: "Turn off Face ID for Hermes") { requireFaceID = false }
+                                switch await AppLock.confirmOwner(reason: "Turn off Face ID for Hermes") {
+                                case .confirmed: requireFaceID = false
+                                case .failed: break
+                                case .facesChanged:
+                                    UserDefaults.standard.set(true, forKey: "faceIDChanged")
+                                    model.disconnect()
+                                }
                             }
                         }
                     }
