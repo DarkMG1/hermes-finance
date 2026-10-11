@@ -25,3 +25,10 @@ import Testing
     #expect(SpendingPeriod.current(today: "2026-13-01").title == "December 2026")
     #expect(SpendingPeriod.current(today: "2026-00-01").title == "January 2026")
 }
+
+@Test func switchingBackToMonthNeverLandsInTheFuture() {
+    let dec2025 = SpendingPeriod(kind: .month, year: 2025, month: 12)
+    let year2026 = dec2025.with(kind: .year).next()
+    #expect(year2026.with(kind: .month, today: "2026-10-11") == SpendingPeriod(kind: .month, year: 2026, month: 10))
+    #expect(dec2025.with(kind: .year).with(kind: .month, today: "2026-10-11") == dec2025)
+}

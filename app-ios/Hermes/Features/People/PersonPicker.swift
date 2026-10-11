@@ -24,7 +24,9 @@ struct PersonPicker: View {
         .navigationTitle(title)
         .sheet(isPresented: $adding) {
             // stays on this list after adding, with the new person ticked, so two sheets never dismiss at once
-            PersonSheet(person: nil) { created in if let created { selection = created.id } }
+            PersonSheet(person: nil) { created in
+                if let created { selection = created.id } else { await model.refreshReferenceData() }
+            }
         }
     }
 

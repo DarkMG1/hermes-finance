@@ -9,7 +9,7 @@ struct SpendingView: View {
 
     var body: some View {
         Screen(title: "Spending") {
-            Picker("Period", selection: Binding(get: { period.kind }, set: { period = period.with(kind: $0) })) {
+            Picker("Period", selection: Binding(get: { period.kind }, set: { period = period.with(kind: $0, today: DayText.ymd(.now)) })) {
                 Text("Month").tag(SpendingPeriod.Kind.month)
                 Text("Year").tag(SpendingPeriod.Kind.year)
             }
@@ -57,12 +57,13 @@ struct SpendingView: View {
 
     private func load() async {
         guard let reader = model.reader else { return }
+        let requested = period
         do {
-            let loaded = try await reader.read("/v1/spending", query: period.queryItems, as: Spending.self)
-            guard !Task.isCancelled else { return }
+            let loaded = try await reader.read("/v1/spending", query: requested.queryItems, as: Spending.self)
+            guard !Task.isCancelled, requested == period else { return }
             state = .loaded(loaded)
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, requested == period else { return }
             state = .failed(errorMessage(error))
         }
     }

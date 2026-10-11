@@ -16,6 +16,16 @@ public struct TransactionQuery: Sendable, Equatable {
         self.cursor = cursor
     }
 
+    /// The server caps q at 100 UTF-16 units; cut on a character boundary so an emoji is never split.
+    static func capped(_ text: String) -> String {
+        var out = ""
+        for character in text {
+            if out.utf16.count + character.utf16.count > 100 { break }
+            out.append(character)
+        }
+        return out
+    }
+
     public var items: [URLQueryItem] {
         var out: [URLQueryItem] = []
         if let accountId { out.append(URLQueryItem(name: "accountId", value: accountId)) }
@@ -23,7 +33,7 @@ public struct TransactionQuery: Sendable, Equatable {
         if let personId { out.append(URLQueryItem(name: "personId", value: personId)) }
         if let q {
             let trimmed = q.trimmingCharacters(in: .whitespaces)
-            if !trimmed.isEmpty { out.append(URLQueryItem(name: "q", value: String(trimmed.prefix(100)))) }
+            if !trimmed.isEmpty { out.append(URLQueryItem(name: "q", value: Self.capped(trimmed))) }
         }
         if let cursor { out.append(URLQueryItem(name: "cursor", value: cursor)) }
         out.append(URLQueryItem(name: "limit", value: String(limit)))

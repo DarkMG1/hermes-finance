@@ -162,7 +162,7 @@ struct WhoOwesView: View {
             guard !Task.isCancelled else { return }
             suggestions = found?.value ?? []
             settings = loadedSettings?.value ?? settings
-            if let suggestionsError { error = errorMessage(suggestionsError) }
+            error = suggestionsError.map { errorMessage($0) }
             state = .loaded(people)
         } catch {
             guard !Task.isCancelled else { return }
