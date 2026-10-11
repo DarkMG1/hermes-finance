@@ -43,6 +43,15 @@ struct HomeView: View {
                     }
                     MoneyText(cents: loaded.value.netWorthCents, style: .display, colored: false, negativeIsLoss: true)
                         .redacted(reason: hideBalances ? .placeholder : [])
+                    // a row, not the whole card, so the eye button keeps its own tap
+                    NavigationLink { NetWorthView() } label: {
+                        HStack {
+                            Text("History").textStyle(.subhead)
+                            Spacer()
+                            Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText)
+                        }
+                    }
+                    .buttonStyle(.plain)
                 }
                 let groups = AccountGrouping.group(model.accounts)
                 if !groups.isEmpty {
