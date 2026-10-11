@@ -8,8 +8,13 @@ final class AppLock {
     private let cover = PrivacyCover()
     private var locked = false
     private var launched = false
-    private var backgroundedAt: Date?
+    private var backgroundedAt: ContinuousClock.Instant?
     private var authenticating = false
+    /// True only between entering the server token and the next background: a missing baseline may be saved only then.
+    private var trustNewBaseline = false
+    private var isActive = false
+    /// Bumped on every background and every new lock, so a Face ID result that arrives later can't unlock.
+    private var generation = 0
     private var failure: String?
     private let onFacesChanged: @MainActor () -> Void
 
@@ -35,7 +40,8 @@ final class AppLock {
     enum OwnerCheck { case confirmed, failed(String?), facesChanged }
 
     /// Someone who knows the passcode can add a face in iOS Settings; a changed enrolled-face state means Face ID no longer proves the owner.
-    static func confirmOwner(reason: String) async -> OwnerCheck {
+    /// With no saved state, only `allowNewBaseline` (the server token was just entered) may save one; otherwise it counts as changed.
+    static func confirmOwner(reason: String, allowNewBaseline: Bool) async -> OwnerCheck {
         let context = LAContext()
         context.localizedFallbackTitle = ""
         var unavailable: NSError?
@@ -49,10 +55,14 @@ final class AppLock {
         }
         let key = "faceIDDomainState"
         let current = context.domainState.biometry.stateHash
-        if let saved = UserDefaults.standard.data(forKey: key), saved != current {
-            UserDefaults.standard.removeObject(forKey: key)
-            return .facesChanged
+        if let saved = UserDefaults.standard.data(forKey: key) {
+            guard saved == current else {
+                UserDefaults.standard.removeObject(forKey: key)
+                return .facesChanged
+            }
+            return .confirmed
         }
+        guard allowNewBaseline else { return .facesChanged }
         UserDefaults.standard.set(current, forKey: key)
         return .confirmed
     }
@@ -74,7 +84,9 @@ final class AppLock {
     func didConnect(enabled: Bool) {
         launched = true
         backgroundedAt = nil
+        trustNewBaseline = true
         if enabled && Self.hasBiometricHardware {
+            generation += 1
             locked = true
             failure = nil
             showLocked()
@@ -83,6 +95,12 @@ final class AppLock {
     }
 
     func phaseChanged(to phase: ScenePhase, enabled: Bool, connected: Bool) {
+        isActive = phase == .active
+        if phase == .background {
+            // adding a face needs iOS Settings, which backgrounds Hermes
+            trustNewBaseline = false
+            generation += 1
+        }
         guard connected else {
             // not connected: nothing to lock; didConnect locks once the Connect screen succeeds
 
@@ -94,19 +112,19 @@ final class AppLock {
         }
         switch phase {
         case .background:
-            if backgroundedAt == nil { backgroundedAt = .now }
+            if backgroundedAt == nil { backgroundedAt = ContinuousClock.now }
             cover.show(locked: locked, message: failure) { [weak self] in self?.authenticate() }
         case .inactive:
             cover.show(locked: locked, message: failure) { [weak self] in self?.authenticate() }
         case .active:
             // the Face ID prompt itself makes the app inactive then active again: that return has no backgroundedAt, so it never re-prompts
             let due = !launched || backgroundedAt != nil
-            let now = Date.now
-            let shouldLock = due && Self.hasBiometricHardware
-                && LockPolicy.shouldLock(enabled: enabled, backgroundedAt: launched ? backgroundedAt : nil, now: now)
+            let awayFor = launched ? backgroundedAt.map { Self.seconds(ContinuousClock.now - $0) } : nil
+            let shouldLock = due && Self.hasBiometricHardware && LockPolicy.shouldLock(enabled: enabled, awayFor: awayFor)
             launched = true
             backgroundedAt = nil
             if shouldLock {
+                generation += 1
                 locked = true
                 failure = nil
                 showLocked()
@@ -122,16 +140,25 @@ final class AppLock {
         }
     }
 
+    private static func seconds(_ duration: Duration) -> TimeInterval {
+        TimeInterval(duration.components.seconds) + TimeInterval(duration.components.attoseconds) / 1e18
+    }
+
     private func authenticate() {
         guard !authenticating else { return }
         authenticating = true
+        let started = generation
         Task {
             defer { authenticating = false }
-            switch await Self.confirmOwner(reason: "Unlock Hermes") {
+            switch await Self.confirmOwner(reason: "Unlock Hermes", allowNewBaseline: trustNewBaseline) {
             case .confirmed:
+                trustNewBaseline = false
+                // backgrounded or locked again since the prompt: ignore the success
+                guard generation == started else { return }
                 locked = false
                 failure = nil
-                cover.hide()
+                // the prompt's own result can land just before the scene is active again; the .active return hides the cover then
+                if isActive { cover.hide() }
             case .failed(let message):
                 failure = message
                 if locked { showLocked() }

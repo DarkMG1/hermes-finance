@@ -77,7 +77,7 @@ struct SettingsView: View {
                             requireFaceID = true
                         } else {
                             Task {
-                                switch await AppLock.confirmOwner(reason: "Turn off Face ID for Hermes") {
+                                switch await AppLock.confirmOwner(reason: "Turn off Face ID for Hermes", allowNewBaseline: false) {
                                 case .confirmed: requireFaceID = false
                                 case .failed: break
                                 case .facesChanged:

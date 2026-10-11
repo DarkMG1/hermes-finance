@@ -4,12 +4,10 @@ import Foundation
 public enum LockPolicy {
     public static let grace: TimeInterval = 30
 
-    /// `backgroundedAt` nil means the app has just launched.
-    public static func shouldLock(enabled: Bool, backgroundedAt: Date?, now: Date) -> Bool {
+    /// `awayFor` is the time in the background on a monotonic clock; nil means the app has just launched.
+    public static func shouldLock(enabled: Bool, awayFor: TimeInterval?) -> Bool {
         guard enabled else { return false }
-        guard let backgroundedAt else { return true }
-        let elapsed = now.timeIntervalSince(backgroundedAt)
-        // a negative elapsed time means the clock was set back: lock rather than trust it
-        return elapsed < 0 || elapsed >= grace
+        guard let awayFor else { return true }
+        return awayFor >= grace
     }
 }
