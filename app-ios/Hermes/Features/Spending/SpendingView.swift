@@ -28,8 +28,12 @@ struct SpendingView: View {
             LoadingContent(state: state, retry: { Task { await load() } }) { loaded in
                 LastUpdated(loaded: loaded)
                 Card {
-                    Text("Spent").textStyle(.subhead, color: Palette.secondaryText)
-                    MoneyText(cents: loaded.value.totalCents, style: .display, colored: false)
+                    NavigationLink { expenses("Income", ExpensesQuery(period: period, kind: .in)) } label: {
+                        ListRow(title: "In") { amount(loaded.value.inCents, chevron: true) }
+                    }
+                    .buttonStyle(.plain)
+                    ListRow(title: "Out") { amount(loaded.value.outCents, chevron: false) }
+                    ListRow(title: "Net") { MoneyText(cents: loaded.value.netCents) }
                 }
                 if loaded.value.categories.isEmpty {
                     Text("No spending in this period").textStyle(.subhead, color: Palette.secondaryText)
@@ -45,14 +49,35 @@ struct SpendingView: View {
                     }
                     Card {
                         ForEach(loaded.value.categories, id: \.name) { category in
-                            ListRow(title: category.name) { MoneyText(cents: category.spentCents, colored: false) }
+                            NavigationLink {
+                                let id = category.categoryId ?? ExpensesQuery.uncategorized
+                                expenses(category.name, ExpensesQuery(period: period, kind: .out, categoryId: id))
+                            } label: {
+                                ListRow(title: category.name) { amount(category.spentCents, chevron: true) }
+                            }
+                            .buttonStyle(.plain)
                         }
+                        NavigationLink { expenses("Expenses", ExpensesQuery(period: period, kind: .out)) } label: {
+                            ListRow(title: "All expenses") { Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText) }
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
             }
         }
         .task(id: period) { state = .loading; await load() }
         .refreshable { await load() }
+    }
+
+    private func expenses(_ title: String, _ query: ExpensesQuery) -> some View {
+        ExpensesView(title: title, query: query) { await load() }
+    }
+
+    private func amount(_ cents: Int, chevron: Bool) -> some View {
+        HStack(spacing: Space.s) {
+            MoneyText(cents: cents, colored: false)
+            if chevron { Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText) }
+        }
     }
 
     private func load() async {
