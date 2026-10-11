@@ -118,6 +118,7 @@ struct ActivityView: View {
     }
 
     /// Re-reads one edited row in place: reloading from the first page drops the later pages and jumps the list.
+    /// A changed date is the exception, since the row moves across the paging cursor.
     private func refresh(_ id: String) async {
         guard let reader = model.reader else { return }
         do {
