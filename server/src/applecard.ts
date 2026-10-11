@@ -117,19 +117,43 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
   const result: AppleCardImportResult = { accountId, rows: rows.length, added: 0, updated: 0, skippedBeforeCutover: 0 };
   const stored = db.prepare("SELECT clearing_date AS c FROM transactions WHERE source = 'applecard' AND source_id = ?");
   const taken = new Set<string>();
-  rows.forEach((r) => {
+  type Stored = { c: string | null } | undefined;
+  const ids: string[] = [];
+  const found: Stored[] = [];
+  // pass 1: a dated row first claims the stored charge that cleared that same day, so an undated row can't take it
+  rows.forEach((r, i) => {
+    if (!r.clearingDate) return;
     const base = baseOf(r);
-    // every row probes from 0 so it can claim a lower index an earlier identical row skipped;
-    // an identical purchase that cleared on another day is a different charge: move to the next occurrence
-    let sourceId: string;
-    let row: { c: string | null } | undefined;
     for (let n = 0; ; n += 1) {
-      sourceId = idFor(base, n);
-      if (taken.has(sourceId)) continue;
-      row = stored.get(sourceId) as { c: string | null } | undefined;
-      if (!(row?.c && r.clearingDate && row.c !== r.clearingDate)) break;
+      const sourceId = idFor(base, n);
+      const row = stored.get(sourceId) as Stored;
+      if (!row) break;
+      if (taken.has(sourceId) || row.c !== r.clearingDate) continue;
+      taken.add(sourceId);
+      ids[i] = sourceId;
+      found[i] = row;
+      break;
     }
-    taken.add(sourceId);
+  });
+  // pass 2: every other row probes from 0 so it can claim a lower index an earlier identical row skipped;
+  // an identical purchase that cleared on another day is a different charge: move to the next occurrence
+  rows.forEach((r, i) => {
+    if (ids[i]) return;
+    const base = baseOf(r);
+    for (let n = 0; ; n += 1) {
+      const sourceId = idFor(base, n);
+      if (taken.has(sourceId)) continue;
+      const row = stored.get(sourceId) as Stored;
+      if (row?.c && r.clearingDate && row.c !== r.clearingDate) continue;
+      taken.add(sourceId);
+      ids[i] = sourceId;
+      found[i] = row;
+      break;
+    }
+  });
+  rows.forEach((r, i) => {
+    const sourceId = ids[i];
+    const row = found[i];
     if (cutover && r.transactionDate < cutover) { result.skippedBeforeCutover += 1; return; }
     if (row) result.updated += 1; else result.added += 1;
     // payments must never count as spending; other rows keep Apple's category so refunds net against purchases

@@ -10,7 +10,7 @@ final class AppLock {
     private var launched = false
     private var backgroundedAt: ContinuousClock.Instant?
     private var authenticating = false
-    /// True only between entering the server token and the next background: a missing baseline may be saved only then.
+    /// True only between entering the server token and the next background: only then may the current enrollment become the baseline.
     private var trustNewBaseline = false
     private var isActive = false
     /// Bumped on every background and every new lock, so a Face ID result that arrives later can't unlock.
@@ -42,7 +42,8 @@ final class AppLock {
     enum OwnerCheck { case confirmed, failed(String?), facesChanged }
 
     /// Someone who knows the passcode can add a face in iOS Settings; a changed enrolled-face state means Face ID no longer proves the owner.
-    /// With no saved state, only `allowNewBaseline` (the server token was just entered) may save one; otherwise it counts as changed.
+    /// With `allowNewBaseline` (the server token was just entered) the current state replaces any saved one;
+    /// otherwise a missing or different saved state counts as changed and signs out.
     static func confirmOwner(reason: String, allowNewBaseline: Bool) async -> OwnerCheck {
         let context = LAContext()
         context.localizedFallbackTitle = ""
@@ -116,9 +117,8 @@ final class AppLock {
             generation += 1
         }
         guard connected else {
-            // not connected: nothing to lock; didConnect locks once the Connect screen succeeds
-
-            launched = true
+            // not connected: nothing to lock; didConnect locks once the Connect screen succeeds.
+            // `launched` stays as is: a connection loaded at a later .active (prewarm while locked) still gets the launch lock
             locked = false
             backgroundedAt = nil
             if phase == .active { cover.hide() } else { cover.show(locked: false, message: nil) {} }

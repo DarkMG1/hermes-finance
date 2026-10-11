@@ -316,3 +316,12 @@ test('same-day feed entries follow the order they were recorded, not their ids',
   assert.deepEqual(detail.history.map((h: { transactionId: string }) => h.transactionId), ['a-dep', 'z-lunch']);
   assert.equal(detail.history[0].settled, true);
 });
+
+test('same-day feed entries from one sync share created_at and still follow insert order', async () => {
+  const { deps, get } = setup();
+  seedTxn(deps.db, { id: 'z-lunch', accountId: 'a1', date: '2026-03-05', amountCents: -1500, personId: 'p1' });
+  seedTxn(deps.db, { id: 'a-dep', accountId: 'a1', date: '2026-03-05', amountCents: 1500, personId: 'p1' });
+  const detail = await get('/v1/people/p1');
+  assert.deepEqual(detail.history.map((h: { transactionId: string }) => h.transactionId), ['a-dep', 'z-lunch']);
+  assert.equal(detail.history[0].settled, true);
+});

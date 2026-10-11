@@ -100,3 +100,19 @@ private struct ClearingTransport: HTTPTransport {
     let key = testBase.absoluteString + "/v1/home?"
     #expect(cache.load(key: key) == nil)
 }
+
+@Test func aReaderMadeBeforeAClearNeverStoresAgain() async throws {
+    let cache = tempCache()
+    let key = testBase.absoluteString + "/v1/home?"
+    let home = try fixture("home")
+    let old = Reader(client: APIClient(baseURL: testBase, token: "t", transport: FakeTransport([.success(HTTPResponse(status: 200, body: home))])),
+                     cache: cache)
+    cache.clear()
+    _ = try await old.read("/v1/home", as: Home.self)
+    #expect(cache.load(key: key) == nil)
+
+    let fresh = Reader(client: APIClient(baseURL: testBase, token: "t", transport: FakeTransport([.success(HTTPResponse(status: 200, body: home))])),
+                       cache: cache)
+    _ = try await fresh.read("/v1/home", as: Home.self)
+    #expect(cache.load(key: key) != nil)
+}

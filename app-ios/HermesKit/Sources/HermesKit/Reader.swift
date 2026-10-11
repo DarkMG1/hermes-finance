@@ -11,11 +11,14 @@ public struct Reader: Sendable {
     private let client: APIClient
     private let cache: ResponseCache
     private let now: @Sendable () -> Date
+    // fixed for this Reader's lifetime: after a sign-out clears the cache, nothing this Reader reads is stored again
+    private let generation: Int
 
     public init(client: APIClient, cache: ResponseCache, now: @escaping @Sendable () -> Date = { Date() }) {
         self.client = client
         self.cache = cache
         self.now = now
+        generation = cache.currentGeneration
     }
 
     // nginx answers 502-504 when the Node server is down
@@ -32,7 +35,6 @@ public struct Reader: Sendable {
         keyParts.queryItems = query.isEmpty ? nil : query
         // keyed by server too, so one server's cached data is never served for another
         let key = client.baseURL.absoluteString + path + "?" + (keyParts.percentEncodedQuery ?? "")
-        let generation = cache.currentGeneration
         do {
             let data = try await client.getData(path, query: query)
             let value: Value = try client.decode(data)

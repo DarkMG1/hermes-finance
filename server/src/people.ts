@@ -8,16 +8,16 @@ import { TXN_COLS, rowToTransaction, type TxnRow } from './ledger.ts';
 export const TAGGED = `
   SELECT sl.person_id AS person_id, t.id AS transaction_id, sl.id AS line_id, t.date AS date,
          COALESCE(t.payee, t.merchant_name, t.bank_description) AS payee, sl.amount_cents AS amount, 0 AS paid_by,
-         t.created_at AS created_at
+         t.created_at AS created_at, t.rowid AS row_order
     FROM split_lines sl JOIN transactions t ON t.id = sl.transaction_id
    WHERE sl.person_id IS NOT NULL AND t.removed_at IS NULL
   UNION ALL
-  SELECT t.person_id, t.id, NULL, t.date, COALESCE(t.payee, t.merchant_name, t.bank_description), t.amount_cents, 0, t.created_at
+  SELECT t.person_id, t.id, NULL, t.date, COALESCE(t.payee, t.merchant_name, t.bank_description), t.amount_cents, 0, t.created_at, t.rowid
     FROM transactions t
    WHERE t.person_id IS NOT NULL AND t.removed_at IS NULL
      AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
   UNION ALL
-  SELECT t.paid_by_person_id, t.id, NULL, t.date, COALESCE(t.payee, t.merchant_name, t.bank_description), -t.amount_cents, 1, t.created_at
+  SELECT t.paid_by_person_id, t.id, NULL, t.date, COALESCE(t.payee, t.merchant_name, t.bank_description), -t.amount_cents, 1, t.created_at, t.rowid
     FROM transactions t
    WHERE t.paid_by_person_id IS NOT NULL AND t.removed_at IS NULL AND t.source = 'manual' AND t.amount_cents < 0`;
 
@@ -43,8 +43,8 @@ export function listPeople(db: Db, includeArchived: boolean): Person[] {
 export function getPerson(db: Db, id: string): PersonDetail | null {
   const row = db.prepare('SELECT id, name, match_text, archived FROM people WHERE id = ?').get(id) as PersonRow | undefined;
   if (!row) return null;
-  // same-day entries in the order they were recorded; ids are random
-  const items = db.prepare(`SELECT * FROM (${TAGGED}) WHERE person_id = ? ORDER BY date, created_at, transaction_id, line_id`).all(id) as Tagged[];
+  // same-day entries in the order they were recorded (rowid when one sync gave them the same created_at); ids are random
+  const items = db.prepare(`SELECT * FROM (${TAGGED}) WHERE person_id = ? ORDER BY date, created_at, row_order, line_id`).all(id) as Tagged[];
   let balance = 0;
   // computed on every read, so bank edits and removals rewrite the feed
   const history: HistoryEntry[] = items.map((t) => {

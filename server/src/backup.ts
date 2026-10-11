@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const NAME = /^hermes-\d{8}T\d{6}Z\.db\.age$/;
@@ -22,8 +22,15 @@ function assertIntact(path: string): void {
 
 export async function createBackup(opts: { dbPath: string; dir: string; recipient: string; now: Date }): Promise<string> {
   mkdirSync(opts.dir, { recursive: true, mode: 0o700 });
-  // a run killed between the copy and age leaves a plaintext copy behind; never keep one
-  for (const n of readdirSync(opts.dir)) if (/\.tmp-db(-wal|-shm)?$|\.partial$/.test(n)) rmSync(join(opts.dir, n), { force: true });
+  // a run killed between the copy and age leaves a plaintext copy behind; never keep one.
+  // only files over an hour old: a younger one may belong to a backup still running
+  for (const n of readdirSync(opts.dir)) {
+    if (!/\.tmp-db(-wal|-shm)?$|\.partial$/.test(n)) continue;
+    const path = join(opts.dir, n);
+    // gone already when the running backup renamed or removed it
+    const mtime = statSync(path, { throwIfNoEntry: false })?.mtimeMs;
+    if (mtime !== undefined && Date.now() - mtime > 3600_000) rmSync(path, { force: true });
+  }
   const final = join(opts.dir, backupName(opts.now));
   if (existsSync(final)) throw new Error('a backup with this timestamp already exists');
   const tmp = `${final}.tmp-db`;

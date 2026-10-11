@@ -189,3 +189,15 @@ test('re-importing a statement with its identical rows in swapped order updates 
   assert.deepEqual([again.added, again.updated], [0, 2]);
   assert.equal((deps.db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE source = 'applecard'").get() as { n: number }).n, 2);
 });
+
+test('an undated identical row never takes the stored charge a dated row matches exactly', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  const first = (await post(app, [HEADER, coffee('09/30/2026'), coffee('10/01/2026')].join('\n'), 'ac-a')).json() as { accountId: string };
+  const balanceCents = () => (deps.db.prepare('SELECT balance_current_cents AS b FROM accounts WHERE id = ?').get(first.accountId) as { b: number }).b;
+  const before = balanceCents();
+  const again = (await post(app, [HEADER, coffee(''), coffee('09/30/2026')].join('\n'), 'ac-b')).json() as { added: number; updated: number };
+  assert.deepEqual([again.added, again.updated], [0, 2]);
+  assert.equal((deps.db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE source = 'applecard'").get() as { n: number }).n, 2);
+  assert.equal(balanceCents(), before);
+});

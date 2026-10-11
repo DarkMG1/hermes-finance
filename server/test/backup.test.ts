@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
@@ -121,7 +121,14 @@ test('a backup clears plaintext leftovers from a killed run', async () => {
   const out = join(dir, 'backups');
   mkdirSync(out);
   const stale = ['hermes-20261009T000000Z.db.age.tmp-db', 'hermes-20261009T000000Z.db.age.tmp-db-wal', 'hermes-20261009T000000Z.db.age.partial'];
-  for (const n of stale) writeFileSync(join(out, n), 'plaintext');
+  const twoHoursAgo = new Date(Date.now() - 2 * 3600_000);
+  for (const n of stale) {
+    writeFileSync(join(out, n), 'plaintext');
+    utimesSync(join(out, n), twoHoursAgo, twoHoursAgo);
+  }
+  // another backup still running: its file is fresh and must survive
+  const running = 'hermes-20261010T034400Z.db.age.partial';
+  writeFileSync(join(out, running), 'in progress');
   await createBackup({ dbPath: deps.config.dbPath, dir: out, recipient, now: new Date('2026-10-10T03:45:00Z') });
-  assert.deepEqual(readdirSync(out), ['hermes-20261010T034500Z.db.age']);
+  assert.deepEqual(readdirSync(out).sort(), ['hermes-20261010T034400Z.db.age.partial', 'hermes-20261010T034500Z.db.age']);
 });
