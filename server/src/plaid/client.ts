@@ -1,6 +1,6 @@
 import { Configuration, CountryCode, PlaidApi, PlaidEnvironments, Products, type LinkTokenCreateRequest, type LinkTokenGetSessionsResponse } from 'plaid';
 import type { Config } from '../config.ts';
-import { PlaidError, type LinkResult, type PlaidAccount, type PlaidPort, type PlaidTxn, type SyncPage } from './port.ts';
+import { PlaidError, type LinkResult, type LinkTokenOpts, type PlaidAccount, type PlaidHoldings, type PlaidPort, type PlaidTxn, type SyncPage } from './port.ts';
 
 const REDIRECT = 'hermesfinance://plaid-done';
 
@@ -35,6 +35,17 @@ export function mapLinkSessions(sessions: LinkTokenGetSessionsResponse[]): LinkR
   return sessions.every((s) => s.exit) ? { status: 'exited' } : { status: 'complete', publicToken: null, institutionName: null };
 }
 
+/** Create links ask for Investments only where supported; an update adds consent for it when the item needs it. */
+export function buildLinkTokenRequest(opts: LinkTokenOpts): LinkTokenCreateRequest {
+  return {
+    user: { client_user_id: 'owner' }, client_name: 'Hermes', country_codes: [CountryCode.Us], language: 'en',
+    hosted_link: { completion_redirect_uri: REDIRECT },
+    ...(opts.mode === 'update'
+      ? { access_token: opts.accessToken, ...(opts.addInvestments ? { additional_consented_products: [Products.Investments] } : {}) }
+      : { products: [Products.Transactions], optional_products: [Products.Investments], transactions: { days_requested: 730 } }),
+  };
+}
+
 export function createPlaidClient(config: Config): PlaidPort {
   const api = new PlaidApi(new Configuration({
     basePath: PlaidEnvironments[config.plaid.env],
@@ -62,14 +73,24 @@ export function createPlaidClient(config: Config): PlaidPort {
       } catch (e) { return rethrow(e); }
     },
 
+    async investmentsHoldingsGet(accessToken): Promise<PlaidHoldings> {
+      try {
+        const { data } = await api.investmentsHoldingsGet({ access_token: accessToken });
+        return {
+          holdings: data.holdings.map((h) => ({
+            accountId: h.account_id, securityId: h.security_id, quantity: h.quantity,
+            price: h.institution_price, value: h.institution_value, costBasis: h.cost_basis ?? null,
+          })),
+          securities: data.securities.map((s) => ({
+            securityId: s.security_id, name: s.name ?? null, ticker: s.ticker_symbol ?? null, type: s.type ?? null,
+            isCash: s.is_cash_equivalent === true, closePrice: s.close_price ?? null,
+          })),
+        };
+      } catch (e) { return rethrow(e); }
+    },
+
     async createLinkToken(opts) {
-      const req: LinkTokenCreateRequest = {
-        user: { client_user_id: 'owner' }, client_name: 'Hermes', country_codes: [CountryCode.Us], language: 'en',
-        hosted_link: { completion_redirect_uri: REDIRECT },
-        ...(opts.mode === 'update'
-          ? { access_token: opts.accessToken }
-          : { products: [Products.Transactions], transactions: { days_requested: 730 } }),
-      };
+      const req = buildLinkTokenRequest(opts);
       try {
         const { data } = await api.linkTokenCreate(req);
         if (!data.hosted_link_url) throw new PlaidError('NO_HOSTED_LINK_URL');

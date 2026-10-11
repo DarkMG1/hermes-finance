@@ -1,4 +1,4 @@
-import { PlaidError, type LinkResult, type PlaidAccount, type PlaidPort, type PlaidTxn, type SyncPage } from '../src/plaid/port.ts';
+import { PlaidError, type LinkResult, type LinkTokenOpts, type PlaidAccount, type PlaidHoldings, type PlaidPort, type PlaidTxn, type SyncPage } from '../src/plaid/port.ts';
 
 export function txn(over: Partial<PlaidTxn> & { transactionId: string }): PlaidTxn {
   return {
@@ -15,6 +15,10 @@ export class FakePlaid implements PlaidPort {
   linkResults = new Map<string, LinkResult>();
   exchanged: string[] = [];
   syncCalls: (string | null)[] = [];
+  holdings: PlaidHoldings = { holdings: [], securities: [] };
+  holdingsCalls = 0;
+  linkOpts: LinkTokenOpts[] = [];
+  private holdingsFailures: string[] = [];
   private pageIndex = 0;
   private failures: string[] = [];
   private linkCounter = 0;
@@ -35,9 +39,19 @@ export class FakePlaid implements PlaidPort {
     return page;
   }
 
+  failNextHoldings(code: string): void { this.holdingsFailures.push(code); }
+
+  async investmentsHoldingsGet(): Promise<PlaidHoldings> {
+    this.holdingsCalls += 1;
+    const failure = this.holdingsFailures.shift();
+    if (failure) throw new PlaidError(failure);
+    return this.holdings;
+  }
+
   async accountsGet(): Promise<PlaidAccount[]> { return this.accounts; }
 
-  async createLinkToken(opts: { mode: 'create' } | { mode: 'update'; accessToken: string }) {
+  async createLinkToken(opts: LinkTokenOpts) {
+    this.linkOpts.push(opts);
     this.linkCounter += 1;
     const linkToken = `link-${opts.mode}-${this.linkCounter}`;
     return { linkToken, hostedLinkUrl: `https://hosted.plaid.test/${linkToken}`, expiration: '2099-01-01T00:00:00Z' };

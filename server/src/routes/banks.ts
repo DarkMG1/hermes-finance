@@ -7,6 +7,7 @@ import { parseBody } from '../validate.ts';
 import { idempotentAsync } from '../idempotency.ts';
 import { decryptToken, encryptToken } from '../crypto.ts';
 import { syncItem } from '../sync/run.ts';
+import type { LinkTokenOpts } from '../plaid/port.ts';
 import { listBanks } from './sync.ts';
 
 const SESSION_TTL_MS = 30 * 60 * 1000;
@@ -25,11 +26,15 @@ export function bankRoutes(app: FastifyInstance, deps: Deps): void {
   app.post('/v1/plaid/link-sessions', async (req, reply) => {
     const body = parseBody(CreateLinkSessionBody, req.body);
     const r = await idempotentAsync(deps, req, async () => {
-      let opts: { mode: 'create' } | { mode: 'update'; accessToken: string } = { mode: 'create' };
+      let opts: LinkTokenOpts = { mode: 'create' };
       if (body.mode === 'update') {
-        const item = db.prepare('SELECT access_token_enc FROM items WHERE id = ?').get(body.itemId) as { access_token_enc: string } | undefined;
+        const item = db.prepare('SELECT access_token_enc, investments_status FROM items WHERE id = ?').get(body.itemId) as
+          { access_token_enc: string; investments_status: string | null } | undefined;
         if (!item) throw new ApiError(404, 'NOT_FOUND', 'bank not found');
-        opts = { mode: 'update', accessToken: decryptToken(item.access_token_enc, deps.config.tokenKey) };
+        opts = {
+          mode: 'update', accessToken: decryptToken(item.access_token_enc, deps.config.tokenKey),
+          addInvestments: item.investments_status === 'consent_required',
+        };
       }
       const link = await deps.plaid.createLinkToken(opts);
       const id = randomUUID();

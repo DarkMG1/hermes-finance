@@ -116,3 +116,21 @@ test('replaying a completed session still requires an Idempotency-Key', async ()
   assert.equal((await app.inject({ method: 'POST', url, headers: w('r-3'), payload: {} })).statusCode, 200);
   assert.deepEqual(plaid.exchanged, ['pub-r']);
 });
+
+test('an update link for a consent-required item also asks for Investments', async () => {
+  const { deps, plaid } = makeTestDeps();
+  seedItem(deps, { id: 'i1', plaidItemId: 'p1', institutionName: 'Synthetic Brokerage', accessToken: 'tok' });
+  seedItem(deps, { id: 'i2', plaidItemId: 'p2', institutionName: 'Synthetic Bank', accessToken: 'tok2' });
+  deps.db.prepare("UPDATE items SET investments_status = 'consent_required' WHERE id = 'i1'").run();
+  const app = buildApp(deps);
+  const post = (key: string, payload: object) =>
+    app.inject({ method: 'POST', url: '/v1/plaid/link-sessions', headers: { ...AUTH, 'idempotency-key': key }, payload });
+  assert.equal((await post('u1', { mode: 'update', itemId: 'i1' })).statusCode, 201);
+  assert.equal((await post('u2', { mode: 'update', itemId: 'i2' })).statusCode, 201);
+  assert.equal((await post('c1', { mode: 'create' })).statusCode, 201);
+  assert.deepEqual(plaid.linkOpts.map((o) => (o.mode === 'update' ? { mode: o.mode, addInvestments: o.addInvestments ?? false } : { mode: o.mode })), [
+    { mode: 'update', addInvestments: true },
+    { mode: 'update', addInvestments: false },
+    { mode: 'create' },
+  ]);
+});
