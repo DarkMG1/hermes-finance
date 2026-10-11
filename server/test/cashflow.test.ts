@@ -116,3 +116,14 @@ test('expenses rejects a bad cursor, a date that does not match the period, and 
   assert.equal(await get('period=month&date=2026-03&kind=sideways'), 400);
   assert.equal(await get('period=month&date=2026-03&extra=1'), 400);
 });
+
+test('moving a split line to someone else takes it out of Expenses and its category', async () => {
+  const { app } = setup();
+  const res = await app.inject({ method: 'PATCH', url: '/v1/transactions/t3/lines/t3-a', headers: { ...AUTH, 'idempotency-key': 'k-move' }, payload: { personId: 'p1' } });
+  assert.equal(res.statusCode, 200, res.body);
+  const rows = await allRows(app, 'period=month&date=2026-03', 50);
+  assert.equal(rows.some((r) => r.lineId === 't3-a'), false);
+  const s = (await app.inject({ method: 'GET', url: '/v1/spending?period=month&date=2026-03', headers: AUTH })).json();
+  assert.equal(s.categories.find((c: { name: string }) => c.name === 'Fun').spentCents, 1000);
+  assert.equal(s.outCents, 4200);
+});

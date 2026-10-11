@@ -49,7 +49,7 @@ struct SplitLineSheet: View {
                     }
                     Field(label: "Notes", error: error) { TextField("Notes", text: $notes, axis: .vertical).lineLimit(1...6) }
                 }
-                .disabled(writes.unresolved)
+                .disabled(writes.unresolved || busy)
                 Section {
                     // unsaved edits would be lost when the split saves and this sheet closes, so the button saves them first
                     Button("Edit split") { Task { await editSplit() } }

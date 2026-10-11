@@ -74,7 +74,7 @@ export function listTransactions(db: Db, q: ListTransactionsQuery): TransactionP
   if (q.to) { where.push('date <= ?'); args.push(q.to); }
   if (q.q) {
     const like = `%${q.q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`;
-    // people's names count too: a row tagged with them, paid by them, or with a split line for them
+    // split line names count, and so do people's names: a row tagged with them, paid by them, or with a split line for them
     where.push(`(COALESCE(payee, '') LIKE ? ESCAPE '\\' OR COALESCE(merchant_name, '') LIKE ? ESCAPE '\\' OR bank_description LIKE ? ESCAPE '\\'
       OR COALESCE(notes, '') LIKE ? ESCAPE '\\'
       OR EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = transactions.id AND COALESCE(sl.payee, '') LIKE ? ESCAPE '\\')

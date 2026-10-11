@@ -6,6 +6,7 @@ struct SpendingView: View {
     @Environment(AppModel.self) private var model
     @State private var period = SpendingPeriod.current(today: DayText.ymd(.now))
     @State private var state: LoadState<Spending> = .loading
+    @State private var loadedPeriod: SpendingPeriod?
 
     var body: some View {
         Screen(title: "Spending") {
@@ -28,7 +29,7 @@ struct SpendingView: View {
             LoadingContent(state: state, retry: { Task { await load() } }) { loaded in
                 LastUpdated(loaded: loaded)
                 Card {
-                    NavigationLink { expenses("Income", ExpensesQuery(period: period, kind: .in)) } label: {
+                    NavigationLink { expenses("Income", ExpensesQuery(period: period, kind: .in), total: loaded.value.inCents) } label: {
                         ListRow(title: "In") { amount(loaded.value.inCents, chevron: true) }
                     }
                     .buttonStyle(.plain)
@@ -48,29 +49,35 @@ struct SpendingView: View {
                         .frame(height: CGFloat(top.count) * Space.xxl)
                     }
                     Card {
-                        ForEach(loaded.value.categories, id: \.name) { category in
+                        ForEach(loaded.value.categories, id: \.listId) { category in
                             NavigationLink {
-                                let id = category.categoryId ?? ExpensesQuery.uncategorized
-                                expenses(category.name, ExpensesQuery(period: period, kind: .out, categoryId: id))
+                                expenses(category.name, ExpensesQuery(period: period, kind: .out, categoryId: category.listId), total: category.spentCents)
                             } label: {
                                 ListRow(title: category.name) { amount(category.spentCents, chevron: true) }
                             }
                             .buttonStyle(.plain)
                         }
-                        NavigationLink { expenses("Expenses", ExpensesQuery(period: period, kind: .out)) } label: {
-                            ListRow(title: "All expenses") { Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText) }
-                        }
-                        .buttonStyle(.plain)
                     }
+                }
+                // a fully refunded period has rows but no categories
+                Card {
+                    NavigationLink { expenses("Expenses", ExpensesQuery(period: period, kind: .out), total: loaded.value.outCents) } label: {
+                        ListRow(title: "All expenses") { Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText) }
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
-        .task(id: period) { state = .loading; await load() }
+        .task(id: period) {
+            // coming back from Expenses re-runs this; keep the list (and scroll) unless the period moved
+            if loadedPeriod != period { state = .loading }
+            await load()
+        }
         .refreshable { await load() }
     }
 
-    private func expenses(_ title: String, _ query: ExpensesQuery) -> some View {
-        ExpensesView(title: title, query: query) { await load() }
+    private func expenses(_ title: String, _ query: ExpensesQuery, total: Int) -> some View {
+        ExpensesView(title: title, query: query, total: total) { await load() }
     }
 
     private func amount(_ cents: Int, chevron: Bool) -> some View {
@@ -87,9 +94,16 @@ struct SpendingView: View {
             let loaded = try await reader.read("/v1/spending", query: requested.queryItems, as: Spending.self)
             guard !Task.isCancelled, requested == period else { return }
             state = .loaded(loaded)
+            loadedPeriod = requested
         } catch {
             guard !Task.isCancelled, requested == period else { return }
             state = .failed(errorMessage(error))
+            loadedPeriod = requested
         }
     }
+}
+
+private extension SpendingCategory {
+    /// Names need not be unique; this is also what Expenses filters by.
+    var listId: String { categoryId ?? ExpensesQuery.uncategorized }
 }

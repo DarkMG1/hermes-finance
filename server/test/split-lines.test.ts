@@ -95,8 +95,8 @@ test('PATCH a line renames, re-tags and notes only that line, keeping its id', a
   assert.equal(res.json().payee, 'Synthetic Store');
   const cleared = await patchLine(app, '/v1/transactions/t1/lines/l1', 'k2', { payee: '   ' });
   assert.equal(cleared.json().splitLines[0].payee, null, 'blank clears the name');
-  const nulled = await patchLine(app, '/v1/transactions/t1/lines/l1', 'k3', { payee: 'Synthetic Lamp' });
-  assert.equal(nulled.json().splitLines[0].payee, 'Synthetic Lamp');
+  const renamed = await patchLine(app, '/v1/transactions/t1/lines/l1', 'k3', { payee: 'Synthetic Lamp' });
+  assert.equal(renamed.json().splitLines[0].payee, 'Synthetic Lamp');
   assert.equal((await patchLine(app, '/v1/transactions/t1/lines/l1', 'k4', { payee: null })).json().splitLines[0].payee, null);
 });
 

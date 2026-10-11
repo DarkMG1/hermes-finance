@@ -6,6 +6,8 @@ struct ExpensesView: View {
     @Environment(AppModel.self) private var model
     let title: String
     let query: ExpensesQuery
+    /// The number tapped on Spending, shown before every page has loaded.
+    let total: Int
     /// Spending's totals change too after an edit.
     let onChange: () async -> Void
 
@@ -16,6 +18,7 @@ struct ExpensesView: View {
     @State private var lastLoad: Loaded<ExpensesPage>?
     @State private var generation = 0
     @State private var opened: Opened?
+    @State private var openGeneration = 0
 
     private enum Opened: Identifiable {
         case transaction(LedgerTransaction)
@@ -35,6 +38,7 @@ struct ExpensesView: View {
         List {
             Group {
                 Text(query.period.title).textStyle(.subhead, color: Palette.secondaryText)
+                LabeledContent("Total") { MoneyText(cents: total, colored: false) }
                 if let lastLoad { LastUpdated(loaded: lastLoad) }
                 InlineError(message: error)
                 ForEach(rows) { row in
@@ -49,10 +53,6 @@ struct ExpensesView: View {
                 if loading { ProgressView().frame(maxWidth: .infinity) }
                 if !loading && rows.isEmpty && error == nil {
                     Text("Nothing in this period").textStyle(.subhead, color: Palette.secondaryText)
-                }
-                // every page is loaded, so this equals the number tapped on Spending
-                if !loading && cursor == nil && !rows.isEmpty {
-                    LabeledContent("Total") { MoneyText(cents: rows.reduce(0) { $0 + $1.amountCents }, colored: false) }
                 }
             }
             .listRowBackground(Palette.surface)
@@ -72,7 +72,7 @@ struct ExpensesView: View {
 
     private func subtitle(_ row: ExpenseRow) -> String {
         let tag = row.isSplitDifference ? "Split difference" : row.categoryName
-        return [DayText.display(row.date), tag, row.isSplit ? "Split" : nil].compactMap { $0 }.joined(separator: " · ")
+        return [DayText.display(row.date), tag, row.isSplit && !row.isSplitDifference ? "Split" : nil].compactMap { $0 }.joined(separator: " · ")
     }
 
     private func changed() async {
@@ -83,9 +83,16 @@ struct ExpensesView: View {
     /// Rows carry ids only, so the transaction is read fresh; a split difference opens the split editor to fix it.
     private func open(_ row: ExpenseRow) async {
         guard let reader = model.reader else { return }
+        // a slow read must not open over a sheet a later tap already opened
+        openGeneration += 1
+        let gen = openGeneration
         do {
             let transaction = try await reader.read("/v1/transactions/\(row.transactionId)", as: LedgerTransaction.self).value
-            if row.isSplitDifference {
+            guard gen == openGeneration, opened == nil else { return }
+            if let lineId = row.lineId, !transaction.splitLines.contains(where: { $0.id == lineId }) {
+                // re-split since this list loaded, so the line has a new id
+                await load(reset: true)
+            } else if row.isSplitDifference {
                 opened = .split(transaction)
             } else if let lineId = row.lineId {
                 opened = .line(transaction, lineId)

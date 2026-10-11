@@ -87,6 +87,7 @@ export function getExpenses(db: Db, q: ExpensesQuery): ExpensesPage {
     after = 'WHERE ((date, created_at, row_order) < (?, ?, ?) OR ((date, created_at, row_order) = (?, ?, ?) AND line_key > ?))';
     afterArgs.push(d, c, r, d, c, r, k);
   }
+  // line ids are "NN-<uuid>", so '~' sorts after them and a split's difference row comes after its lines
   const rows = db.prepare(`${LINES}, page AS (
       SELECT lines.*, COALESCE(lines.line_id, '~') AS line_key, COALESCE(c.name, 'Uncategorized') AS category_name
         FROM lines LEFT JOIN categories c ON c.id = lines.category_id

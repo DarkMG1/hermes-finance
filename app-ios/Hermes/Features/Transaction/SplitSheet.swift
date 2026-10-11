@@ -123,7 +123,8 @@ struct SplitSheet: View {
     private func fillShared() {
         guard let shared = sharedLines else { return }
         let category = lines.first { $0.personId == nil }?.categoryId ?? transaction.categoryId
-        lines = [Line(amount: plain(shared.yours), categoryId: category), Line(amount: plain(shared.theirs), personId: shareWith)]
+        let name = lines.first { $0.personId == nil }?.name ?? ""
+        lines = [Line(amount: plain(shared.yours), categoryId: category, name: name), Line(amount: plain(shared.theirs), personId: shareWith)]
     }
 
     private func rebalance(edited id: UUID) {
