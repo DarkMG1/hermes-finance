@@ -76,6 +76,16 @@ final class AppLock {
         if let current = context.domainState.biometry.stateHash { UserDefaults.standard.set(current, forKey: baselineKey) }
     }
 
+    /// A Face ID check started inside the app (Show balances). The prompt makes the scene inactive, which shows the privacy cover;
+    /// hide it as soon as Face ID answers, as an unlock does, instead of after the prompt's dismiss animation.
+    func confirmOwnerInApp(reason: String) async -> OwnerCheck {
+        let started = generation
+        let result = await Self.confirmOwner(reason: reason, allowNewBaseline: false)
+        // backgrounded or locked since the prompt: phaseChanged owns the cover
+        if generation == started && !locked { cover.hide() }
+        return result
+    }
+
     private static func failureMessage(_ error: Error?) -> String? {
         switch (error as? LAError)?.code {
         case .biometryLockout?: "Face ID is locked. Unlock your iPhone with its passcode, then try again."

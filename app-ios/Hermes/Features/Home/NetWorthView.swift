@@ -68,13 +68,23 @@ struct NetWorthView: View {
 
     private func chart(_ points: [NetWorthPoint]) -> some View {
         let floor = Double(points.map(\.netWorthCents).min() ?? 0) / 100
-        return Chart(points, id: \.date) { point in
-            let day = DayText.date(point.date) ?? .now
-            let dollars = Double(point.netWorthCents) / 100
-            AreaMark(x: .value("Day", day), yStart: .value("Floor", floor), yEnd: .value("Net worth", dollars))
-                .foregroundStyle(Palette.accent.opacity(0.15))
-            LineMark(x: .value("Day", day), y: .value("Net worth", dollars))
-                .foregroundStyle(Palette.accent)
+        let selected = point(at: scrubbed, in: points)
+        return Chart {
+            ForEach(points, id: \.date) { point in
+                let day = DayText.date(point.date) ?? .now
+                let dollars = Double(point.netWorthCents) / 100
+                AreaMark(x: .value("Day", day), yStart: .value("Floor", floor), yEnd: .value("Net worth", dollars))
+                    .foregroundStyle(Palette.accent.opacity(0.15))
+                LineMark(x: .value("Day", day), y: .value("Net worth", dollars))
+                    .foregroundStyle(Palette.accent)
+            }
+            // while dragging, mark the day the header shows
+            if let selected, let day = DayText.date(selected.date) {
+                RuleMark(x: .value("Day", day))
+                    .foregroundStyle(Palette.secondaryText)
+                PointMark(x: .value("Day", day), y: .value("Net worth", Double(selected.netWorthCents) / 100))
+                    .foregroundStyle(Palette.accent)
+            }
         }
         .chartYScale(domain: .automatic(includesZero: false))
         .chartYAxis(hideBalances ? .hidden : .automatic)
