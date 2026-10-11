@@ -60,3 +60,14 @@ private func tempCache() -> ResponseCache {
                                as: TransactionPage.self)
     }
 }
+
+@Test func cachedResponsesAreNeverServedForADifferentServer() async throws {
+    let cache = tempCache()
+    let seed = FakeTransport([.success(HTTPResponse(status: 200, body: try fixture("home")))])
+    _ = try await Reader(client: APIClient(baseURL: testBase, token: "t", transport: seed), cache: cache).read("/v1/home", as: Home.self)
+
+    let otherServer = try #require(URL(string: "https://other.example.test"))
+    let down = FakeTransport([FakeTransport.json(503, "<html>Service Unavailable</html>")])
+    let other = Reader(client: APIClient(baseURL: otherServer, token: "t", transport: down), cache: cache)
+    await #expect(throws: ClientError.self) { try await other.read("/v1/home", as: Home.self) }
+}

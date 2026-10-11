@@ -20,6 +20,8 @@ final class AppModel {
 
     private let keychain = KeychainStore(service: "dev.darkmg1.hermesfinance")
     private let cache: ResponseCache
+    // bumped on disconnect/reconnect so reads still in flight from the old connection are discarded
+    private var session = 0
 
     init() {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -44,6 +46,7 @@ final class AppModel {
     }
 
     func disconnect() {
+        session += 1
         keychain.delete("apiToken")
         UserDefaults.standard.removeObject(forKey: "serverURL")
         cache.clear()
@@ -56,9 +59,12 @@ final class AppModel {
 
     func refreshReferenceData() async {
         guard let reader else { return }
-        if let loaded = try? await reader.read("/v1/categories", as: [Category].self) { categories = loaded.value }
-        if let loaded = try? await reader.read("/v1/accounts", as: [Account].self) { accounts = loaded.value }
-        if let loaded = try? await reader.read("/v1/people", query: [URLQueryItem(name: "all", value: "1")], as: [Person].self) { people = loaded.value }
+        let current = session
+        if let loaded = try? await reader.read("/v1/categories", as: [Category].self), session == current { categories = loaded.value }
+        if let loaded = try? await reader.read("/v1/accounts", as: [Account].self), session == current { accounts = loaded.value }
+        if let loaded = try? await reader.read("/v1/people", query: [URLQueryItem(name: "all", value: "1")], as: [Person].self), session == current {
+            people = loaded.value
+        }
     }
 
     func categoryName(_ id: String?) -> String {
@@ -81,6 +87,7 @@ final class AppModel {
     }
 
     private func configure(url: URL, token: String) {
+        session += 1
         let client = APIClient(baseURL: url, token: token, transport: URLSessionTransport())
         self.client = client
         reader = Reader(client: client, cache: cache)
