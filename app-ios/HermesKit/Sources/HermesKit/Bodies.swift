@@ -98,14 +98,18 @@ public struct CreateTransactionBody: Encodable, Sendable, Equatable {
     public let notes: String?
     /// Someone else paid this; the amount is the owner's share.
     public let paidByPersonId: String?
+    /// Saved already split; the category then lives on the lines.
+    public let splitLines: [SplitLineBody]?
 
-    public init(date: String, amountCents: Int, payee: String, categoryId: String?, notes: String?, paidByPersonId: String? = nil) {
+    public init(date: String, amountCents: Int, payee: String, categoryId: String?, notes: String?, paidByPersonId: String? = nil,
+                splitLines: [SplitLineBody]? = nil) {
         self.date = date
         self.amountCents = amountCents
         self.payee = payee
         self.categoryId = categoryId
         self.notes = notes
         self.paidByPersonId = paidByPersonId
+        self.splitLines = splitLines
     }
 }
 

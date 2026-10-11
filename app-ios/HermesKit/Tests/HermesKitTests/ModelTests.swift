@@ -133,3 +133,11 @@ func json(_ value: some Encodable) throws -> String {
     let paid = CreateTransactionBody(date: "2026-03-03", amountCents: -6000, payee: "M", categoryId: nil, notes: nil, paidByPersonId: "p1")
     #expect(try json(paid) == #"{"amountCents":-6000,"date":"2026-03-03","paidByPersonId":"p1","payee":"M"}"#)
 }
+
+@Test func createBodyCarriesSplitLines() throws {
+    let body = CreateTransactionBody(date: "2026-03-05", amountCents: -4000, payee: "Synthetic Cash", categoryId: nil, notes: nil,
+                                     splitLines: [SplitLineBody(amountCents: -2000, categoryId: "c1", notes: nil),
+                                                  SplitLineBody(amountCents: -2000, categoryId: nil, notes: nil, personId: "p1")])
+    #expect(try json(body) == #"{"amountCents":-4000,"date":"2026-03-05","payee":"Synthetic Cash","splitLines":"#
+        + #"[{"amountCents":-2000,"categoryId":"c1"},{"amountCents":-2000,"categoryId":null,"personId":"p1"}]}"#)
+}

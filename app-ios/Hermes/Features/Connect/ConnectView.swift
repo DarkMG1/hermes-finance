@@ -2,10 +2,12 @@ import SwiftUI
 
 struct ConnectView: View {
     @Environment(AppModel.self) private var model
+    @Environment(AppLock.self) private var lock
     @State private var url = ""
     @State private var token = ""
     @State private var error: String?
     @State private var busy = false
+    @AppStorage("faceIDChanged") private var faceIDChanged = false
 
     var body: some View {
         NavigationStack {
@@ -17,6 +19,11 @@ struct ConnectView: View {
                     }
                     Field(label: "API token", error: error) {
                         SecureField("Paste the token", text: $token)
+                    }
+                } footer: {
+                    if faceIDChanged {
+                        Text("Face ID changed on this iPhone. Check Settings › Face ID & Passcode for an appearance you didn't add, "
+                             + "then enter the server token to continue.")
                     }
                 }
                 Section {
@@ -35,7 +42,9 @@ struct ConnectView: View {
         error = nil
         defer { busy = false }
         do {
+            lock.connectStarting()
             try await model.connect(urlText: url, token: token)
+            faceIDChanged = false
         } catch {
             self.error = errorMessage(error)
         }

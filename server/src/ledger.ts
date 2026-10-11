@@ -108,8 +108,11 @@ const NEGATIVE_TYPES = new Set(['credit', 'loan']);
 export function learnCategory(db: Db, transactionId: string, categoryId: string, nowIso: string): void {
   const row = db.prepare("SELECT plaid_category FROM transactions WHERE id = ? AND source IN ('plaid', 'applecard')").get(transactionId) as
     { plaid_category: string | null } | undefined;
-  // Transfers, income and card payments stay out of spending only while uncategorized; one odd edit must not pull them all in.
-  if (!row?.plaid_category || /^(INCOME|TRANSFER_IN|TRANSFER_OUT)|^LOAN_PAYMENTS_CREDIT_CARD_PAYMENT$/.test(row.plaid_category)) return;
+  // Transfers and income never teach (one odd edit must not pull them all into spending); card payments teach only a transfer category.
+  if (!row?.plaid_category || /^(INCOME|TRANSFER_IN|TRANSFER_OUT)/.test(row.plaid_category)) return;
+  // a card payment may teach a transfer category: that keeps every card payment out of spending
+  if (row.plaid_category === 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'
+    && !db.prepare('SELECT 1 FROM categories WHERE id = ? AND is_transfer = 1').get(categoryId)) return;
   if (db.prepare('SELECT 1 FROM split_lines WHERE transaction_id = ?').get(transactionId)) return;
   db.prepare('INSERT INTO plaid_category_map (plaid_category, category_id) VALUES (?, ?) ON CONFLICT (plaid_category) DO UPDATE SET category_id = excluded.category_id')
     .run(row.plaid_category, categoryId);

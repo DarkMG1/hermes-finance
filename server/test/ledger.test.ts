@@ -283,3 +283,71 @@ test('tagged lines and tagged transactions stay out of spending; responses carry
   assert.equal(dinner.personId, null);
   assert.equal((await app.inject({ method: 'GET', url: '/v1/transactions/lent', headers: AUTH })).json().personId, 'p1');
 });
+
+test('a card payment tagged with a transfer category teaches every uncategorized card payment, on both sides', async () => {
+  const { deps, app } = setup();
+  const pc = 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT';
+  seedCategory(deps.db, { id: 'c-ccp', name: 'Card Payment', isTransfer: true });
+  seedAccount(deps.db, { id: 'card', type: 'credit' });
+  seedTxn(deps.db, { id: 'pay', accountId: 'a1', date: '2026-03-01', amountCents: -5000, source: 'plaid', sourceId: 'p1', plaidCategory: pc });
+  seedTxn(deps.db, { id: 'credit', accountId: 'card', date: '2026-03-01', amountCents: 5000, source: 'plaid', sourceId: 'p2', plaidCategory: pc });
+  seedTxn(deps.db, { id: 'apple', accountId: 'card', date: '2026-03-02', amountCents: 3000, source: 'applecard', sourceId: 'ac1', plaidCategory: pc });
+  seedTxn(deps.db, { id: 'mine', accountId: 'a1', date: '2026-03-02', amountCents: -100, source: 'plaid', sourceId: 'p3', plaidCategory: pc, categoryId: 'c-fun' });
+  seedTxn(deps.db, { id: 'split', accountId: 'a1', date: '2026-03-02', amountCents: -100, source: 'plaid', sourceId: 'p4', plaidCategory: pc });
+  seedSplit(deps.db, { id: 's1', transactionId: 'split', amountCents: -100, categoryId: null });
+  const res = await app.inject({ method: 'PATCH', url: '/v1/transactions/pay', headers: w('ccp-1'), payload: { categoryId: 'c-ccp' } });
+  assert.equal(res.statusCode, 200);
+  const cat = (id: string) => (deps.db.prepare('SELECT category_id AS c FROM transactions WHERE id = ?').get(id) as { c: string | null }).c;
+  assert.deepEqual(['pay', 'credit', 'apple', 'mine', 'split'].map(cat), ['c-ccp', 'c-ccp', 'c-ccp', 'c-fun', null]);
+  assert.deepEqual(deps.db.prepare('SELECT plaid_category, category_id FROM plaid_category_map').all(), [{ plaid_category: pc, category_id: 'c-ccp' }]);
+});
+
+test('a transfer category still teaches nothing from transfer or income rows', async () => {
+  const { deps, app } = setup();
+  seedCategory(deps.db, { id: 'c-xfer', name: 'Moves', isTransfer: true });
+  const pcs = ['TRANSFER_OUT_ACCOUNT_TRANSFER', 'TRANSFER_IN_DEPOSIT', 'INCOME_SALARY'];
+  pcs.forEach((pc, i) => {
+    seedTxn(deps.db, { id: `t${i}`, accountId: 'a1', date: '2026-03-01', amountCents: -1, source: 'plaid', sourceId: `p${i}`, plaidCategory: pc });
+    seedTxn(deps.db, { id: `o${i}`, accountId: 'a1', date: '2026-03-01', amountCents: -1, source: 'plaid', sourceId: `q${i}`, plaidCategory: pc });
+  });
+  for (const i of pcs.keys()) {
+    const res = await app.inject({ method: 'PATCH', url: `/v1/transactions/t${i}`, headers: w(`xfer-${i}`), payload: { categoryId: 'c-xfer' } });
+    assert.equal(res.statusCode, 200);
+  }
+  assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM plaid_category_map').get() as { n: number }).n, 0);
+  assert.equal((deps.db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE id LIKE 'o%' AND category_id IS NOT NULL").get() as { n: number }).n, 0);
+});
+
+test('a transaction can be created already split, under the same rules as PUT /splits', async () => {
+  const { deps, app } = setup();
+  seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill' });
+  const post = (key: string, payload: object) => app.inject({ method: 'POST', url: '/v1/transactions', headers: w(key), payload });
+  const base = { date: '2026-03-05', amountCents: -4001, payee: 'Synthetic Cash' };
+  const lines = [{ amountCents: -2001, categoryId: 'c-food' }, { amountCents: -2000, categoryId: null, personId: 'p1' }];
+  const rows = () => (deps.db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE payee = 'Synthetic Cash'").get() as { n: number }).n;
+
+  const res = await post('cs-1', { ...base, splitLines: lines });
+  assert.equal(res.statusCode, 201);
+  const created = res.json() as { id: string; categoryId: string | null; splitLines: { amountCents: number; categoryId: string | null; personId: string | null }[] };
+  assert.equal(created.categoryId, null);
+  assert.deepEqual(created.splitLines.map((l) => [l.amountCents, l.categoryId, l.personId]), [[-2001, 'c-food', null], [-2000, null, 'p1']]);
+  assert.equal((await post('cs-1', { ...base, splitLines: lines })).json().id, created.id, 'a replay returns the same row');
+  assert.equal(rows(), 1);
+  const person = (await app.inject({ method: 'GET', url: '/v1/people/p1', headers: AUTH })).json();
+  assert.equal(person.person.balanceCents, 2000, 'their line is owed to you');
+
+  const rejected: [string, object][] = [
+    ['cs-sum', { ...base, splitLines: [{ amountCents: -1000, categoryId: 'c-food' }, { amountCents: -2000, categoryId: null, personId: 'p1' }] }],
+    ['cs-sign', { ...base, splitLines: [{ amountCents: -5001, categoryId: 'c-food' }, { amountCents: 1000, categoryId: null }] }],
+    ['cs-payer', { ...base, paidByPersonId: 'p1', splitLines: lines }],
+    ['cs-category', { ...base, categoryId: 'c-fun', splitLines: lines }],
+    ['cs-unknown', { ...base, splitLines: [{ amountCents: -2001, categoryId: 'nope' }, { amountCents: -2000, categoryId: null }] }],
+    ['cs-one', { ...base, splitLines: [{ amountCents: -4001, categoryId: 'c-food' }] }],
+  ];
+  for (const [key, payload] of rejected) assert.equal((await post(key, payload)).statusCode, 400, key);
+  assert.equal(rows(), 1, 'a rejected request writes nothing');
+
+  const plain = await post('cs-empty', { ...base, payee: 'Synthetic Plain', categoryId: 'c-food', splitLines: [] });
+  assert.equal(plain.statusCode, 201);
+  assert.equal(plain.json().categoryId, 'c-food', 'empty splitLines is the same as none');
+});

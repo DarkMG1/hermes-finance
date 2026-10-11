@@ -30,7 +30,8 @@ public struct Reader: Sendable {
     public func read<Value: Decodable & Sendable>(_ path: String, query: [URLQueryItem] = [], as type: Value.Type) async throws -> Loaded<Value> {
         var keyParts = URLComponents()
         keyParts.queryItems = query.isEmpty ? nil : query
-        let key = path + "?" + (keyParts.percentEncodedQuery ?? "")
+        // keyed by server too, so one server's cached data is never served for another
+        let key = client.baseURL.absoluteString + path + "?" + (keyParts.percentEncodedQuery ?? "")
         do {
             let data = try await client.getData(path, query: query)
             let value: Value = try client.decode(data)

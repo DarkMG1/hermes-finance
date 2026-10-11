@@ -7,6 +7,7 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.webAuthenticationSession) private var webAuth
     @AppStorage("appearance") private var appearance = Appearance.system
+    @AppStorage("requireFaceID") private var requireFaceID = true
     @State private var banks: LoadState<[Bank]> = .loading
     @State private var linker = BankLinker()
     @State private var syncWrites = WriteGuard()
@@ -67,6 +68,35 @@ struct SettingsView: View {
                 Text("Apple Card")
             } footer: {
                 Text("In Wallet: Apple Card → Card Balance → a statement → Export Transactions. Importing the same statement twice is safe.")
+            }
+            Section {
+                Toggle("Require Face ID", isOn: Binding(
+                    get: { requireFaceID },
+                    set: { on in
+                        if on {
+                            requireFaceID = true
+                        } else {
+                            Task {
+                                switch await AppLock.confirmOwner(reason: "Turn off Face ID for Hermes", allowNewBaseline: false) {
+                                case .confirmed: requireFaceID = false
+                                case .failed: break
+                                case .facesChanged:
+                                    UserDefaults.standard.set(true, forKey: "faceIDChanged")
+                                    model.disconnect()
+                                }
+                            }
+                        }
+                    }
+                ))
+                    .disabled(!AppLock.canUseFaceID)
+            } header: {
+                Text("Security")
+            } footer: {
+                Text(AppLock.canUseFaceID
+                     ? "Asks when Hermes opens and after \(Int(LockPolicy.grace)) seconds away."
+                     : AppLock.hasBiometricHardware
+                     ? "Face ID is unavailable right now. Hermes stays locked until it works again."
+                     : "Set up Face ID in iOS Settings to lock Hermes.")
             }
             Section("Appearance") {
                 Picker("Appearance", selection: $appearance) {

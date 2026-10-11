@@ -1,12 +1,32 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { CreateTransactionBody, ListTransactionsQuery, PatchAccountBody, PatchTransactionBody, PutSplitsBody, SpendingQuery } from '@hermes/shared';
+import type { Db } from '../db.ts';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { assertPersonTaggable, owedToYouCents, suggestions, youOweCents } from '../people.ts';
 import { assertCategoryExists, getHome, getSpending, getTransaction, learnCategory, listAccounts, listCategories, listTransactions } from '../ledger.ts';
+
+/** Checks split lines against a transaction's amount and makes them its split; the row's own category and person move onto the lines. */
+function writeSplit(db: Db, txnId: string, amountCents: number, lines: PutSplitsBody['lines'], field: string, nowIso: string): void {
+  lines.forEach((l, i) => assertCategoryExists(db, l.categoryId, `${field}.${i}.categoryId`));
+  lines.forEach((l, i) => assertPersonTaggable(db, l.personId, `${field}.${i}.personId`, txnId));
+  // lines share the transaction's sign: the app enters them as positive amounts, so it couldn't show anything else
+  if (lines.some((l) => (l.amountCents < 0) !== (amountCents < 0))) {
+    throw new ApiError(400, 'INVALID_REQUEST', `${field}: every line must have the same sign as the transaction`, field);
+  }
+  if (lines.length && lines.reduce((s, l) => s + l.amountCents, 0) !== amountCents) {
+    throw new ApiError(400, 'INVALID_REQUEST', `${field}: must add up to the transaction amount`, field);
+  }
+  db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(txnId);
+  // ids sort in entry order (lines are read back ORDER BY id)
+  const insert = db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id, notes, person_id) VALUES (?, ?, ?, ?, ?, ?)');
+  lines.forEach((l, i) => insert.run(`${String(i).padStart(2, '0')}-${randomUUID()}`, txnId, l.amountCents, l.categoryId, l.notes ?? null, l.personId ?? null));
+  // a split transaction's category lives on its lines; the owner decided, so learned mappings leave it alone
+  db.prepare('UPDATE transactions SET category_id = NULL, person_id = NULL, category_owner_set = 1, updated_at = ? WHERE id = ?').run(nowIso, txnId);
+}
 
 export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   const { db } = deps;
@@ -94,22 +114,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
       if (txn.paidByPersonId) throw new ApiError(409, 'PAID_BY_PERSON', 'a transaction someone else paid cannot be split', 'lines');
       if (!body.lines.length && !txn.splitLines.length) return { status: 200, body: txn };
-      body.lines.forEach((l, i) => assertCategoryExists(db, l.categoryId, `lines.${i}.categoryId`));
-      body.lines.forEach((l, i) => assertPersonTaggable(db, l.personId, `lines.${i}.personId`, txn.id));
-      // lines share the transaction's sign: the app enters them as positive amounts, so it couldn't show anything else
-      if (body.lines.some((l) => (l.amountCents < 0) !== (txn.amountCents < 0))) {
-        throw new ApiError(400, 'INVALID_REQUEST', 'lines: every line must have the same sign as the transaction', 'lines');
-      }
-      if (body.lines.length && body.lines.reduce((s, l) => s + l.amountCents, 0) !== txn.amountCents) {
-        throw new ApiError(400, 'INVALID_REQUEST', 'lines: must add up to the transaction amount', 'lines');
-      }
-      const now = deps.now().toISOString();
-      db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(txn.id);
-      // ids sort in entry order (lines are read back ORDER BY id)
-      const insert = db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id, notes, person_id) VALUES (?, ?, ?, ?, ?, ?)');
-      body.lines.forEach((l, i) => insert.run(`${String(i).padStart(2, '0')}-${randomUUID()}`, txn.id, l.amountCents, l.categoryId, l.notes ?? null, l.personId ?? null));
-      // a split transaction's category lives on its lines; the owner decided, so learned mappings leave it alone
-      db.prepare('UPDATE transactions SET category_id = NULL, person_id = NULL, category_owner_set = 1, updated_at = ? WHERE id = ?').run(now, txn.id);
+      writeSplit(db, txn.id, txn.amountCents, body.lines, 'lines', deps.now().toISOString());
       return { status: 200, body: getTransaction(db, txn.id) };
     });
     return reply.code(r.status).send(r.body);
@@ -126,6 +131,8 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
           created_at, updated_at)
         VALUES (?, 'manual', 'manual', ?, ?, '', ?, ?, ?, ?, ?, ?)`)
         .run(id, body.date, body.amountCents, body.payee, body.categoryId ?? null, body.notes ?? null, body.paidByPersonId ?? null, now, now);
+      // one transaction with the row: a bad line rolls the row back too
+      if (body.splitLines?.length) writeSplit(db, id, body.amountCents, body.splitLines, 'splitLines', now);
       return { status: 201, body: getTransaction(db, id) };
     });
     return reply.code(r.status).send(r.body);

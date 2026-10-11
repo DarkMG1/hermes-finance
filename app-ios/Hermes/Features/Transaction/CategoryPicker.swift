@@ -5,11 +5,13 @@ struct CategoryPicker: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @Binding var selection: String?
+    /// The top row, which clears the selection.
+    var noneTitle = "Uncategorized"
     @State private var query = ""
 
     var body: some View {
         List {
-            Button { choose(nil) } label: { row("Uncategorized", selected: selection == nil) }
+            Button { choose(nil) } label: { row(noneTitle, selected: selection == nil) }
             ForEach(CategoryGrouping.group(model.categories, matching: query), id: \.name) { group in
                 Section(group.name) {
                     ForEach(group.items) { category in

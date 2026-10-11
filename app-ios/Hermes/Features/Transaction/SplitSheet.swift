@@ -7,6 +7,8 @@ struct SplitSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let transaction: LedgerTransaction
+    /// Opened to share with this person: Split with is set and the 50/50 lines are filled in.
+    var sharingWith: String?
     let onDone: () async -> Void
 
     private struct Line: Identifiable {
@@ -134,6 +136,10 @@ struct SplitSheet: View {
         if transaction.splitLines.isEmpty {
             lines = [Line(amount: plain(abs(transaction.amountCents)), categoryId: transaction.categoryId, personId: transaction.personId),
                      Line()]
+            if let sharingWith {
+                shareWith = sharingWith
+                fillShared()
+            }
         } else {
             lines = transaction.splitLines.map {
                 Line(amount: plain(abs($0.amountCents)), categoryId: $0.categoryId, notes: $0.notes ?? "", personId: $0.personId)
