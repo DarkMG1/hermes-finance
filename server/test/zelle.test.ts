@@ -14,11 +14,12 @@ test('zellePayee reads the first name in each bank format', () => {
   assert.equal(zellePayee(text('transfer', 'to Wren Quill Moss12ab3c')), 'Zelle - Wren');
   assert.equal(zellePayee('  Zelle payment to FERN  MOSS 1  '), 'Zelle - Fern');
   assert.equal(zellePayee('Zelle payment from WREN, QUILL 123'), 'Zelle - Wren');
+  assert.equal(zellePayee('Zelle payment to WREN,QUILL 1'), 'Zelle - Wren');
 });
 
 test('zellePayee returns null when the text names nobody or is not Zelle', () => {
   const bare = text('transfer', '').trim();
-  for (const t of [bare, 'Zelle payment to 12345678901', 'Zelle payment to ., 123', 'SYNTHETIC COFFEE', 'Venmo payment to Quill', '']) {
+  for (const t of [bare, 'Zelle payment to 12345678901', 'Zelle payment to ., 123', 'Zelle payment to -- QUILL 1', 'SYNTHETIC COFFEE', 'Venmo payment to Quill', '']) {
     assert.equal(zellePayee(t), null, t);
   }
 });

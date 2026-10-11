@@ -15,13 +15,19 @@ enum Appearance: String, CaseIterable, Identifiable {
 
 @main
 struct HermesApp: App {
-    @State private var model = AppModel()
+    @State private var model: AppModel
     @AppStorage("appearance") private var appearance = Appearance.system
     @AppStorage("requireFaceID") private var requireFaceID = true
     @Environment(\.scenePhase) private var scenePhase
-    @State private var lock = AppLock()
+    @State private var lock: AppLock
 
     init() {
+        let model = AppModel()
+        _model = State(initialValue: model)
+        _lock = State(initialValue: AppLock {
+            UserDefaults.standard.set(true, forKey: "faceIDChanged")
+            model.disconnect()
+        })
         // an x to clear a single-line text field (payee, account name, ...)
         UITextField.appearance().clearButtonMode = .whileEditing
     }
@@ -35,10 +41,6 @@ struct HermesApp: App {
             .tint(Palette.accent)
             .preferredColorScheme(appearance.colorScheme)
             .task {
-                lock.onFacesChanged = {
-                    UserDefaults.standard.set(true, forKey: "faceIDChanged")
-                    model.disconnect()
-                }
                 await model.refreshReferenceData()
             }
             .onChange(of: model.reader != nil) { _, connected in

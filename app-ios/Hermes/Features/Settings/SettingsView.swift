@@ -94,6 +94,8 @@ struct SettingsView: View {
             } footer: {
                 Text(AppLock.canUseFaceID
                      ? "Asks when Hermes opens and after \(Int(LockPolicy.grace)) seconds away."
+                     : AppLock.hasBiometricHardware
+                     ? "Face ID is unavailable right now. Hermes stays locked until it works again."
                      : "Set up Face ID in iOS Settings to lock Hermes.")
             }
             Section("Appearance") {

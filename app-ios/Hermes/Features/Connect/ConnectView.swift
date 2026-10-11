@@ -20,7 +20,10 @@ struct ConnectView: View {
                         SecureField("Paste the token", text: $token)
                     }
                 } footer: {
-                    if faceIDChanged { Text("Face ID changed on this iPhone. Enter the server token to continue.") }
+                    if faceIDChanged {
+                        Text("Face ID changed on this iPhone. Check Settings › Face ID & Passcode for an appearance you didn't add, "
+                             + "then enter the server token to continue.")
+                    }
                 }
                 Section {
                     HButton(title: "Connect", busy: busy) { Task { await connect() } }
