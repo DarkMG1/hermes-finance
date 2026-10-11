@@ -137,3 +137,35 @@ test('re-import fills an uncategorized row from a mapping learned since the firs
   await post(app, SEPT, 'k3');
   assert.equal(cat(), null);
 });
+
+const statement = (clearing: string) => `${HEADER}\n09/30/2026,${clearing},SYNTHETIC COFFEE,Synthetic Coffee,Restaurants,Purchase,5.00,Synthetic Person`;
+
+test('identical same-day purchases that clear on different days are two charges, across statements', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  const csvA = statement('09/30/2026');
+  const csvB = statement('10/01/2026');
+  const importCsv = async (csv: string, key: string) => (await post(app, csv, key)).json() as { accountId: string; added: number; updated: number };
+  const a = await importCsv(csvA, 'ac-a');
+  const b = await importCsv(csvB, 'ac-b');
+  assert.deepEqual([a.added, a.updated, b.added, b.updated], [1, 0, 1, 0]);
+  const count = () => (deps.db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE source = 'applecard'").get() as { n: number }).n;
+  assert.equal(count(), 2);
+  const balanceCents = () => (deps.db.prepare('SELECT balance_current_cents AS b FROM accounts WHERE id = ?').get(a.accountId) as { b: number }).b;
+  assert.equal(balanceCents(), 1000, 'both charges count toward the card balance');
+  const again = [await importCsv(csvA, 'ac-a2'), await importCsv(csvB, 'ac-b2')];
+  assert.deepEqual(again.map((r) => [r.added, r.updated]), [[0, 1], [0, 1]], 'either statement re-imported updates, never duplicates');
+  assert.equal(count(), 2);
+});
+
+test('rows imported before clearing dates were stored update on re-import instead of duplicating', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  const csvA = statement('09/30/2026');
+  await post(app, csvA, 'ac-a');
+  deps.db.prepare("UPDATE transactions SET clearing_date = NULL WHERE source = 'applecard'").run();
+  const again = (await post(app, csvA, 'ac-a2')).json() as { added: number; updated: number };
+  assert.deepEqual([again.added, again.updated], [0, 1]);
+  const rows = deps.db.prepare("SELECT clearing_date FROM transactions WHERE source = 'applecard'").all() as { clearing_date: string | null }[];
+  assert.deepEqual(rows, [{ clearing_date: '2026-09-30' }]);
+});
