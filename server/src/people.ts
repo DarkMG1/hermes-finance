@@ -7,7 +7,7 @@ import { TXN_COLS, rowToTransaction, type TxnRow } from './ledger.ts';
 // Money out (negative) raises what they owe; money in, and a row they paid (its share counted as positive), lowers it.
 export const TAGGED = `
   SELECT sl.person_id AS person_id, t.id AS transaction_id, sl.id AS line_id, t.date AS date,
-         COALESCE(t.payee, t.merchant_name, t.bank_description) AS payee, sl.amount_cents AS amount, 0 AS paid_by,
+         COALESCE(sl.payee, t.payee, t.merchant_name, t.bank_description) AS payee, sl.amount_cents AS amount, 0 AS paid_by,
          t.created_at AS created_at, t.rowid AS row_order
     FROM split_lines sl JOIN transactions t ON t.id = sl.transaction_id
    WHERE sl.person_id IS NOT NULL AND t.removed_at IS NULL

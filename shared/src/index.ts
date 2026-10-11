@@ -21,7 +21,9 @@ export const Category = z.object({
 });
 export type Category = z.infer<typeof Category>;
 
-export const SplitLine = z.object({ id: Id, amountCents: Cents, categoryId: Id.nullable(), notes: z.string().nullable(), personId: Id.nullable() });
+export const SplitLine = z.object({
+  id: Id, amountCents: Cents, categoryId: Id.nullable(), notes: z.string().nullable(), personId: Id.nullable(), payee: z.string().nullable(),
+});
 export type SplitLine = z.infer<typeof SplitLine>;
 
 export const Transaction = z.object({
@@ -58,6 +60,8 @@ export const PutSplitsBody = z.object({
   lines: z.array(z.object({
     amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'), categoryId: Id.nullable(), notes: z.string().max(2000).nullable().optional(),
     personId: Id.nullable().optional(),
+    /** The line's own name; blank or missing shows the transaction's payee. */
+    payee: z.string().trim().max(200).nullable().optional(),
   }).strict().refine((l) => !(l.categoryId && l.personId), { message: 'a line with a person has no category', path: ['personId'] }))
     .max(20).refine((l) => l.length !== 1, 'a split needs at least two lines'),
 }).strict();

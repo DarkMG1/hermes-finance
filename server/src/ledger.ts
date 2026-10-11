@@ -12,9 +12,11 @@ export const TXN_COLS = 'id, account_id, source, date, amount_cents, bank_descri
   + 'paid_by_person_id, repayment_dismissed';
 
 export function rowToTransaction(db: Db, r: TxnRow): Transaction {
-  const lines = db.prepare('SELECT id, amount_cents, category_id, notes, person_id FROM split_lines WHERE transaction_id = ? ORDER BY id').all(r.id) as
-    { id: string; amount_cents: number; category_id: string | null; notes: string | null; person_id: string | null }[];
-  const splitLines: SplitLine[] = lines.map((l) => ({ id: l.id, amountCents: l.amount_cents, categoryId: l.category_id, notes: l.notes, personId: l.person_id }));
+  const lines = db.prepare('SELECT id, amount_cents, category_id, notes, person_id, payee FROM split_lines WHERE transaction_id = ? ORDER BY id').all(r.id) as
+    { id: string; amount_cents: number; category_id: string | null; notes: string | null; person_id: string | null; payee: string | null }[];
+  const splitLines: SplitLine[] = lines.map((l) => ({
+    id: l.id, amountCents: l.amount_cents, categoryId: l.category_id, notes: l.notes, personId: l.person_id, payee: l.payee,
+  }));
   return {
     id: r.id, accountId: r.account_id, source: r.source, date: r.date, amountCents: r.amount_cents,
     payee: r.payee ?? r.merchant_name ?? r.bank_description, bankDescription: r.bank_description,
@@ -75,9 +77,10 @@ export function listTransactions(db: Db, q: ListTransactionsQuery): TransactionP
     // people's names count too: a row tagged with them, paid by them, or with a split line for them
     where.push(`(COALESCE(payee, '') LIKE ? ESCAPE '\\' OR COALESCE(merchant_name, '') LIKE ? ESCAPE '\\' OR bank_description LIKE ? ESCAPE '\\'
       OR COALESCE(notes, '') LIKE ? ESCAPE '\\'
+      OR EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = transactions.id AND COALESCE(sl.payee, '') LIKE ? ESCAPE '\\')
       OR EXISTS (SELECT 1 FROM people p WHERE p.name LIKE ? ESCAPE '\\' AND (p.id = transactions.person_id OR p.id = transactions.paid_by_person_id
         OR EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = transactions.id AND sl.person_id = p.id))))`);
-    args.push(like, like, like, like, like);
+    args.push(like, like, like, like, like, like);
   }
   if (q.cursor) {
     const [d, id] = decodeCursor(q.cursor);

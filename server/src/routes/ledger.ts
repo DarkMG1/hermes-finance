@@ -22,8 +22,9 @@ function writeSplit(db: Db, txnId: string, amountCents: number, lines: PutSplits
   }
   db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(txnId);
   // ids sort in entry order (lines are read back ORDER BY id)
-  const insert = db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id, notes, person_id) VALUES (?, ?, ?, ?, ?, ?)');
-  lines.forEach((l, i) => insert.run(`${String(i).padStart(2, '0')}-${randomUUID()}`, txnId, l.amountCents, l.categoryId, l.notes ?? null, l.personId ?? null));
+  const insert = db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id, notes, person_id, payee) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  lines.forEach((l, i) => insert.run(`${String(i).padStart(2, '0')}-${randomUUID()}`, txnId, l.amountCents, l.categoryId, l.notes ?? null, l.personId ?? null,
+    l.payee || null));
   // a split transaction's category lives on its lines; the owner decided, so learned mappings leave it alone
   db.prepare('UPDATE transactions SET category_id = NULL, person_id = NULL, category_owner_set = 1, updated_at = ? WHERE id = ?').run(nowIso, txnId);
 }
