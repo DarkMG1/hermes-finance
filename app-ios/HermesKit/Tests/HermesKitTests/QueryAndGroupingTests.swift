@@ -51,3 +51,11 @@ import Testing
 @Test func personFilterIsSent() {
     #expect(TransactionQuery(personId: "p1").items == [URLQueryItem(name: "personId", value: "p1"), URLQueryItem(name: "limit", value: "50")])
 }
+
+@Test func searchTextIsCappedInUTF16UnitsOnCharacterBoundaries() {
+    let flags = String(repeating: "\u{1F1FA}\u{1F1F8}", count: 30) // 30 flags, 4 UTF-16 units each
+    let capped = TransactionQuery.capped(flags)
+    #expect(capped.utf16.count == 100 && capped.count == 25)
+    #expect(TransactionQuery.capped(String(repeating: "a", count: 120)).count == 100)
+    #expect(TransactionQuery.capped("coffee") == "coffee")
+}

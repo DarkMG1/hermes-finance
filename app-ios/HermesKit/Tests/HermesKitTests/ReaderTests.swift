@@ -71,3 +71,48 @@ private func tempCache() -> ResponseCache {
     let other = Reader(client: APIClient(baseURL: otherServer, token: "t", transport: down), cache: cache)
     await #expect(throws: ClientError.self) { try await other.read("/v1/home", as: Home.self) }
 }
+
+@Test func aStoreStartedBeforeAClearIsDropped() throws {
+    let dir = FileManager.default.temporaryDirectory.appending(path: "cache-gen-\(UUID().uuidString)")
+    let cache = ResponseCache(directory: dir)
+    let before = cache.currentGeneration
+    cache.clear()
+    cache.store(Data("{}".utf8), key: "k", savedAt: Date(timeIntervalSince1970: 0), generation: before)
+    #expect(cache.load(key: "k") == nil)
+    cache.store(Data("{}".utf8), key: "k", savedAt: Date(timeIntervalSince1970: 0), generation: cache.currentGeneration)
+    #expect(cache.load(key: "k") != nil)
+}
+
+private struct ClearingTransport: HTTPTransport {
+    let cache: ResponseCache
+    let body: Data
+    func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+        cache.clear()
+        return HTTPResponse(status: 200, body: body)
+    }
+}
+
+@Test func aReadThatOverlapsAClearDoesNotStoreItsResponse() async throws {
+    let cache = tempCache()
+    let transport = ClearingTransport(cache: cache, body: try fixture("home"))
+    let reader = Reader(client: APIClient(baseURL: testBase, token: "t", transport: transport), cache: cache)
+    _ = try await reader.read("/v1/home", as: Home.self)
+    let key = testBase.absoluteString + "/v1/home?"
+    #expect(cache.load(key: key) == nil)
+}
+
+@Test func aReaderMadeBeforeAClearNeverStoresAgain() async throws {
+    let cache = tempCache()
+    let key = testBase.absoluteString + "/v1/home?"
+    let home = try fixture("home")
+    let old = Reader(client: APIClient(baseURL: testBase, token: "t", transport: FakeTransport([.success(HTTPResponse(status: 200, body: home))])),
+                     cache: cache)
+    cache.clear()
+    _ = try await old.read("/v1/home", as: Home.self)
+    #expect(cache.load(key: key) == nil)
+
+    let fresh = Reader(client: APIClient(baseURL: testBase, token: "t", transport: FakeTransport([.success(HTTPResponse(status: 200, body: home))])),
+                       cache: cache)
+    _ = try await fresh.read("/v1/home", as: Home.self)
+    #expect(cache.load(key: key) != nil)
+}

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
@@ -103,4 +103,32 @@ test('prune counts days, not files: extra same-day archives do not shrink the da
   assert.ok(!kept.includes('hermes-20260320T033000Z.db.age'));
   assert.ok(kept.includes('hermes-20260310T150000Z.db.age'));
   assert.ok(!kept.includes('hermes-20260310T033000Z.db.age'));
+});
+
+test('pruning keeps every backup from the last 48 hours, so a pre-deploy backup survives a later one the same day', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hermes-prune-'));
+  for (const n of ['hermes-20261010T090000Z.db.age', 'hermes-20261010T104500Z.db.age', 'hermes-20261009T104500Z.db.age',
+    'hermes-20261001T090000Z.db.age', 'hermes-20261001T104500Z.db.age']) writeFileSync(join(dir, n), '');
+  const removed = pruneBackups(dir, 14, 12, new Date('2026-10-10T12:00:00Z'));
+  assert.deepEqual(removed, ['hermes-20261001T090000Z.db.age'], 'only an older same-day duplicate goes');
+});
+
+test('a backup clears plaintext leftovers from a killed run', async () => {
+  const { deps } = makeTestDeps();
+  seedAccount(deps.db, { id: 'a1' });
+  const dir = mkdtempSync(join(tmpdir(), 'hermes-backup-'));
+  const { recipient } = ageKeys(dir);
+  const out = join(dir, 'backups');
+  mkdirSync(out);
+  const stale = ['hermes-20261009T000000Z.db.age.tmp-db', 'hermes-20261009T000000Z.db.age.tmp-db-wal', 'hermes-20261009T000000Z.db.age.partial'];
+  const twoHoursAgo = new Date(Date.now() - 2 * 3600_000);
+  for (const n of stale) {
+    writeFileSync(join(out, n), 'plaintext');
+    utimesSync(join(out, n), twoHoursAgo, twoHoursAgo);
+  }
+  // another backup still running: its file is fresh and must survive
+  const running = 'hermes-20261010T034400Z.db.age.partial';
+  writeFileSync(join(out, running), 'in progress');
+  await createBackup({ dbPath: deps.config.dbPath, dir: out, recipient, now: new Date('2026-10-10T03:45:00Z') });
+  assert.deepEqual(readdirSync(out).sort(), ['hermes-20261010T034400Z.db.age.partial', 'hermes-20261010T034500Z.db.age']);
 });

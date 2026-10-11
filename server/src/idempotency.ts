@@ -3,7 +3,8 @@ import type { FastifyRequest } from 'fastify';
 import type { Deps } from './deps.ts';
 import { ApiError } from './errors.ts';
 
-type Result = { status: number; body: unknown };
+// final: false marks a reply that must not be replayed (the work did not really happen yet)
+type Result = { status: number; body: unknown; final?: boolean };
 
 function keyAndHash(req: FastifyRequest): { key: string; hash: string } {
   const key = req.headers['idempotency-key'];
@@ -45,7 +46,7 @@ export async function idempotentAsync(deps: Deps, req: FastifyRequest, run: () =
   const prior = lookup(deps, key, hash);
   if (prior) return prior;
   const r = await run();
-  if (r.status === 202) return r; // not final: a retry with the same key must re-check
+  if (r.status === 202 || r.final === false) return r; // not final: a retry with the same key must re-check
   deps.db.transaction(() => { if (!lookup(deps, key, hash)) save(deps, key, hash, r); })();
   return r;
 }

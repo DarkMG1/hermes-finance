@@ -1,6 +1,6 @@
 import Database from 'better-sqlite3';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const NAME = /^hermes-\d{8}T\d{6}Z\.db\.age$/;
@@ -22,6 +22,15 @@ function assertIntact(path: string): void {
 
 export async function createBackup(opts: { dbPath: string; dir: string; recipient: string; now: Date }): Promise<string> {
   mkdirSync(opts.dir, { recursive: true, mode: 0o700 });
+  // a run killed between the copy and age leaves a plaintext copy behind; never keep one.
+  // only files over an hour old: a younger one may belong to a backup still running
+  for (const n of readdirSync(opts.dir)) {
+    if (!/\.tmp-db(-wal|-shm)?$|\.partial$/.test(n)) continue;
+    const path = join(opts.dir, n);
+    // gone already when the running backup renamed or removed it
+    const mtime = statSync(path, { throwIfNoEntry: false })?.mtimeMs;
+    if (mtime !== undefined && Date.now() - mtime > 3600_000) rmSync(path, { force: true });
+  }
   const final = join(opts.dir, backupName(opts.now));
   if (existsSync(final)) throw new Error('a backup with this timestamp already exists');
   const tmp = `${final}.tmp-db`;
@@ -44,9 +53,13 @@ export async function createBackup(opts: { dbPath: string; dir: string; recipien
   }
 }
 
-export function pruneBackups(dir: string, keepDaily = 14, keepMonthly = 12): string[] {
+const RECENT_MS = 48 * 3600_000;
+const stampMs = (n: string): number => Date.UTC(+n.slice(7, 11), +n.slice(11, 13) - 1, +n.slice(13, 15), +n.slice(16, 18), +n.slice(18, 20), +n.slice(20, 22));
+
+export function pruneBackups(dir: string, keepDaily = 14, keepMonthly = 12, now: Date = new Date()): string[] {
   const names = readdirSync(dir).filter((n) => NAME.test(n)).sort().reverse();
-  const keep = new Set<string>();
+  // everything from the last 48 h stays, so a pre-deploy backup outlives a later backup the same day
+  const keep = new Set<string>(names.filter((n) => now.getTime() - stampMs(n) < RECENT_MS));
   const days = new Set<string>();
   for (const n of names) {
     const day = n.slice(7, 15); // YYYYMMDD after "hermes-"

@@ -10,7 +10,7 @@ final class AppLock {
     private var launched = false
     private var backgroundedAt: ContinuousClock.Instant?
     private var authenticating = false
-    /// True only between entering the server token and the next background: a missing baseline may be saved only then.
+    /// True only between entering the server token and the next background: only then may the current enrollment become the baseline.
     private var trustNewBaseline = false
     private var isActive = false
     /// Bumped on every background and every new lock, so a Face ID result that arrives later can't unlock.
@@ -42,7 +42,8 @@ final class AppLock {
     enum OwnerCheck { case confirmed, failed(String?), facesChanged }
 
     /// Someone who knows the passcode can add a face in iOS Settings; a changed enrolled-face state means Face ID no longer proves the owner.
-    /// With no saved state, only `allowNewBaseline` (the server token was just entered) may save one; otherwise it counts as changed.
+    /// With `allowNewBaseline` (the server token was just entered) the current state replaces any saved one;
+    /// otherwise a missing or different saved state counts as changed and signs out.
     static func confirmOwner(reason: String, allowNewBaseline: Bool) async -> OwnerCheck {
         let context = LAContext()
         context.localizedFallbackTitle = ""
@@ -56,23 +57,22 @@ final class AppLock {
             return .failed(failureMessage(error))
         }
         let key = "faceIDDomainState"
-        let current = context.domainState.biometry.stateHash
-        if let saved = UserDefaults.standard.data(forKey: key) {
-            guard saved == current else {
-                UserDefaults.standard.removeObject(forKey: key)
-                return .facesChanged
-            }
+        guard let current = context.domainState.biometry.stateHash else { return .failed(nil) }
+        let saved = UserDefaults.standard.data(forKey: key)
+        // right after the server token was entered, the faces enrolled now become the baseline, replacing a stale one
+        if allowNewBaseline || saved == current {
+            UserDefaults.standard.set(current, forKey: key)
             return .confirmed
         }
-        guard allowNewBaseline else { return .facesChanged }
-        UserDefaults.standard.set(current, forKey: key)
-        return .confirmed
+        UserDefaults.standard.removeObject(forKey: key)
+        return .facesChanged
     }
 
     private static func failureMessage(_ error: Error?) -> String? {
         switch (error as? LAError)?.code {
         case .biometryLockout?: "Face ID is locked. Unlock your iPhone with its passcode, then tap Unlock."
         case .biometryNotEnrolled?: "Set up Face ID in iOS Settings, then tap Unlock."
+        case .passcodeNotSet?: "Set a passcode and Face ID in iOS Settings, then tap Unlock."
         case .biometryNotAvailable?: "Allow Face ID for Hermes in iOS Settings, then tap Unlock."
         default: nil
         }
@@ -87,8 +87,14 @@ final class AppLock {
         connectGeneration = generation
     }
 
+    func connectFailed() {
+        connectGeneration = nil
+    }
+
     /// Called when the Connect screen succeeds: ask for Face ID right away, as a cold launch does.
+    /// A restored session (no Connect tap) is locked by `phaseChanged`; locking again here would void its Face ID result.
     func didConnect(enabled: Bool) {
+        guard connectGeneration != nil else { return }
         launched = true
         backgroundedAt = nil
         // a face added in iOS Settings while connecting must not become the baseline: that needs no background since the tap
@@ -111,9 +117,8 @@ final class AppLock {
             generation += 1
         }
         guard connected else {
-            // not connected: nothing to lock; didConnect locks once the Connect screen succeeds
-
-            launched = true
+            // not connected: nothing to lock; didConnect locks once the Connect screen succeeds.
+            // `launched` stays as is: a connection loaded at a later .active (prewarm while locked) still gets the launch lock
             locked = false
             backgroundedAt = nil
             if phase == .active { cover.hide() } else { cover.show(locked: false, message: nil) {} }

@@ -9,12 +9,14 @@ final class PrivacyCover {
     private weak var previousKey: UIWindow?
     /// Bumped by every show and hide, so a fade that finishes after a newer show or hide can't touch the window.
     private var fadeToken = 0
+    private var hiddenFromVoiceOver: [UIWindow] = []
 
     func show(locked: Bool, message: String?, unlock: @escaping () -> Void) {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         guard let scene = scenes.first(where: { [.foregroundActive, .foregroundInactive].contains($0.activationState) }) ?? scenes.first
         else { return }
         if let stale = self.window, stale.windowScene !== scene {
+            restoreVoiceOver()
             stale.isHidden = true
             self.window = nil
         }
@@ -35,12 +37,19 @@ final class PrivacyCover {
         fadeToken += 1
         window.layer.removeAllAnimations()
         window.alpha = 1
+        // VoiceOver reads every window; a modal view only hides its own siblings, so hide the app's windows directly
+        for other in scene.windows where other !== window && !other.accessibilityElementsHidden {
+            other.accessibilityElementsHidden = true
+            hiddenFromVoiceOver.append(other)
+        }
         window.makeKeyAndVisible()
+        UIAccessibility.post(notification: .screenChanged, argument: window.rootViewController?.view)
         self.window = window
     }
 
     func hide() {
         guard let window else { return }
+        restoreVoiceOver()
         (previousKey ?? window.windowScene?.windows.first { $0 !== window })?.makeKey()
         fadeToken += 1
         let token = fadeToken
@@ -51,6 +60,11 @@ final class PrivacyCover {
             window.isHidden = true
             window.alpha = 1
         }
+    }
+
+    private func restoreVoiceOver() {
+        hiddenFromVoiceOver.forEach { $0.accessibilityElementsHidden = false }
+        hiddenFromVoiceOver = []
     }
 }
 

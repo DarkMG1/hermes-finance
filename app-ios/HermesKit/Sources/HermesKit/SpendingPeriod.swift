@@ -15,7 +15,13 @@ public struct SpendingPeriod: Hashable, Sendable {
         return SpendingPeriod(kind: .month, year: parts.first ?? 1970, month: parts.count > 1 ? parts[1] : 1)
     }
 
-    public func with(kind: Kind) -> SpendingPeriod { SpendingPeriod(kind: kind, year: year, month: month) }
+    /// Switching to month view never lands after the current month.
+    public func with(kind: Kind, today: String? = nil) -> SpendingPeriod {
+        let period = SpendingPeriod(kind: kind, year: year, month: month)
+        guard kind == .month, let today else { return period }
+        let now = SpendingPeriod.current(today: today)
+        return (year, month) > (now.year, now.month) ? now : period
+    }
 
     public func previous() -> SpendingPeriod {
         if kind == .year { return SpendingPeriod(kind: .year, year: year - 1, month: month) }

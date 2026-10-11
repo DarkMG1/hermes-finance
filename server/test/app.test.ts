@@ -10,7 +10,7 @@ test('health needs no auth and reports sha and migration version', async () => {
   const app = buildApp(deps);
   const res = await app.inject({ method: 'GET', url: '/v1/health' });
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.json(), { ok: true, gitSha: 'test-sha', dbVersion: 9 });
+  assert.deepEqual(res.json(), { ok: true, gitSha: 'test-sha', dbVersion: 10 });
 });
 
 test('other routes need the bearer token', async () => {
@@ -108,4 +108,13 @@ test('a PlaidError from a route is a 502 with its code and a generic message', a
   const res = await app.inject({ method: 'GET', url: '/v1/plaid-boom', headers: AUTH });
   assert.equal(res.statusCode, 502);
   assert.deepEqual(res.json(), { code: 'INSTITUTION_DOWN', message: 'bank provider error' });
+});
+
+test('API responses are marked no-store', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  for (const [url, headers] of [['/v1/accounts', AUTH], ['/v1/health', {}]] as const) {
+    const res = await app.inject({ method: 'GET', url, headers });
+    assert.equal(res.headers['cache-control'], 'no-store', url);
+  }
 });

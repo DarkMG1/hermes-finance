@@ -351,3 +351,20 @@ test('a transaction can be created already split, under the same rules as PUT /s
   assert.equal(plain.statusCode, 201);
   assert.equal(plain.json().categoryId, 'c-food', 'empty splitLines is the same as none');
 });
+
+test('tagging a spending row with a transfer or income category teaches nothing and keeps its siblings in Spending', async () => {
+  const { deps, app } = setup();
+  const pc = 'GENERAL_MERCHANDISE_OTHER_GENERAL_MERCHANDISE';
+  seedCategory(deps.db, { id: 'c-xfer', name: 'Moves', isTransfer: true });
+  seedCategory(deps.db, { id: 'c-pay', name: 'Pay', isIncome: true });
+  seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-01', amountCents: -2000, source: 'plaid', sourceId: 'p1', plaidCategory: pc });
+  seedTxn(deps.db, { id: 't2', accountId: 'a1', date: '2026-03-02', amountCents: -5000, source: 'plaid', sourceId: 'p2', plaidCategory: pc });
+  seedTxn(deps.db, { id: 't3', accountId: 'a1', date: '2026-03-03', amountCents: -700, source: 'plaid', sourceId: 'p3', plaidCategory: pc });
+  assert.equal((await app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: w('sb-1'), payload: { categoryId: 'c-xfer' } })).statusCode, 200);
+  assert.equal((await app.inject({ method: 'PATCH', url: '/v1/transactions/t3', headers: w('sb-2'), payload: { categoryId: 'c-pay' } })).statusCode, 200);
+  const cat = (id: string) => (deps.db.prepare('SELECT category_id AS c FROM transactions WHERE id = ?').get(id) as { c: string | null }).c;
+  assert.deepEqual(['t1', 't2', 't3'].map(cat), ['c-xfer', null, 'c-pay'], 'only the tagged rows change');
+  assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM plaid_category_map').get() as { n: number }).n, 0);
+  const spending = (await app.inject({ method: 'GET', url: '/v1/spending?period=month&date=2026-03', headers: AUTH })).json();
+  assert.equal(spending.totalCents, 5000, 'the untouched sibling still counts as spending');
+});

@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import HermesKit
 // swiftlint:disable:next duplicate_imports
 import struct HermesKit.Category
@@ -26,9 +27,26 @@ final class AppModel {
     init() {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         cache = ResponseCache(directory: caches.appending(path: "api-cache"))
-        if let url = URL(string: serverURL), !serverURL.isEmpty, let token = keychain.read("apiToken") {
-            configure(url: url, token: token)
+        URLCache.shared.removeAllCachedResponses()
+        loadStoredConnection()
+    }
+
+    // The keychain token and UserDefaults can't be read while the phone is locked (a prewarmed launch), so this
+    // no-ops until protected data is available and is retried when the app becomes active.
+    func loadStoredConnection() {
+        guard reader == nil, UIApplication.shared.isProtectedDataAvailable else { return }
+        // files written before this release lack the stronger protection class
+        if !UserDefaults.standard.bool(forKey: "cacheProtectedV2") {
+            cache.clear()
+            UserDefaults.standard.set(true, forKey: "cacheProtectedV2")
         }
+        guard let url = URL(string: serverURL), !serverURL.isEmpty else {
+            keychain.delete("apiToken")
+            return
+        }
+        guard let token = keychain.read("apiToken") else { return }
+        try? keychain.write("apiToken", token)
+        configure(url: url, token: token)
     }
 
     var serverURL: String { UserDefaults.standard.string(forKey: "serverURL") ?? "" }
@@ -47,6 +65,7 @@ final class AppModel {
 
     func disconnect() {
         session += 1
+        URLCache.shared.removeAllCachedResponses()
         keychain.delete("apiToken")
         UserDefaults.standard.removeObject(forKey: "serverURL")
         cache.clear()

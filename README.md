@@ -17,7 +17,8 @@ Host layout: `~/hermes/releases/<sha>`, `~/hermes/current` (symlink), `~/hermes/
 `~/hermes/backups`, secrets in `~/.config/hermes/hermes.env` (see `.env.example`). Units live in `ops/`.
 
 Backups run nightly (`hermes-backup.timer`): an online SQLite backup, integrity-checked, encrypted with
-`age` to `HERMES_BACKUP_AGE_RECIPIENT`, keeping the newest of each of the last 14 days + 12 months.
+`age` to `HERMES_BACKUP_AGE_RECIPIENT`, keeping the newest of each of the last 14 days + 12 months,
+plus every backup from the last 48 hours, so the pre-deploy backup survives same-day and nightly runs for two days.
 Restore never overwrites; write the output inside the mode-700 `~/hermes/data` (it is plaintext):
 
     npm run backup -- restore --archive hermes-<stamp>.db.age --identity <age identity> --out ~/hermes/data/restored.db
