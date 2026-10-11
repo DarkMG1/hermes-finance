@@ -46,6 +46,11 @@ if [ -f "$root/data/hermes.db" ]; then
   (cd "$rel" && /usr/bin/node --env-file="$envfile" server/src/backup-cli.ts backup)
 fi
 
+schema_version() {
+  (cd "$1" && /usr/bin/node -e "const D=require('better-sqlite3');const db=new D(process.argv[1],{readonly:true});console.log(db.prepare('SELECT MAX(version) AS v FROM migrations').get().v ?? 0)" "$root/data/hermes.db" 2>/dev/null) || echo unknown
+}
+before="$(schema_version "$rel")"
+
 prev="$(readlink "$root/current" 2>/dev/null || true)"
 ln -sfn "$rel" "$root/current.new"
 mv -T "$root/current.new" "$root/current"
@@ -66,8 +71,14 @@ for _ in $(seq 1 30); do
 done
 echo "deploy: /v1/health did not report $sha" >&2
 if [ -n "$prev" ]; then
-  echo "roll back (code only; restore a backup if the new release ran a schema migration):" >&2
-  echo "  ln -sfn '$prev' '$root/current' && printf 'HERMES_GIT_SHA=%s\n' '$(basename "$prev")' > '$root/release.env' && systemctl --user restart hermes.service" >&2
+  after="$(schema_version "$rel")"
+  if [ "$before" != unknown ] && [ "$before" = "$after" ]; then
+    ln -sfn "$prev" "$root/current" && printf 'HERMES_GIT_SHA=%s\n' "$(basename "$prev")" > "$root/release.env" && systemctl --user restart hermes.service
+    echo "deploy: rolled back to $(basename "$prev") (schema unchanged at version $before)" >&2
+  else
+    echo "roll back (code only; restore the pre-deploy backup because the schema changed $before -> $after):" >&2
+    echo "  ln -sfn '$prev' '$root/current' && printf 'HERMES_GIT_SHA=%s\n' '$(basename "$prev")' > '$root/release.env' && systemctl --user restart hermes.service" >&2
+  fi
 fi
 exit 1
 REMOTE

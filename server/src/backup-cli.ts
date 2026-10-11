@@ -16,8 +16,9 @@ async function main(): Promise<void> {
   });
   if (positionals[0] === 'backup') {
     const dir = need('HERMES_BACKUP_DIR');
-    const file = await createBackup({ dbPath: need('HERMES_DB_PATH'), dir, recipient: need('HERMES_BACKUP_AGE_RECIPIENT'), now: new Date() });
-    const removed = pruneBackups(dir);
+    const now = new Date();
+    const file = await createBackup({ dbPath: need('HERMES_DB_PATH'), dir, recipient: need('HERMES_BACKUP_AGE_RECIPIENT'), now });
+    const removed = pruneBackups(dir, 14, 12, now);
     console.log(`[hermes] backup ok file=${basename(file)} pruned=${removed.length}`);
   } else if (positionals[0] === 'restore' && values.archive && values.identity && values.out) {
     restoreBackup({ archive: values.archive, identity: values.identity, out: values.out });
