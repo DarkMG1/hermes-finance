@@ -1,4 +1,3 @@
-import Charts
 import HermesKit
 import SwiftUI
 
@@ -24,7 +23,7 @@ struct NetWorthView: View {
                 if history.points.count < 2 {
                     Text("History starts today. Check back tomorrow.").textStyle(.subhead, color: Palette.secondaryText)
                 } else {
-                    Card { chart(history.points) }
+                    Card { HistoryChart(points: history.points, scrubbed: $scrubbed) }
                     if let through = history.estimatedThrough {
                         Text("Through \(DayText.date(through)?.formatted(.dateTime.month(.abbreviated).day().year()) ?? through): estimated from transactions.")
                             .textStyle(.caption, color: Palette.secondaryText)
@@ -42,7 +41,7 @@ struct NetWorthView: View {
 
     /// While dragging, the header shows the chosen day instead of today.
     @ViewBuilder private func header(_ history: NetWorthHistory) -> some View {
-        if let point = point(at: scrubbed, in: history.points) {
+        if let point = HistoryChart.point(at: scrubbed, in: history.points) {
             Text(DayText.display(point.date)).textStyle(.subhead, color: Palette.secondaryText)
             MoneyText(cents: point.netWorthCents, style: .display, colored: false, negativeIsLoss: true)
                 .redacted(reason: hideBalances ? .placeholder : [])
@@ -64,38 +63,6 @@ struct NetWorthView: View {
 
     private func changeColor(_ cents: Int) -> Color {
         cents < 0 ? Palette.loss : cents > 0 ? Palette.gain : Palette.text
-    }
-
-    private func chart(_ points: [NetWorthPoint]) -> some View {
-        let floor = Double(points.map(\.netWorthCents).min() ?? 0) / 100
-        let selected = point(at: scrubbed, in: points)
-        return Chart {
-            ForEach(points, id: \.date) { point in
-                let day = DayText.date(point.date) ?? .now
-                let dollars = Double(point.netWorthCents) / 100
-                AreaMark(x: .value("Day", day), yStart: .value("Floor", floor), yEnd: .value("Net worth", dollars))
-                    .foregroundStyle(Palette.accent.opacity(0.15))
-                LineMark(x: .value("Day", day), y: .value("Net worth", dollars))
-                    .foregroundStyle(Palette.accent)
-            }
-            // while dragging, mark the day the header shows
-            if let selected, let day = DayText.date(selected.date) {
-                RuleMark(x: .value("Day", day))
-                    .foregroundStyle(Palette.secondaryText)
-                PointMark(x: .value("Day", day), y: .value("Net worth", Double(selected.netWorthCents) / 100))
-                    .foregroundStyle(Palette.accent)
-            }
-        }
-        .chartYScale(domain: .automatic(includesZero: false))
-        .chartYAxis(hideBalances ? .hidden : .automatic)
-        .accessibilityHidden(hideBalances)
-        .chartXSelection(value: $scrubbed)
-        .frame(height: Space.xxl * 7)
-    }
-
-    private func point(at date: Date?, in points: [NetWorthPoint]) -> NetWorthPoint? {
-        guard let date else { return nil }
-        return points.min { abs((DayText.date($0.date) ?? .now).timeIntervalSince(date)) < abs((DayText.date($1.date) ?? .now).timeIntervalSince(date)) }
     }
 
     private func load() async {
