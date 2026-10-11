@@ -28,7 +28,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   seedTxn(db, { id: 'txn-6', accountId: 'manual', date: '2026-03-09', amountCents: -300, categoryId: 'cat-food', payee: 'Synthetic Market',
     paidByPersonId: 'person-1' });
   const snap = db.prepare('INSERT INTO balance_snapshots (account_id, date, balance_cents) VALUES (?, ?, ?)');
-  snap.run('acct-checking', '2026-03-14', 240000);
+  snap.run('acct-checking', '2026-03-14', 400000);
   snap.run('acct-card', '2026-03-14', 4000);
   snap.run('acct-checking', '2026-03-15', 250000);
   snap.run('acct-card', '2026-03-15', 4200);

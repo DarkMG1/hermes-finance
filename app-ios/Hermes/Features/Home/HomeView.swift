@@ -10,6 +10,8 @@ struct HomeView: View {
     @State private var renaming: Account?
     @State private var linker = BankLinker()
     @AppStorage("hideBalances") private var hideBalances = false
+    @State private var showingBalances = false
+    @State private var showBalancesError: String?
 
     var body: some View {
         Screen(title: "Home") {
@@ -36,7 +38,13 @@ struct HomeView: View {
                     HStack {
                         Text("Net worth").textStyle(.subhead, color: Palette.secondaryText)
                         Spacer()
-                        Button { hideBalances.toggle() } label: {
+                        Button {
+                            if hideBalances {
+                                Task { await showBalances() }
+                            } else {
+                                hideBalances = true
+                            }
+                        } label: {
                             Image(systemName: hideBalances ? "eye" : "eye.slash")
                         }
                         .accessibilityLabel(hideBalances ? "Show balances" : "Hide balances")
@@ -49,6 +57,7 @@ struct HomeView: View {
                     }
                     .buttonStyle(.plain)
                 }
+                if let showBalancesError { Text(showBalancesError).textStyle(.caption, color: Palette.secondaryText) }
                 let groups = AccountGrouping.group(model.accounts)
                 if !groups.isEmpty {
                     Card {
@@ -110,6 +119,27 @@ struct HomeView: View {
         }
         .sheet(item: $renaming) { account in
             AccountSheet(account: account) { await model.refreshReferenceData() }
+        }
+    }
+
+    /// Showing needs Face ID wherever the hardware exists, even with the app lock off: hiding guards a glance at the screen.
+    private func showBalances() async {
+        guard AppLock.hasBiometricHardware else {
+            hideBalances = false
+            return
+        }
+        guard !showingBalances else { return }
+        showingBalances = true
+        defer { showingBalances = false }
+        showBalancesError = nil
+        switch await AppLock.confirmOwner(reason: "Show balances", allowNewBaseline: false) {
+        case .confirmed: hideBalances = false
+        case .failed(let message):
+            showBalancesError = message
+            if let message { AccessibilityNotification.Announcement(message).post() }
+        case .facesChanged:
+            UserDefaults.standard.set(true, forKey: "faceIDChanged")
+            model.disconnect()
         }
     }
 

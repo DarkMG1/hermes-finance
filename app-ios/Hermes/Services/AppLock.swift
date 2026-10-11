@@ -56,24 +56,32 @@ final class AppLock {
         } catch {
             return .failed(failureMessage(error))
         }
-        let key = "faceIDDomainState"
         guard let current = context.domainState.biometry.stateHash else { return .failed(nil) }
-        let saved = UserDefaults.standard.data(forKey: key)
+        let saved = UserDefaults.standard.data(forKey: baselineKey)
         // right after the server token was entered, the faces enrolled now become the baseline, replacing a stale one
         if allowNewBaseline || saved == current {
-            UserDefaults.standard.set(current, forKey: key)
+            UserDefaults.standard.set(current, forKey: baselineKey)
             return .confirmed
         }
-        UserDefaults.standard.removeObject(forKey: key)
+        UserDefaults.standard.removeObject(forKey: baselineKey)
         return .facesChanged
+    }
+
+    private static let baselineKey = "faceIDDomainState"
+
+    /// The server token was just entered, so the faces enrolled now are the owner's: the same moment the lock trusts.
+    private static func saveBaselineWithoutPrompt() {
+        let context = LAContext()
+        _ = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
+        if let current = context.domainState.biometry.stateHash { UserDefaults.standard.set(current, forKey: baselineKey) }
     }
 
     private static func failureMessage(_ error: Error?) -> String? {
         switch (error as? LAError)?.code {
-        case .biometryLockout?: "Face ID is locked. Unlock your iPhone with its passcode, then tap Unlock."
-        case .biometryNotEnrolled?: "Set up Face ID in iOS Settings, then tap Unlock."
-        case .passcodeNotSet?: "Set a passcode and Face ID in iOS Settings, then tap Unlock."
-        case .biometryNotAvailable?: "Allow Face ID for Hermes in iOS Settings, then tap Unlock."
+        case .biometryLockout?: "Face ID is locked. Unlock your iPhone with its passcode, then try again."
+        case .biometryNotEnrolled?: "Set up Face ID in iOS Settings, then try again."
+        case .passcodeNotSet?: "Set a passcode and Face ID in iOS Settings, then try again."
+        case .biometryNotAvailable?: "Allow Face ID for Hermes in iOS Settings, then try again."
         default: nil
         }
     }
@@ -106,6 +114,9 @@ final class AppLock {
             failure = nil
             showLocked()
             authenticate()
+        } else if trustNewBaseline {
+            Self.saveBaselineWithoutPrompt()
+            trustNewBaseline = false
         }
     }
 
