@@ -34,7 +34,7 @@ function nextDay(day: string): string {
   return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
 }
 
-/** Rebuilt from transactions before their first snapshot; every other type holds flat at it. Keep in sync with the SQL below. */
+/** Rebuilt from transactions before their first snapshot; every other type holds flat at it. */
 const REBUILT_TYPES = ['depository', 'credit', 'loan'];
 
 export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string): NetWorthHistory {
@@ -58,8 +58,8 @@ export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string
     SELECT t.account_id AS accountId, t.date, SUM(t.amount_cents) AS cents FROM transactions t
     JOIN accounts a ON a.id = t.account_id
     WHERE a.hidden = 0 AND a.type IN (${REBUILT_TYPES.map(() => '?').join(', ')}) AND t.pending = 0 AND t.removed_at IS NULL
-      AND t.date <= (SELECT MIN(s.date) FROM balance_snapshots s WHERE s.account_id = t.account_id)
-    GROUP BY t.account_id, t.date ORDER BY t.date`).all(...REBUILT_TYPES) as { accountId: string; date: string; cents: number }[];
+      AND t.date <= (SELECT MIN(s.date) FROM balance_snapshots s WHERE s.account_id = t.account_id AND s.date <= ?)
+    GROUP BY t.account_id, t.date ORDER BY t.date`).all(...REBUILT_TYPES, today) as { accountId: string; date: string; cents: number }[];
   // start every account at its balance before anything recorded, then add each day's moves walking forward
   for (const m of moves) latest.set(m.accountId, latest.get(m.accountId)! - m.cents);
   const lastAnchor = [...anchors.values()].reduce((a, b) => (b > a ? b : a));

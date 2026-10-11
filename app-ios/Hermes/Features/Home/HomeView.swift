@@ -42,7 +42,6 @@ struct HomeView: View {
                             if hideBalances {
                                 Task { await showBalances() }
                             } else {
-                                showBalancesError = nil
                                 hideBalances = true
                             }
                         } label: {
@@ -133,10 +132,11 @@ struct HomeView: View {
         showingBalances = true
         defer { showingBalances = false }
         showBalancesError = nil
-        // a missing baseline is adopted (it only exists after a connect, which needed the server token); a saved, different one still signs out
-        switch await AppLock.confirmOwner(reason: "Show balances", allowNewBaseline: !AppLock.hasBaseline) {
+        switch await AppLock.confirmOwner(reason: "Show balances", allowNewBaseline: false) {
         case .confirmed: hideBalances = false
-        case .failed(let message): showBalancesError = message
+        case .failed(let message):
+            showBalancesError = message
+            if let message { AccessibilityNotification.Announcement(message).post() }
         case .facesChanged:
             UserDefaults.standard.set(true, forKey: "faceIDChanged")
             model.disconnect()

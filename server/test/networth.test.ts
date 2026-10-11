@@ -152,6 +152,7 @@ test('rebuilds checking, credit and loan from transactions; investments stay fla
   snap(deps.db, 'card', '2026-03-14', 1500);
   snap(deps.db, 'loan', '2026-03-14', 20000);
   snap(deps.db, 'inv', '2026-03-14', 50000);
+  seedTxn(deps.db, { id: 't0', accountId: 'chk', date: '2026-03-10', amountCents: 100 });
   seedTxn(deps.db, { id: 't1', accountId: 'chk', date: '2026-03-12', amountCents: 5000 });
   seedTxn(deps.db, { id: 't2', accountId: 'chk', date: '2026-03-13', amountCents: -2000 });
   seedTxn(deps.db, { id: 't3', accountId: 'chk', date: '2026-03-14', amountCents: -500 });
@@ -159,11 +160,13 @@ test('rebuilds checking, credit and loan from transactions; investments stay fla
   seedTxn(deps.db, { id: 't5', accountId: 'chk', date: '2026-03-13', amountCents: -7777, removedAt: '2026-03-14T00:00:00Z' });
   seedTxn(deps.db, { id: 't6', accountId: 'card', date: '2026-03-13', amountCents: -1000 });
   seedTxn(deps.db, { id: 't7', accountId: 'card', date: '2026-03-14', amountCents: 500 });
-  seedTxn(deps.db, { id: 't8', accountId: 'loan', date: '2026-03-11', amountCents: 1000 });
+  seedTxn(deps.db, { id: 't8', accountId: 'loan', date: '2026-03-12', amountCents: 1000 });
   seedTxn(deps.db, { id: 't9', accountId: 'inv', date: '2026-03-12', amountCents: -3000 });
-  // checking 7500 / 12500 / 10500 / 10000; card -1000 / -1000 / -2000 / -1500; loan -20000; investment 50000
+  // 03-10..03-14: checking 7500 / 7500 / 12500 / 10500 / 10000; card -1000 / -1000 / -1000 / -2000 / -1500;
+  // loan -21000 / -21000 / -20000 / -20000 / -20000; investment 50000
   const expected = [
-    { date: '2026-03-11', netWorthCents: 36500 },
+    { date: '2026-03-10', netWorthCents: 35500 },
+    { date: '2026-03-11', netWorthCents: 35500 },
     { date: '2026-03-12', netWorthCents: 41500 },
     { date: '2026-03-13', netWorthCents: 38500 },
     { date: '2026-03-14', netWorthCents: 38500 },
@@ -172,7 +175,7 @@ test('rebuilds checking, credit and loan from transactions; investments stay fla
   const all = getNetWorth(deps.db, 'all', '2026-03-15');
   assert.deepEqual(all.points, expected);
   assert.equal(all.currentCents, 38500);
-  assert.equal(all.changeCents, 2000);
+  assert.equal(all.changeCents, 3000);
   assert.equal(all.estimatedThrough, '2026-03-13');
   assert.deepEqual(getNetWorth(deps.db, '1y', '2026-03-15').points, expected, '1y reaches back before the first snapshot');
 });
@@ -221,4 +224,35 @@ test('hidden accounts and flat types never move the start', () => {
   seedTxn(deps.db, { id: 'n1', accountId: 'nosnap', date: '2026-02-03', amountCents: 700 });
   const h = getNetWorth(deps.db, 'all', '2026-03-15');
   assert.deepEqual(h.points, [{ date: '2026-03-14', netWorthCents: 600 }, { date: '2026-03-15', netWorthCents: 600 }]);
+});
+
+test('a window that starts inside the estimate carries the moves before it', () => {
+  const { deps } = makeTestDeps();
+  seedAccount(deps.db, { id: 'chk', balanceCents: 10000 });
+  snap(deps.db, 'chk', '2026-03-14', 10000);
+  seedTxn(deps.db, { id: 'feb', accountId: 'chk', date: '2026-02-01', amountCents: 4000 });
+  seedTxn(deps.db, { id: 'mar', accountId: 'chk', date: '2026-03-01', amountCents: -1000 });
+  // 7000 before Feb 1, 11000 from Feb 1, 10000 from Mar 1
+  const h = getNetWorth(deps.db, '1m', '2026-03-15');
+  assert.deepEqual(h.points[0], { date: '2026-02-15', netWorthCents: 11000 });
+  assert.equal(h.points.find((p) => p.date === '2026-03-01')?.netWorthCents, 10000);
+  assert.equal(h.points.length, 29);
+  assert.equal(h.currentCents, 10000);
+  assert.equal(h.changeCents, -1000);
+  assert.equal(h.estimatedThrough, '2026-03-13');
+});
+
+test('a snapshot dated after today is ignored, with its transactions', () => {
+  const { deps } = makeTestDeps();
+  seedAccount(deps.db, { id: 'chk', balanceCents: 1000 });
+  seedAccount(deps.db, { id: 'new', balanceCents: 3000 });
+  snap(deps.db, 'chk', '2026-03-10', 1000);
+  snap(deps.db, 'new', '2026-03-16', 3000);
+  seedTxn(deps.db, { id: 'open', accountId: 'new', date: '2026-03-12', amountCents: 3000 });
+  const h = getNetWorth(deps.db, 'all', '2026-03-15');
+  assert.deepEqual(h.points.map((p) => p.netWorthCents), [1000, 1000, 1000, 1000, 1000, 1000]);
+  assert.equal(h.points[0]?.date, '2026-03-10');
+  assert.equal(h.currentCents, 1000);
+  assert.equal(h.changeCents, 0);
+  assert.equal(h.estimatedThrough, null);
 });
