@@ -13,6 +13,7 @@ struct TransactionDetailSheet: View {
     @State private var personId: String?
     @State private var paidById: String?
     @State private var date = Date.now
+    @State private var loadedDate = ""
     @State private var writes = WriteGuard()
     @State private var deleteWrites = WriteGuard()
     @State private var undoWrites = WriteGuard()
@@ -32,7 +33,7 @@ struct TransactionDetailSheet: View {
             Section {
                 LabeledContent("Amount") { MoneyText(cents: transaction.amountCents) }
                 DatePicker("Date", selection: $date, displayedComponents: .date)
-                    .disabled(writes.unresolved || deleteWrites.unresolved)
+                    .disabled(busy || writes.unresolved || deleteWrites.unresolved)
                 LabeledContent("Account", value: model.accountName(transaction.accountId))
                 if transaction.pending { LabeledContent("Status", value: "Pending") }
                 if !transaction.bankDescription.isEmpty { LabeledContent("Bank description", value: transaction.bankDescription) }
@@ -100,6 +101,7 @@ struct TransactionDetailSheet: View {
             personId = transaction.personId
             paidById = transaction.paidByPersonId
             date = DayText.date(transaction.date) ?? .now
+            loadedDate = DayText.ymd(date)
         }
         .sheet(item: $splitting, onDismiss: {
             // the edits were saved but the split was cancelled: this sheet's copy is stale, so close it
@@ -132,7 +134,7 @@ struct TransactionDetailSheet: View {
             notes: notes != (transaction.notes ?? "") ? .set(notes.isEmpty ? nil : notes) : .unchanged,
             personId: personId != transaction.personId ? .set(personId) : .unchanged,
             paidByPersonId: paidById != transaction.paidByPersonId ? .set(paidById) : .unchanged,
-            date: DayText.ymd(date) != transaction.date ? DayText.ymd(date) : nil)
+            date: DayText.ymd(date) != loadedDate ? DayText.ymd(date) : nil)
     }
 
     private var noneTitle: String { transaction.amountCents < 0 ? "Me" : "Nobody" }

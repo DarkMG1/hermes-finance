@@ -381,3 +381,16 @@ test('PATCH date moves a row to another month and marks the date as the owner\'s
   const bad = await app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: w('d-2'), payload: { date: '2026-02-30' } });
   assert.equal(bad.statusCode, 400);
 });
+
+test('PATCH date works on a split row and 404s on a removed row', async () => {
+  const { deps, app } = setup();
+  seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-31', amountCents: -2000, source: 'plaid', sourceId: 'p1' });
+  seedSplit(deps.db, { id: 'l1', transactionId: 't1', amountCents: -1000, categoryId: 'c-food' });
+  seedSplit(deps.db, { id: 'l2', transactionId: 't1', amountCents: -1000, categoryId: 'c-fun' });
+  const res = await app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: w('ds-1'), payload: { date: '2026-04-01' } });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().date, '2026-04-01');
+  assert.equal(res.json().splitLines.length, 2);
+  seedTxn(deps.db, { id: 'gone', accountId: 'a1', date: '2026-03-01', amountCents: -1, removedAt: 'x' });
+  assert.equal((await app.inject({ method: 'PATCH', url: '/v1/transactions/gone', headers: w('ds-2'), payload: { date: '2026-04-01' } })).statusCode, 404);
+});
