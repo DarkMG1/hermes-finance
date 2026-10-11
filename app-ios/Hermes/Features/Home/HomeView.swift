@@ -4,6 +4,7 @@ import SwiftUI
 
 struct HomeView: View {
     @Environment(AppModel.self) private var model
+    @Environment(AppLock.self) private var lock
     @Environment(\.webAuthenticationSession) private var webAuth
     @State private var state: LoadState<Home> = .loading
     @State private var selected: LedgerTransaction?
@@ -132,7 +133,7 @@ struct HomeView: View {
         showingBalances = true
         defer { showingBalances = false }
         showBalancesError = nil
-        switch await AppLock.confirmOwner(reason: "Show balances", allowNewBaseline: false) {
+        switch await lock.confirmOwnerInApp(reason: "Show balances") {
         case .confirmed: hideBalances = false
         case .failed(let message):
             showBalancesError = message
