@@ -43,8 +43,10 @@ schemes:
     build:
       targets:
         Hermes: all
-    # Release by default: the Debug build lags on keyboard focus. Switch Run back to Debug when you need the debugger.
+    # Release without the debugger by default: the Debug build lags on keyboard focus.
+    # Switch Run back to Debug and turn debugEnabled on when you need the debugger.
     run:
       config: Release
+      debugEnabled: false
     archive:
       config: Release
