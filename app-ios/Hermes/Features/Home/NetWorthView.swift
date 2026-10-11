@@ -25,6 +25,10 @@ struct NetWorthView: View {
                     Text("History starts today. Check back tomorrow.").textStyle(.subhead, color: Palette.secondaryText)
                 } else {
                     Card { chart(history.points) }
+                    if let through = history.estimatedThrough {
+                        Text("Through \(DayText.date(through)?.formatted(.dateTime.month(.abbreviated).day().year()) ?? through): estimated from transactions.")
+                            .textStyle(.caption, color: Palette.secondaryText)
+                    }
                 }
             }
         }
