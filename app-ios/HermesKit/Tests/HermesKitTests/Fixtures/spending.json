@@ -1,6 +1,9 @@
 {
   "from": "2026-03-01",
   "toExclusive": "2026-04-01",
+  "inCents": 300000,
+  "outCents": 4050,
+  "netCents": 295950,
   "totalCents": 4050,
   "categories": [
     {

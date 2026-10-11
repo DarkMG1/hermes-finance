@@ -55,9 +55,9 @@ export function seedTxn(db: Db, t: {
       t.personId ?? null, t.paidByPersonId ?? null);
 }
 
-export function seedSplit(db: Db, s: { id: string; transactionId: string; amountCents: number; categoryId: string | null; personId?: string }): void {
-  db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id, person_id) VALUES (?, ?, ?, ?, ?)')
-    .run(s.id, s.transactionId, s.amountCents, s.categoryId, s.personId ?? null);
+export function seedSplit(db: Db, s: { id: string; transactionId: string; amountCents: number; categoryId: string | null; personId?: string; payee?: string }): void {
+  db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id, person_id, payee) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(s.id, s.transactionId, s.amountCents, s.categoryId, s.personId ?? null, s.payee ?? null);
 }
 
 export function seedPerson(db: Db, p: { id: string; name: string; matchText?: string; archived?: boolean }): void {

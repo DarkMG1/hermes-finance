@@ -33,7 +33,13 @@ func json(_ value: some Encodable) throws -> String {
     let split = try decode(LedgerTransaction.self, "transaction")
     #expect(split.splitLines.map(\.amountCents) == [-2500, -1500])
     #expect(split.pending && split.source == "manual")
-    #expect(try decode(Spending.self, "spending").totalCents > 0)
+    let spending = try decode(Spending.self, "spending")
+    #expect(spending.outCents > 0 && spending.inCents > 0 && spending.netCents == spending.inCents - spending.outCents)
+    #expect(split.splitLines.first?.payee == "Synthetic Lamp" && split.splitLines.last?.payee == nil)
+    let expenses = try decode(ExpensesPage.self, "expenses")
+    #expect(expenses.rows.map(\.name) == ["Synthetic Cafe", "Synthetic Lamp", "Synthetic Market"])
+    #expect(expenses.rows[1].isSplit && expenses.rows[1].lineId == "line-1" && !expenses.rows[1].isSplitDifference)
+    #expect(Set(expenses.rows.map(\.id)).count == expenses.rows.count)
     let banks = try decode([Bank].self, "banks")
     #expect(banks.contains { $0.status == "login_required" })
     #expect(try decode(SyncStatus.self, "sync-status").items.first?.added == 2)
@@ -140,4 +146,19 @@ func json(_ value: some Encodable) throws -> String {
                                                   SplitLineBody(amountCents: -2000, categoryId: nil, notes: nil, personId: "p1")])
     #expect(try json(body) == #"{"amountCents":-4000,"date":"2026-03-05","payee":"Synthetic Cash","splitLines":"#
         + #"[{"amountCents":-2000,"categoryId":"c1"},{"amountCents":-2000,"categoryId":null,"personId":"p1"}]}"#)
+}
+
+@Test func spendingFromAnOlderServerDecodesOutFromTotal() throws {
+    let data = Data(#"{"from":"2026-03-01","toExclusive":"2026-04-01","totalCents":700,"categories":[]}"#.utf8)
+    let spending = try JSONDecoder().decode(Spending.self, from: data)
+    #expect(spending.outCents == 700 && spending.inCents == 0 && spending.netCents == -700)
+}
+
+@Test func splitLineBodiesEncodeNames() throws {
+    #expect(try json(SplitLineBody(amountCents: -500, categoryId: nil, notes: nil, payee: "Synthetic Lamp"))
+        == #"{"amountCents":-500,"categoryId":null,"payee":"Synthetic Lamp"}"#)
+    #expect(try json(SplitLineBody(amountCents: -500, categoryId: "c", notes: nil)) == #"{"amountCents":-500,"categoryId":"c"}"#)
+    #expect(try json(PatchSplitLineBody(payee: .set(nil))) == #"{"payee":null}"#)
+    #expect(try json(PatchSplitLineBody(categoryId: .set("c"), notes: .set("n"))) == #"{"categoryId":"c","notes":"n"}"#)
+    #expect(PatchSplitLineBody().isEmpty && !PatchSplitLineBody(personId: .set("p")).isEmpty)
 }

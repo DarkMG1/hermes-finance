@@ -1,0 +1,38 @@
+{
+  "rows": [
+    {
+      "transactionId": "txn-1",
+      "lineId": null,
+      "date": "2026-03-14",
+      "name": "Synthetic Cafe",
+      "categoryId": "cat-food",
+      "categoryName": "Synthetic Food",
+      "amountCents": 1250,
+      "isSplit": false,
+      "isSplitDifference": false
+    },
+    {
+      "transactionId": "txn-3",
+      "lineId": "line-1",
+      "date": "2026-03-12",
+      "name": "Synthetic Lamp",
+      "categoryId": "cat-food",
+      "categoryName": "Synthetic Food",
+      "amountCents": 2500,
+      "isSplit": true,
+      "isSplitDifference": false
+    },
+    {
+      "transactionId": "txn-6",
+      "lineId": null,
+      "date": "2026-03-09",
+      "name": "Synthetic Market",
+      "categoryId": "cat-food",
+      "categoryName": "Synthetic Food",
+      "amountCents": 300,
+      "isSplit": false,
+      "isSplitDifference": false
+    }
+  ],
+  "nextCursor": null
+}

@@ -19,14 +19,16 @@
       "amountCents": -2500,
       "categoryId": "cat-food",
       "notes": null,
-      "personId": null
+      "personId": null,
+      "payee": "Synthetic Lamp"
     },
     {
       "id": "line-2",
       "amountCents": -1500,
       "categoryId": null,
       "notes": null,
-      "personId": "person-1"
+      "personId": "person-1",
+      "payee": null
     }
   ]
 }

@@ -18,7 +18,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   seedTxn(db, { id: 'txn-1', accountId: 'acct-card', date: '2026-03-14', amountCents: -1250, source: 'plaid', sourceId: 'ps-1', categoryId: 'cat-food', merchantName: 'Synthetic Cafe', bankDescription: 'SYNTHETIC CAFE 001' });
   seedTxn(db, { id: 'txn-2', accountId: 'acct-checking', date: '2026-03-13', amountCents: 300000, source: 'plaid', sourceId: 'ps-2', categoryId: 'cat-pay', payee: 'Synthetic Employer' });
   seedTxn(db, { id: 'txn-3', accountId: 'acct-card', date: '2026-03-12', amountCents: -4000, source: 'manual', payee: 'Synthetic Split', pending: true });
-  seedSplit(db, { id: 'line-1', transactionId: 'txn-3', amountCents: -2500, categoryId: 'cat-food' });
+  seedSplit(db, { id: 'line-1', transactionId: 'txn-3', amountCents: -2500, categoryId: 'cat-food', payee: 'Synthetic Lamp' });
   seedSplit(db, { id: 'line-2', transactionId: 'txn-3', amountCents: -1500, categoryId: null, personId: 'person-1' });
   seedTxn(db, { id: 'txn-4', accountId: 'acct-checking', date: '2026-03-11', amountCents: 1000, source: 'plaid', sourceId: 'ps-4', personId: 'person-1',
     bankDescription: 'SYNTHETIC TRANSFER' });
@@ -46,6 +46,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
     'transactions-page': await get('/v1/transactions?limit=2'),
     transaction: await get('/v1/transactions/txn-3'),
     spending: await get('/v1/spending?period=month&date=2026-03'),
+    expenses: await get('/v1/expenses?period=month&date=2026-03'),
     banks: await get('/v1/banks'),
     'sync-status': { items: [{ itemId: 'item-1', institutionName: 'Synthetic Bank', result: 'ok', added: 2, modified: 1, removed: 0 }] },
     'link-session': { ...linkSession, sessionId: 'fixture-session' },

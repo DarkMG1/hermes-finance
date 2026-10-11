@@ -59,3 +59,11 @@ import Testing
     #expect(TransactionQuery.capped(String(repeating: "a", count: 120)).count == 100)
     #expect(TransactionQuery.capped("coffee") == "coffee")
 }
+
+@Test func expensesQueryItems() {
+    let march = SpendingPeriod(kind: .month, year: 2026, month: 3)
+    let all = ExpensesQuery(period: march, kind: .out)
+    #expect(all.items.map { "\($0.name)=\($0.value ?? "")" } == ["period=month", "date=2026-03", "kind=out", "limit=50"])
+    let food = ExpensesQuery(period: SpendingPeriod(kind: .year, year: 2026, month: 3), kind: .in, categoryId: ExpensesQuery.uncategorized, cursor: "abc")
+    #expect(food.items.map { "\($0.name)=\($0.value ?? "")" } == ["period=year", "date=2026", "kind=in", "categoryId=uncategorized", "cursor=abc", "limit=50"])
+}

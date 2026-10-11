@@ -1,13 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
-import { CreateTransactionBody, ListTransactionsQuery, PatchAccountBody, PatchTransactionBody, PutSplitsBody, SpendingQuery } from '@hermes/shared';
+import { CreateTransactionBody, ExpensesQuery, ListTransactionsQuery, PatchAccountBody, PatchSplitLineBody, PatchTransactionBody, PutSplitsBody, SpendingQuery } from '@hermes/shared';
 import type { Db } from '../db.ts';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { assertPersonTaggable, owedToYouCents, suggestions, youOweCents } from '../people.ts';
-import { assertCategoryExists, getHome, getSpending, getTransaction, learnCategory, listAccounts, listCategories, listTransactions } from '../ledger.ts';
+import { getExpenses, getSpending } from '../cashflow.ts';
+import { assertCategoryExists, getHome, getTransaction, learnCategory, listAccounts, listCategories, listTransactions } from '../ledger.ts';
 
 /** Checks split lines against a transaction's amount and makes them its split; the row's own category and person move onto the lines. */
 function writeSplit(db: Db, txnId: string, amountCents: number, lines: PutSplitsBody['lines'], field: string, nowIso: string): void {
@@ -22,8 +23,9 @@ function writeSplit(db: Db, txnId: string, amountCents: number, lines: PutSplits
   }
   db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(txnId);
   // ids sort in entry order (lines are read back ORDER BY id)
-  const insert = db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id, notes, person_id) VALUES (?, ?, ?, ?, ?, ?)');
-  lines.forEach((l, i) => insert.run(`${String(i).padStart(2, '0')}-${randomUUID()}`, txnId, l.amountCents, l.categoryId, l.notes ?? null, l.personId ?? null));
+  const insert = db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id, notes, person_id, payee) VALUES (?, ?, ?, ?, ?, ?, ?)');
+  lines.forEach((l, i) => insert.run(`${String(i).padStart(2, '0')}-${randomUUID()}`, txnId, l.amountCents, l.categoryId, l.notes ?? null, l.personId ?? null,
+    l.payee || null));
   // a split transaction's category lives on its lines; the owner decided, so learned mappings leave it alone
   db.prepare('UPDATE transactions SET category_id = NULL, person_id = NULL, category_owner_set = 1, updated_at = ? WHERE id = ?').run(nowIso, txnId);
 }
@@ -49,6 +51,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   app.get('/v1/home', async () => ({
     ...getHome(db), owedToYouCents: owedToYouCents(db), youOweCents: youOweCents(db), repaymentSuggestions: suggestions(db, deps.now()).length,
   }));
+  app.get('/v1/expenses', async (req) => getExpenses(db, parseBody(ExpensesQuery, req.query)));
   app.get('/v1/spending', async (req) => getSpending(db, parseBody(SpendingQuery, req.query)));
 
   app.get<{ Params: { id: string } }>('/v1/transactions/:id', async (req) => {
@@ -115,6 +118,36 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       if (txn.paidByPersonId) throw new ApiError(409, 'PAID_BY_PERSON', 'a transaction someone else paid cannot be split', 'lines');
       if (!body.lines.length && !txn.splitLines.length) return { status: 200, body: txn };
       writeSplit(db, txn.id, txn.amountCents, body.lines, 'lines', deps.now().toISOString());
+      return { status: 200, body: getTransaction(db, txn.id) };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+
+  app.patch<{ Params: { id: string; lineId: string } }>('/v1/transactions/:id/lines/:lineId', async (req, reply) => {
+    const body = parseBody(PatchSplitLineBody, req.body);
+    const r = idempotentWrite(deps, req, () => {
+      const txn = getTransaction(db, req.params.id);
+      if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      if (!txn.splitLines.some((l) => l.id === req.params.lineId)) throw new ApiError(404, 'NOT_FOUND', 'split line not found');
+      assertCategoryExists(db, body.categoryId, 'categoryId');
+      assertPersonTaggable(db, body.personId, 'personId', txn.id);
+      const sets: string[] = [];
+      const args: unknown[] = [];
+      // person and category are exclusive on a line, as on a transaction; a line's category never teaches
+      if (body.categoryId !== undefined) {
+        sets.push('category_id = ?');
+        args.push(body.categoryId);
+        if (body.categoryId !== null) sets.push('person_id = NULL');
+      }
+      if (body.personId !== undefined) {
+        sets.push('person_id = ?');
+        args.push(body.personId);
+        if (body.personId !== null) sets.push('category_id = NULL');
+      }
+      if (body.payee !== undefined) { sets.push('payee = ?'); args.push(body.payee || null); }
+      if (body.notes !== undefined) { sets.push('notes = ?'); args.push(body.notes); }
+      db.prepare(`UPDATE split_lines SET ${sets.join(', ')} WHERE id = ?`).run(...args, req.params.lineId);
+      db.prepare('UPDATE transactions SET updated_at = ? WHERE id = ?').run(deps.now().toISOString(), txn.id);
       return { status: 200, body: getTransaction(db, txn.id) };
     });
     return reply.code(r.status).send(r.body);

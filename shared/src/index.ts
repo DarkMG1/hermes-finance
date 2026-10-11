@@ -21,7 +21,9 @@ export const Category = z.object({
 });
 export type Category = z.infer<typeof Category>;
 
-export const SplitLine = z.object({ id: Id, amountCents: Cents, categoryId: Id.nullable(), notes: z.string().nullable(), personId: Id.nullable() });
+export const SplitLine = z.object({
+  id: Id, amountCents: Cents, categoryId: Id.nullable(), notes: z.string().nullable(), personId: Id.nullable(), payee: z.string().nullable(),
+});
 export type SplitLine = z.infer<typeof SplitLine>;
 
 export const Transaction = z.object({
@@ -58,10 +60,21 @@ export const PutSplitsBody = z.object({
   lines: z.array(z.object({
     amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'), categoryId: Id.nullable(), notes: z.string().max(2000).nullable().optional(),
     personId: Id.nullable().optional(),
+    /** The line's own name; blank or missing shows the transaction's payee. */
+    payee: z.string().trim().max(200).nullable().optional(),
   }).strict().refine((l) => !(l.categoryId && l.personId), { message: 'a line with a person has no category', path: ['personId'] }))
     .max(20).refine((l) => l.length !== 1, 'a split needs at least two lines'),
 }).strict();
 export type PutSplitsBody = z.infer<typeof PutSplitsBody>;
+
+/** Changes one split line in place. A person clears the line's category and a category clears its person. */
+export const PatchSplitLineBody = z.object({
+  payee: z.string().trim().max(200).nullable().optional(), categoryId: Id.nullable().optional(),
+  personId: Id.nullable().optional(), notes: z.string().max(2000).nullable().optional(),
+}).strict()
+  .refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' })
+  .refine((b) => !(b.categoryId && b.personId), { message: 'a line with a person has no category', path: ['personId'] });
+export type PatchSplitLineBody = z.infer<typeof PatchSplitLineBody>;
 
 export const Person = z.object({ id: Id, name: z.string(), matchText: z.string().nullable(), archived: z.boolean(), balanceCents: Cents });
 export type Person = z.infer<typeof Person>;
@@ -122,10 +135,30 @@ export const SpendingQuery = z.discriminatedUnion('period', [
 export type SpendingQuery = z.infer<typeof SpendingQuery>;
 
 export const Spending = z.object({
-  from: DateStr, toExclusive: DateStr, totalCents: Cents,
+  from: DateStr, toExclusive: DateStr, inCents: Cents, outCents: Cents, netCents: Cents,
+  /** Equal to outCents; kept for app builds before v1.3. Remove in v1.4. */
+  totalCents: Cents,
   categories: z.array(z.object({ categoryId: Id.nullable(), name: z.string(), spentCents: Cents })),
 });
 export type Spending = z.infer<typeof Spending>;
+
+/** The rows behind a Spending number. categoryId 'uncategorized' selects the Uncategorized bucket. */
+export const ExpensesQuery = z.object({
+  period: z.enum(['month', 'year']), date: z.string(), kind: z.enum(['out', 'in']).default('out'),
+  categoryId: Id.optional(), cursor: z.string().max(400).optional(), limit: z.coerce.number().int().min(1).max(200).default(50),
+}).strict()
+  .refine((q) => SpendingQuery.safeParse({ period: q.period, date: q.date }).success, { message: 'date does not match period', path: ['date'] });
+export type ExpensesQuery = z.infer<typeof ExpensesQuery>;
+
+export const ExpenseRow = z.object({
+  transactionId: Id, lineId: Id.nullable(), date: DateStr, name: z.string(), categoryId: Id.nullable(), categoryName: z.string(),
+  /** Out: spending is positive and a refund negative. In: income is positive. */
+  amountCents: Cents, isSplit: z.boolean(), isSplitDifference: z.boolean(),
+});
+export type ExpenseRow = z.infer<typeof ExpenseRow>;
+
+export const ExpensesPage = z.object({ rows: z.array(ExpenseRow), nextCursor: z.string().nullable() });
+export type ExpensesPage = z.infer<typeof ExpensesPage>;
 
 export const Bank = z.object({
   itemId: Id, institutionName: z.string(), status: z.enum(['ok', 'login_required', 'error']),
