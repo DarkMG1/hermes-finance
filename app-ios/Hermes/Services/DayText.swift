@@ -13,6 +13,8 @@ enum DayText {
 
     static func ymd(_ date: Date) -> String { ymdFormatter.string(from: date) }
 
+    static func date(_ ymd: String) -> Date? { ymdFormatter.date(from: ymd) }
+
     static func display(_ ymd: String) -> String {
         guard let date = ymdFormatter.date(from: ymd) else { return ymd }
         let calendar = Calendar.current

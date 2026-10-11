@@ -368,3 +368,16 @@ test('tagging a spending row with a transfer or income category teaches nothing 
   const spending = (await app.inject({ method: 'GET', url: '/v1/spending?period=month&date=2026-03', headers: AUTH })).json();
   assert.equal(spending.totalCents, 5000, 'the untouched sibling still counts as spending');
 });
+
+test('PATCH date moves a row to another month and marks the date as the owner\'s', async () => {
+  const { deps, app } = setup();
+  seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-31', amountCents: -1500, source: 'plaid', sourceId: 'p1', categoryId: 'c-food' });
+  const res = await app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: w('d-1'), payload: { date: '2026-04-01' } });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().date, '2026-04-01');
+  assert.equal((deps.db.prepare("SELECT date_owner_set AS f FROM transactions WHERE id = 't1'").get() as { f: number }).f, 1);
+  const out = async (month: string) => (await app.inject({ method: 'GET', url: `/v1/spending?period=month&date=${month}`, headers: AUTH })).json().outCents;
+  assert.deepEqual([await out('2026-03'), await out('2026-04')], [0, 1500]);
+  const bad = await app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: w('d-2'), payload: { date: '2026-02-30' } });
+  assert.equal(bad.statusCode, 400);
+});

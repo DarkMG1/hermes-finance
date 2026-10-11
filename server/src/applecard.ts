@@ -109,7 +109,7 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
     VALUES (@id, @accountId, 'applecard', @sourceId, @date, @date, @clearing, @amount, @desc, @merchant, @plaidCategory,
       (SELECT category_id FROM plaid_category_map WHERE plaid_category = @plaidCategory), @now, @now)
     ON CONFLICT (source, source_id) DO UPDATE SET
-      date = excluded.date, authorized_date = excluded.authorized_date, clearing_date = COALESCE(excluded.clearing_date, transactions.clearing_date),
+      date = CASE WHEN transactions.date_owner_set = 1 THEN transactions.date ELSE excluded.date END, authorized_date = excluded.authorized_date, clearing_date = COALESCE(excluded.clearing_date, transactions.clearing_date),
       amount_cents = excluded.amount_cents,
       bank_description = excluded.bank_description, merchant_name = excluded.merchant_name, plaid_category = excluded.plaid_category,
       category_id = COALESCE(transactions.category_id, CASE WHEN transactions.category_owner_set = 0 THEN excluded.category_id END),
