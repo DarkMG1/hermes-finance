@@ -11,16 +11,30 @@ final class AppLock {
     private var backgroundedAt: Date?
     private var authenticating = false
 
-    /// False when the device has neither Face ID nor a passcode, so there is nothing to unlock with.
-    static var canUseFaceID: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil) }
+    /// False when no Face ID is enrolled or available, so there is nothing to unlock with. No passcode fallback.
+    static var canUseFaceID: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) }
 
     static func confirmOwner(reason: String) async -> Bool {
-        (try? await LAContext().evaluatePolicy(.deviceOwnerAuthentication, localizedReason: reason)) ?? false
+        let context = LAContext()
+        context.localizedFallbackTitle = ""
+        return (try? await context.evaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, localizedReason: reason)) ?? false
+    }
+
+    /// Called when the Connect screen succeeds: ask for Face ID right away, as a cold launch does.
+    func didConnect(enabled: Bool) {
+        launched = true
+        backgroundedAt = nil
+        if enabled && Self.canUseFaceID {
+            locked = true
+            cover.show(locked: true) { [weak self] in self?.authenticate() }
+            authenticate()
+        }
     }
 
     func phaseChanged(to phase: ScenePhase, enabled: Bool, connected: Bool) {
         guard connected else {
-            // connecting counts as unlocking, but the session is no longer fresh
+            // not connected: nothing to lock; didConnect locks once the Connect screen succeeds
+
             launched = true
             locked = false
             backgroundedAt = nil

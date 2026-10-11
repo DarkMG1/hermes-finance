@@ -35,6 +35,9 @@ struct HermesApp: App {
             .tint(Palette.accent)
             .preferredColorScheme(appearance.colorScheme)
             .task { await model.refreshReferenceData() }
+            .onChange(of: model.reader != nil) { _, connected in
+                if connected { lock.didConnect(enabled: requireFaceID) }
+            }
             .onChange(of: scenePhase, initial: true) { _, phase in
                 lock.phaseChanged(to: phase, enabled: requireFaceID, connected: model.reader != nil)
             }

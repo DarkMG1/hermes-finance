@@ -8,7 +8,13 @@ final class PrivacyCover {
     private var window: UIWindow?
 
     func show(locked: Bool, unlock: @escaping () -> Void) {
-        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        guard let scene = scenes.first(where: { [.foregroundActive, .foregroundInactive].contains($0.activationState) }) ?? scenes.first
+        else { return }
+        if let stale = self.window, stale.windowScene !== scene {
+            stale.isHidden = true
+            self.window = nil
+        }
         let window = self.window ?? UIWindow(windowScene: scene)
         window.windowLevel = .alert + 1
         // follow the app's own appearance setting, which lives on its main window
