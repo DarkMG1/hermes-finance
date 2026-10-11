@@ -104,7 +104,6 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
   }
   // only a per-account cutover applies: Actual never held this card, so the global migration cutover is irrelevant here
   const cutover = (db.prepare('SELECT cutover_date FROM accounts WHERE id = ?').get(accountId) as { cutover_date: string | null }).cutover_date;
-  const exists = db.prepare("SELECT 1 FROM transactions WHERE source = 'applecard' AND source_id = ?");
   const upsert = db.prepare(`
     INSERT INTO transactions (id, account_id, source, source_id, date, authorized_date, clearing_date, amount_cents, bank_description, merchant_name, plaid_category, category_id, created_at, updated_at)
     VALUES (@id, @accountId, 'applecard', @sourceId, @date, @date, @clearing, @amount, @desc, @merchant, @plaidCategory,
@@ -118,22 +117,21 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
   const result: AppleCardImportResult = { accountId, rows: rows.length, added: 0, updated: 0, skippedBeforeCutover: 0 };
   const stored = db.prepare("SELECT clearing_date AS c FROM transactions WHERE source = 'applecard' AND source_id = ?");
   const taken = new Set<string>();
-  const nextIndex = new Map<string, number>();
   rows.forEach((r) => {
     const base = baseOf(r);
-    let n = nextIndex.get(base) ?? 0;
+    // every row probes from 0 so it can claim a lower index an earlier identical row skipped;
     // an identical purchase that cleared on another day is a different charge: move to the next occurrence
-    for (;;) {
-      const candidate = idFor(base, n);
-      const row = stored.get(candidate) as { c: string | null } | undefined;
-      if (!taken.has(candidate) && !(row?.c && r.clearingDate && row.c !== r.clearingDate)) break;
-      n += 1;
+    let sourceId: string;
+    let row: { c: string | null } | undefined;
+    for (let n = 0; ; n += 1) {
+      sourceId = idFor(base, n);
+      if (taken.has(sourceId)) continue;
+      row = stored.get(sourceId) as { c: string | null } | undefined;
+      if (!(row?.c && r.clearingDate && row.c !== r.clearingDate)) break;
     }
-    nextIndex.set(base, n + 1);
-    const sourceId = idFor(base, n);
     taken.add(sourceId);
     if (cutover && r.transactionDate < cutover) { result.skippedBeforeCutover += 1; return; }
-    if (exists.get(sourceId)) result.updated += 1; else result.added += 1;
+    if (row) result.updated += 1; else result.added += 1;
     // payments must never count as spending; other rows keep Apple's category so refunds net against purchases
     const plaidCategory = r.type.toLowerCase() === 'payment' ? 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' : r.category;
     upsert.run({ id: randomUUID(), accountId, sourceId, date: r.transactionDate, clearing: r.clearingDate, amount: r.amountCents, desc: r.description,

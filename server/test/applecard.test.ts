@@ -169,3 +169,23 @@ test('rows imported before clearing dates were stored update on re-import instea
   const rows = deps.db.prepare("SELECT clearing_date FROM transactions WHERE source = 'applecard'").all() as { clearing_date: string | null }[];
   assert.deepEqual(rows, [{ clearing_date: '2026-09-30' }]);
 });
+
+const coffee = (clearing: string) => `09/30/2026,${clearing},SYNTHETIC COFFEE,Synthetic Coffee,Restaurants,Purchase,5.00,Synthetic Person`;
+
+test('a later identical row still claims the stored charge it matches after an earlier row skipped past it', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  await post(app, statement('09/30/2026'), 'ac-a');
+  const second = (await post(app, [HEADER, coffee('10/01/2026'), coffee('09/30/2026')].join('\n'), 'ac-b')).json() as { added: number; updated: number };
+  assert.deepEqual([second.added, second.updated], [1, 1]);
+  assert.equal((deps.db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE source = 'applecard'").get() as { n: number }).n, 2);
+});
+
+test('re-importing a statement with its identical rows in swapped order updates both', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  await post(app, [HEADER, coffee('09/30/2026'), coffee('10/01/2026')].join('\n'), 'ac-a');
+  const again = (await post(app, [HEADER, coffee('10/01/2026'), coffee('09/30/2026')].join('\n'), 'ac-b')).json() as { added: number; updated: number };
+  assert.deepEqual([again.added, again.updated], [0, 2]);
+  assert.equal((deps.db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE source = 'applecard'").get() as { n: number }).n, 2);
+});
