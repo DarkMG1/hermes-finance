@@ -46,6 +46,10 @@ test('a successful sync snapshots today; a failed sync writes nothing', async ()
   assert.equal(ok.result, 'ok');
   const written = rows(deps.db) as { date: string; balance_cents: number }[];
   assert.deepEqual(written.map((r) => [r.date, r.balance_cents]), [[localDay(deps.now()), 1234]]);
+  plaid.queueSync([{ added: [], modified: [], removed: [], nextCursor: 'c2', hasMore: false }]);
+  plaid.accounts = [{ accountId: 'pa1', name: 'Synthetic Checking', mask: '0001', type: 'depository', subtype: 'checking', currentBalance: 20, availableBalance: null }];
+  assert.equal((await syncItem(deps, 'i1')).result, 'ok');
+  assert.deepEqual((rows(deps.db) as { date: string; balance_cents: number }[]).map((r) => [r.date, r.balance_cents]), [[localDay(deps.now()), 2000]]);
   deps.db.prepare('DELETE FROM balance_snapshots').run();
   plaid.failNextSync('INSTITUTION_DOWN');
   const failed = await syncItem(deps, 'i1');
@@ -72,20 +76,23 @@ test('history carries balances forward, subtracts credit, and skips hidden accou
   seedAccount(deps.db, { id: 'chk', balanceCents: 5000 });
   seedAccount(deps.db, { id: 'card', type: 'credit', balanceCents: 700 });
   seedAccount(deps.db, { id: 'old', balanceCents: 9999, hidden: true });
+  seedAccount(deps.db, { id: 'loan', type: 'loan', balanceCents: 200 });
   snap(deps.db, 'chk', '2026-03-10', 4000);
   snap(deps.db, 'old', '2026-03-10', 9999);
   snap(deps.db, 'card', '2026-03-11', 500);
+  snap(deps.db, 'loan', '2026-03-12', 300);
   snap(deps.db, 'chk', '2026-03-13', 5000);
+  snap(deps.db, 'loan', '2026-03-13', 200);
   const h = getNetWorth(deps.db, '1m', '2026-03-14');
   assert.deepEqual(h.points, [
     { date: '2026-03-10', netWorthCents: 4000 },
     { date: '2026-03-11', netWorthCents: 3500 },
-    { date: '2026-03-12', netWorthCents: 3500 },
-    { date: '2026-03-13', netWorthCents: 4500 },
-    { date: '2026-03-14', netWorthCents: 4500 },
+    { date: '2026-03-12', netWorthCents: 3200 },
+    { date: '2026-03-13', netWorthCents: 4300 },
+    { date: '2026-03-14', netWorthCents: 4300 },
   ]);
-  assert.equal(h.currentCents, 4500);
-  assert.equal(h.changeCents, 500);
+  assert.equal(h.currentCents, 4300);
+  assert.equal(h.changeCents, 300);
 });
 
 test('the window starts at today minus the range, clamped to the month end and to the first snapshot', () => {

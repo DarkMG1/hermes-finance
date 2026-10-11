@@ -8,6 +8,7 @@ struct NetWorthView: View {
     @State private var range = NetWorthRange.month
     @State private var state: LoadState<NetWorthHistory> = .loading
     @State private var scrubbed: Date?
+    @State private var loadedRange: NetWorthRange?
 
     var body: some View {
         Screen(title: "Net worth") {
@@ -17,6 +18,7 @@ struct NetWorthView: View {
             .pickerStyle(.segmented)
             // swiftlint:disable:next multiple_closures_with_trailing_closure
             LoadingContent(state: state, retry: { Task { await load() } }) { loaded in
+                LastUpdated(loaded: loaded)
                 let history = loaded.value
                 Card { header(history) }
                 if history.points.count < 2 {
@@ -26,7 +28,11 @@ struct NetWorthView: View {
                 }
             }
         }
-        .task(id: range) { await load() }
+        .task(id: range) {
+            if loadedRange != range { state = .loading }
+            scrubbed = nil
+            await load()
+        }
         .refreshable { await load() }
     }
 
@@ -41,14 +47,19 @@ struct NetWorthView: View {
             MoneyText(cents: history.currentCents, style: .display, colored: false, negativeIsLoss: true)
                 .redacted(reason: hideBalances ? .placeholder : [])
             HStack(spacing: Space.s) {
-                MoneyText(cents: history.changeCents, colored: true, negativeIsLoss: true)
+                MoneyText(cents: history.changeCents, colored: !hideBalances, negativeIsLoss: !hideBalances)
                 if let percent = history.changePercent {
                     Text(percent.formatted(.percent.precision(.fractionLength(1))))
-                        .textStyle(.subhead, color: history.changeCents < 0 ? Palette.loss : history.changeCents > 0 ? Palette.gain : Palette.text)
+                        .textStyle(.subhead, color: hideBalances ? Palette.text : changeColor(history.changeCents))
+                        .accessibilityHidden(hideBalances)
                 }
             }
             .redacted(reason: hideBalances ? .placeholder : [])
         }
+    }
+
+    private func changeColor(_ cents: Int) -> Color {
+        cents < 0 ? Palette.loss : cents > 0 ? Palette.gain : Palette.text
     }
 
     private func chart(_ points: [NetWorthPoint]) -> some View {
@@ -63,6 +74,7 @@ struct NetWorthView: View {
         }
         .chartYScale(domain: .automatic(includesZero: false))
         .chartYAxis(hideBalances ? .hidden : .automatic)
+        .accessibilityHidden(hideBalances)
         .chartXSelection(value: $scrubbed)
         .frame(height: Space.xxl * 7)
     }
@@ -79,9 +91,11 @@ struct NetWorthView: View {
             let loaded = try await reader.read("/v1/net-worth", query: requested.queryItems, as: NetWorthHistory.self)
             guard !Task.isCancelled, requested == range else { return }
             state = .loaded(loaded)
+            loadedRange = requested
         } catch {
             guard !Task.isCancelled, requested == range else { return }
             state = .failed(errorMessage(error))
+            loadedRange = requested
         }
     }
 }

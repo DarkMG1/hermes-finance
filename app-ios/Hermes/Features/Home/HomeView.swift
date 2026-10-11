@@ -45,11 +45,7 @@ struct HomeView: View {
                         .redacted(reason: hideBalances ? .placeholder : [])
                     // a row, not the whole card, so the eye button keeps its own tap
                     NavigationLink { NetWorthView() } label: {
-                        HStack {
-                            Text("History").textStyle(.subhead)
-                            Spacer()
-                            Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText)
-                        }
+                        ListRow(title: "History") { Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText) }
                     }
                     .buttonStyle(.plain)
                 }

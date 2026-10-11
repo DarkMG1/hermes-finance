@@ -5,6 +5,7 @@ export const FIXTURE_DIR = 'app-ios/HermesKit/Tests/HermesKitTests/Fixtures';
 
 // Deterministic: fixed ids, the test clock, and random ids normalised before writing.
 export async function buildFixtures(): Promise<Record<string, string>> {
+  process.env.TZ = 'UTC'; // snapshot dates use the process-local day
   const { deps, plaid } = makeTestDeps();
   const { db } = deps;
   seedItem(deps, { id: 'item-1', plaidItemId: 'p-item-1', institutionName: 'Synthetic Bank', accessToken: 'tok' });

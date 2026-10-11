@@ -2,6 +2,7 @@ import HermesKit
 import SwiftUI
 
 struct MoneyText: View {
+    @Environment(\.redactionReasons) private var redaction
     let cents: Int
     var style: TextStyle = .body
     /// Money in shows in the gain colour.
@@ -11,7 +12,7 @@ struct MoneyText: View {
 
     var body: some View {
         Text(Money.format(cents)).textStyle(style, color: color).monospacedDigit()
-            .accessibilityLabel(cents < 0 ? "minus " + Money.format(-cents) : Money.format(cents))
+            .accessibilityLabel(!redaction.isEmpty ? "Hidden" : cents < 0 ? "minus " + Money.format(-cents) : Money.format(cents))
     }
 
     private var color: Color {

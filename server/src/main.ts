@@ -15,6 +15,7 @@ export async function start(env: NodeJS.ProcessEnv): Promise<{ close: () => Prom
   const stop = startScheduler(deps);
   const address = app.server.address();
   const port = typeof address === 'object' && address ? address.port : config.port;
+  console.log(`[hermes] time zone ${Intl.DateTimeFormat().resolvedOptions().timeZone}`);
   console.log(`[hermes] listening on ${config.host}:${port} sha=${config.gitSha}`);
   return {
     port,
