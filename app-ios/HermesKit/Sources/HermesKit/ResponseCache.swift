@@ -6,6 +6,16 @@ public final class ResponseCache: @unchecked Sendable {
     private let lock = NSLock()
     private var generation = 0
 
+    // unreadable while the iPhone is locked; the app never reads it in the background. iOS only: on macOS (tests, CI) the
+    // write would fail whenever the screen is locked.
+    #if os(iOS)
+    private static let writeOptions: Data.WritingOptions = [.atomic, .completeFileProtection]
+    private static var directoryAttributes: [FileAttributeKey: Any] { [.protectionKey: FileProtectionType.complete] }
+    #else
+    private static let writeOptions: Data.WritingOptions = [.atomic]
+    private static var directoryAttributes: [FileAttributeKey: Any] { [:] }
+    #endif
+
     public init(directory: URL) { self.directory = directory }
 
     private struct Entry: Codable {
@@ -18,11 +28,8 @@ public final class ResponseCache: @unchecked Sendable {
     public func store(_ data: Data, key: String, savedAt: Date, generation expected: Int? = nil) {
         lock.withLock {
             if let expected, expected != generation { return }
-            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
-                                                     attributes: [.protectionKey: FileProtectionType.complete])
-            // unreadable while the iPhone is locked; the app never reads it in the background
-            try? JSONEncoder().encode(Entry(savedAt: savedAt, body: data))
-                .write(to: file(for: key), options: [.atomic, .completeFileProtection])
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: Self.directoryAttributes)
+            try? JSONEncoder().encode(Entry(savedAt: savedAt, body: data)).write(to: file(for: key), options: Self.writeOptions)
         }
     }
 

@@ -46,6 +46,7 @@ struct ConnectView: View {
             try await model.connect(urlText: url, token: token)
             faceIDChanged = false
         } catch {
+            lock.connectFailed()
             self.error = errorMessage(error)
         }
     }

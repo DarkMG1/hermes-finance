@@ -86,8 +86,14 @@ final class AppLock {
         connectGeneration = generation
     }
 
+    func connectFailed() {
+        connectGeneration = nil
+    }
+
     /// Called when the Connect screen succeeds: ask for Face ID right away, as a cold launch does.
+    /// A restored session (no Connect tap) is locked by `phaseChanged`; locking again here would void its Face ID result.
     func didConnect(enabled: Bool) {
+        guard connectGeneration != nil else { return }
         launched = true
         backgroundedAt = nil
         // a face added in iOS Settings while connecting must not become the baseline: that needs no background since the tap
