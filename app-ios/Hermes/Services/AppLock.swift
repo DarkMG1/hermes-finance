@@ -56,23 +56,22 @@ final class AppLock {
             return .failed(failureMessage(error))
         }
         let key = "faceIDDomainState"
-        let current = context.domainState.biometry.stateHash
-        if let saved = UserDefaults.standard.data(forKey: key) {
-            guard saved == current else {
-                UserDefaults.standard.removeObject(forKey: key)
-                return .facesChanged
-            }
+        guard let current = context.domainState.biometry.stateHash else { return .failed(nil) }
+        let saved = UserDefaults.standard.data(forKey: key)
+        // right after the server token was entered, the faces enrolled now become the baseline, replacing a stale one
+        if allowNewBaseline || saved == current {
+            UserDefaults.standard.set(current, forKey: key)
             return .confirmed
         }
-        guard allowNewBaseline else { return .facesChanged }
-        UserDefaults.standard.set(current, forKey: key)
-        return .confirmed
+        UserDefaults.standard.removeObject(forKey: key)
+        return .facesChanged
     }
 
     private static func failureMessage(_ error: Error?) -> String? {
         switch (error as? LAError)?.code {
         case .biometryLockout?: "Face ID is locked. Unlock your iPhone with its passcode, then tap Unlock."
         case .biometryNotEnrolled?: "Set up Face ID in iOS Settings, then tap Unlock."
+        case .passcodeNotSet?: "Set a passcode and Face ID in iOS Settings, then tap Unlock."
         case .biometryNotAvailable?: "Allow Face ID for Hermes in iOS Settings, then tap Unlock."
         default: nil
         }
