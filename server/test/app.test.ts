@@ -109,3 +109,12 @@ test('a PlaidError from a route is a 502 with its code and a generic message', a
   assert.equal(res.statusCode, 502);
   assert.deepEqual(res.json(), { code: 'INSTITUTION_DOWN', message: 'bank provider error' });
 });
+
+test('API responses are marked no-store', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  for (const [url, headers] of [['/v1/accounts', AUTH], ['/v1/health', {}]] as const) {
+    const res = await app.inject({ method: 'GET', url, headers });
+    assert.equal(res.headers['cache-control'], 'no-store', url);
+  }
+});

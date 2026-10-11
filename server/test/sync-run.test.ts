@@ -157,3 +157,20 @@ test('a successful sync prunes idempotency keys and link sessions older than 30 
   assert.deepEqual(deps.db.prepare('SELECT key FROM idempotency_keys').all(), [{ key: 'k-new' }]);
   assert.deepEqual(deps.db.prepare('SELECT id FROM link_sessions').all(), [{ id: 'ls-new' }]);
 });
+
+test('an already_running reply is not saved under the idempotency key', async () => {
+  const { deps, plaid } = setup();
+  const app = buildApp(deps);
+  let release!: () => void;
+  const gate = new Promise<void>((res) => { release = res; });
+  const orig = plaid.transactionsSync.bind(plaid);
+  plaid.transactionsSync = async (tok, cursor) => { await gate; return orig(tok, cursor); };
+  const first = syncItem(deps, 'i1');
+  const post = () => app.inject({ method: 'POST', url: '/v1/sync', headers: { ...AUTH, 'idempotency-key': 'sync-k' }, payload: {} });
+  const busy = await post();
+  assert.deepEqual(busy.json().items.map((i: { result: string }) => i.result), ['already_running']);
+  release();
+  await first;
+  const again = await post();
+  assert.deepEqual(again.json().items.map((i: { result: string }) => i.result), ['ok']);
+});

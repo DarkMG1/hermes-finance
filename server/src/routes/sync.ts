@@ -12,7 +12,11 @@ export function listBanks(deps: Deps): Bank[] {
 
 export function syncRoutes(app: FastifyInstance, deps: Deps): void {
   app.post('/v1/sync', async (req, reply) => {
-    const r = await idempotentAsync(deps, req, async () => ({ status: 200, body: { items: await syncAll(deps) } }));
+    const r = await idempotentAsync(deps, req, async () => {
+      const items = await syncAll(deps);
+      // a sync that found another one already running did nothing; a retry with the same key must run again
+      return { status: 200, body: { items }, final: !items.some((i) => i.result === 'already_running') };
+    });
     return reply.code(r.status).send(r.body);
   });
   app.get('/v1/sync/status', async () => listBanks(deps));
