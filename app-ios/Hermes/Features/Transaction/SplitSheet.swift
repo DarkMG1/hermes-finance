@@ -17,6 +17,7 @@ struct SplitSheet: View {
         var categoryId: String?
         var notes = ""
         var personId: String?
+        var name = ""
     }
 
     @State private var lines: [Line] = []
@@ -53,6 +54,8 @@ struct SplitSheet: View {
             }
             ForEach($lines) { $line in
                 Section {
+                    // blank keeps the transaction's payee
+                    Field(label: "Name") { TextField(transaction.payee, text: $line.name) }
                     Field(label: "Amount") {
                         TextField("0.00", text: $line.amount).keyboardType(.decimalPad).focused($focused, equals: line.id)
                             // only the line being typed in rebalances, so the line it adjusts doesn't bounce the change back
@@ -142,7 +145,7 @@ struct SplitSheet: View {
             }
         } else {
             lines = transaction.splitLines.map {
-                Line(amount: plain(abs($0.amountCents)), categoryId: $0.categoryId, notes: $0.notes ?? "", personId: $0.personId)
+                Line(amount: plain(abs($0.amountCents)), categoryId: $0.categoryId, notes: $0.notes ?? "", personId: $0.personId, name: $0.payee ?? "")
             }
         }
     }
@@ -151,8 +154,9 @@ struct SplitSheet: View {
         guard let cents = SplitMath.cents(total: transaction.amountCents, amounts: amounts) else { return }
         let body = PutSplitsBody(lines: zip(cents, lines).map { amount, line in
             let notes = line.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = line.name.trimmingCharacters(in: .whitespacesAndNewlines)
             return .init(amountCents: amount, categoryId: line.personId == nil ? line.categoryId : nil,
-                         notes: notes.isEmpty ? nil : notes, personId: line.personId)
+                         notes: notes.isEmpty ? nil : notes, personId: line.personId, payee: name.isEmpty ? nil : name)
         })
         await write(body, guard: $writes)
     }
