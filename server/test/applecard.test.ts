@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseAppleCardCsv, parseCsv, sourceIds } from '../src/applecard.ts';
 import { buildApp } from '../src/app.ts';
-import { getSpending } from '../src/ledger.ts';
+import { getSpending } from '../src/cashflow.ts';
 import { AUTH, makeTestDeps, seedCategory } from './helpers.ts';
 
 const HEADER = 'Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD),Purchased By';

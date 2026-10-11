@@ -33,7 +33,7 @@ test('spending: splits, refunds, transfers, income, removed and boundaries', asy
   const res = await buildApp(deps).inject({ method: 'GET', url: '/v1/spending?period=month&date=2026-12', headers: AUTH });
   assert.equal(res.statusCode, 200);
   assert.deepEqual(res.json(), {
-    from: '2026-12-01', toExclusive: '2027-01-01', totalCents: 1250,
+    from: '2026-12-01', toExclusive: '2027-01-01', inCents: 200000, outCents: 1250, netCents: 198750, totalCents: 1250,
     categories: [
       { categoryId: 'food', name: 'Food', spentCents: 900 }, // 1000 - 300 refund + 200 split line
       { categoryId: 'fun', name: 'Fun', spentCents: 300 },
@@ -75,10 +75,10 @@ test('spending: uncategorized lines skip income, transfers and card payments; ba
   seedTxn(db, { id: 'mortgage', accountId: 'a1', date: '2026-05-01', amountCents: -150000, plaidCategory: 'LOAN_PAYMENTS_MORTGAGE_PAYMENT' });
   const app = buildApp(deps);
   const april = await app.inject({ method: 'GET', url: '/v1/spending?period=month&date=2026-04', headers: AUTH });
-  assert.deepEqual(april.json(), { from: '2026-04-01', toExclusive: '2026-05-01', totalCents: 0, categories: [] });
+  assert.deepEqual(april.json(), { from: '2026-04-01', toExclusive: '2026-05-01', inCents: 0, outCents: 0, netCents: 0, totalCents: 0, categories: [] });
   const may = await app.inject({ method: 'GET', url: '/v1/spending?period=month&date=2026-05', headers: AUTH });
   assert.deepEqual(may.json(), {
-    from: '2026-05-01', toExclusive: '2026-06-01', totalCents: 150000,
+    from: '2026-05-01', toExclusive: '2026-06-01', inCents: 0, outCents: 150000, netCents: -150000, totalCents: 150000,
     categories: [{ categoryId: null, name: 'Uncategorized', spentCents: 150000 }],
   });
 });

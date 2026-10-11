@@ -1,13 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
-import { CreateTransactionBody, ListTransactionsQuery, PatchAccountBody, PatchSplitLineBody, PatchTransactionBody, PutSplitsBody, SpendingQuery } from '@hermes/shared';
+import { CreateTransactionBody, ExpensesQuery, ListTransactionsQuery, PatchAccountBody, PatchSplitLineBody, PatchTransactionBody, PutSplitsBody, SpendingQuery } from '@hermes/shared';
 import type { Db } from '../db.ts';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { assertPersonTaggable, owedToYouCents, suggestions, youOweCents } from '../people.ts';
-import { assertCategoryExists, getHome, getSpending, getTransaction, learnCategory, listAccounts, listCategories, listTransactions } from '../ledger.ts';
+import { getExpenses, getSpending } from '../cashflow.ts';
+import { assertCategoryExists, getHome, getTransaction, learnCategory, listAccounts, listCategories, listTransactions } from '../ledger.ts';
 
 /** Checks split lines against a transaction's amount and makes them its split; the row's own category and person move onto the lines. */
 function writeSplit(db: Db, txnId: string, amountCents: number, lines: PutSplitsBody['lines'], field: string, nowIso: string): void {
@@ -50,6 +51,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   app.get('/v1/home', async () => ({
     ...getHome(db), owedToYouCents: owedToYouCents(db), youOweCents: youOweCents(db), repaymentSuggestions: suggestions(db, deps.now()).length,
   }));
+  app.get('/v1/expenses', async (req) => getExpenses(db, parseBody(ExpensesQuery, req.query)));
   app.get('/v1/spending', async (req) => getSpending(db, parseBody(SpendingQuery, req.query)));
 
   app.get<{ Params: { id: string } }>('/v1/transactions/:id', async (req) => {

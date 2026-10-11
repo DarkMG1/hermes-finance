@@ -135,10 +135,30 @@ export const SpendingQuery = z.discriminatedUnion('period', [
 export type SpendingQuery = z.infer<typeof SpendingQuery>;
 
 export const Spending = z.object({
-  from: DateStr, toExclusive: DateStr, totalCents: Cents,
+  from: DateStr, toExclusive: DateStr, inCents: Cents, outCents: Cents, netCents: Cents,
+  /** Equal to outCents; kept for app builds before v1.3. Remove in v1.4. */
+  totalCents: Cents,
   categories: z.array(z.object({ categoryId: Id.nullable(), name: z.string(), spentCents: Cents })),
 });
 export type Spending = z.infer<typeof Spending>;
+
+/** The rows behind a Spending number. categoryId 'uncategorized' selects the Uncategorized bucket. */
+export const ExpensesQuery = z.object({
+  period: z.enum(['month', 'year']), date: z.string(), kind: z.enum(['out', 'in']).default('out'),
+  categoryId: Id.optional(), cursor: z.string().max(400).optional(), limit: z.coerce.number().int().min(1).max(200).default(50),
+}).strict()
+  .refine((q) => SpendingQuery.safeParse({ period: q.period, date: q.date }).success, { message: 'date does not match period', path: ['date'] });
+export type ExpensesQuery = z.infer<typeof ExpensesQuery>;
+
+export const ExpenseRow = z.object({
+  transactionId: Id, lineId: Id.nullable(), date: DateStr, name: z.string(), categoryId: Id.nullable(), categoryName: z.string(),
+  /** Out: spending is positive and a refund negative. In: income is positive. */
+  amountCents: Cents, isSplit: z.boolean(), isSplitDifference: z.boolean(),
+});
+export type ExpenseRow = z.infer<typeof ExpenseRow>;
+
+export const ExpensesPage = z.object({ rows: z.array(ExpenseRow), nextCursor: z.string().nullable() });
+export type ExpensesPage = z.infer<typeof ExpensesPage>;
 
 export const Bank = z.object({
   itemId: Id, institutionName: z.string(), status: z.enum(['ok', 'login_required', 'error']),
