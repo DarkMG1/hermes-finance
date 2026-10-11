@@ -45,7 +45,10 @@ struct ActivityView: View {
         .navigationTitle("Activity")
         .searchable(text: $query)
         .sheet(isPresented: $choosingCategory) {
-            NavigationStack { CategoryPicker(selection: $categoryId, noneTitle: "All categories") }
+            NavigationStack {
+                CategoryPicker(selection: $categoryId, noneTitle: "All categories")
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { choosingCategory = false } } }
+            }
         }
         .task(id: filterKey) {
             try? await Task.sleep(for: .milliseconds(300))
