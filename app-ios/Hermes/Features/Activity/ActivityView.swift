@@ -19,6 +19,10 @@ struct ActivityView: View {
 
     var body: some View {
         List {
+            filterChips
+                .listRowInsets(EdgeInsets())
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
             // rows sit on the same surface as the other tabs' cards
             Group {
                 if let lastLoad { LastUpdated(loaded: lastLoad) }
@@ -40,7 +44,6 @@ struct ActivityView: View {
         .themedForm()
         .navigationTitle("Activity")
         .searchable(text: $query)
-        .safeAreaInset(edge: .top) { filterChips }
         .sheet(isPresented: $choosingCategory) {
             NavigationStack { CategoryPicker(selection: $categoryId, noneTitle: "All categories") }
         }

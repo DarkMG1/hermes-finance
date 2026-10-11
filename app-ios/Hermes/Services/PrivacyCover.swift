@@ -7,6 +7,8 @@ import UIKit
 final class PrivacyCover {
     private var window: UIWindow?
     private weak var previousKey: UIWindow?
+    /// Bumped by every show and hide, so a fade that finishes after a newer show or hide can't touch the window.
+    private var fadeToken = 0
 
     func show(locked: Bool, message: String?, unlock: @escaping () -> Void) {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
@@ -30,6 +32,9 @@ final class PrivacyCover {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         window.rootViewController?.view.accessibilityViewIsModal = true
         if let key = scene.keyWindow, key !== window { previousKey = key }
+        fadeToken += 1
+        window.layer.removeAllAnimations()
+        window.alpha = 1
         window.makeKeyAndVisible()
         self.window = window
     }
@@ -37,7 +42,15 @@ final class PrivacyCover {
     func hide() {
         guard let window else { return }
         (previousKey ?? window.windowScene?.windows.first { $0 !== window })?.makeKey()
-        window.isHidden = true
+        fadeToken += 1
+        let token = fadeToken
+        UIView.animate(withDuration: 0.2) {
+            window.alpha = 0
+        } completion: { [weak self] _ in
+            guard self?.fadeToken == token else { return }
+            window.isHidden = true
+            window.alpha = 1
+        }
     }
 }
 
