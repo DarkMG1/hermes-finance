@@ -29,7 +29,7 @@ struct HoldingView: View {
             Card {
                 Text("Accounts").textStyle(.headline)
                 ForEach(holding.accounts) { account in
-                    ListRow(title: account.accountName, subtitle: holding.key == "CASH" ? nil : "\(sharesText(account.quantity)) shares") {
+                    ListRow(title: account.accountName, subtitle: holding.key == "CASH" || hideBalances ? nil : "\(sharesText(account.quantity)) shares") {
                         MoneyText(cents: account.valueCents, colored: false, negativeIsLoss: true)
                             .redacted(reason: hideBalances ? .placeholder : [])
                     }
