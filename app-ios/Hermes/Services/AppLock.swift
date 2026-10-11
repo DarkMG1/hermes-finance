@@ -21,10 +21,14 @@ final class AppLock {
     static var canUseFaceID: Bool { LAContext().canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) }
 
     /// Locking depends on this, not `canUseFaceID`: lockout, a reset Face ID, or Face ID turned off for Hermes must not open it unlocked.
+    /// Remembered once seen: with Face ID turned off for Hermes, iOS may report no biometry at all.
     static var hasBiometricHardware: Bool {
         let context = LAContext()
         _ = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil)
-        return context.biometryType != .none
+        let seen = UserDefaults.standard.bool(forKey: "biometricHardwareSeen")
+        guard context.biometryType != .none else { return seen }
+        UserDefaults.standard.set(true, forKey: "biometricHardwareSeen")
+        return true
     }
 
     /// `failed` carries a one-line reason when Face ID can't run at all; nil after a cancel.
