@@ -167,12 +167,15 @@ func json(_ value: some Encodable) throws -> String {
 
 @Test func netWorthDecodesAndComputesPercent() throws {
     let history = try decode(NetWorthHistory.self, "net-worth")
-    #expect(history.points.map(\.date) == ["2026-03-14", "2026-03-15"])
-    #expect(history.currentCents == 245800 && history.changeCents == 9800)
-    #expect(abs((history.changePercent ?? 0) - 9800.0 / 236000.0) < 0.000001)
-    let body = #"{"points":[{"date":"2026-03-14","netWorthCents":0},{"date":"2026-03-15","netWorthCents":500}],"currentCents":500,"changeCents":500}"#
+    #expect(history.points.map(\.date) == ["2026-03-10", "2026-03-11", "2026-03-12", "2026-03-13", "2026-03-14", "2026-03-15"])
+    #expect(history.currentCents == 245800 && history.changeCents == 149550)
+    #expect(history.estimatedThrough == "2026-03-13")
+    #expect(abs((history.changePercent ?? 0) - 149550.0 / 96250.0) < 0.000001)
+    let body = #"{"points":[{"date":"2026-03-14","netWorthCents":0},{"date":"2026-03-15","netWorthCents":500}],"#
+        + #""currentCents":500,"changeCents":500,"estimatedThrough":null}"#
     let fromZero = try JSONDecoder().decode(NetWorthHistory.self, from: Data(body.utf8))
     #expect(fromZero.changePercent == nil)
+    #expect(fromZero.estimatedThrough == nil)
 }
 
 @Test func netWorthRangeQuery() {
