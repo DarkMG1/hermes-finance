@@ -305,3 +305,14 @@ test('activity filters by person and finds people by name', async () => {
   assert.deepEqual(await ids('q=quill'), ['split', 'paid', 'tag']);
   assert.deepEqual(await ids('q=wren'), ['other']);
 });
+
+test('same-day feed entries follow the order they were recorded, not their ids', async () => {
+  const { deps, get } = setup();
+  seedTxn(deps.db, { id: 'z-lunch', accountId: 'a1', date: '2026-03-05', amountCents: -1500, personId: 'p1' });
+  seedTxn(deps.db, { id: 'a-dep', accountId: 'a1', date: '2026-03-05', amountCents: 1500, personId: 'p1' });
+  deps.db.prepare("UPDATE transactions SET created_at = '2026-03-05T10:00:00.000Z' WHERE id = 'z-lunch'").run();
+  deps.db.prepare("UPDATE transactions SET created_at = '2026-03-05T12:00:00.000Z' WHERE id = 'a-dep'").run();
+  const detail = await get('/v1/people/p1');
+  assert.deepEqual(detail.history.map((h: { transactionId: string }) => h.transactionId), ['a-dep', 'z-lunch']);
+  assert.equal(detail.history[0].settled, true);
+});
