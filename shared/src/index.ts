@@ -144,6 +144,16 @@ export const Spending = z.object({
 });
 export type Spending = z.infer<typeof Spending>;
 
+export const NetWorthQuery = z.object({ range: z.enum(['1m', '3m', '1y', 'all']) }).strict();
+export type NetWorthQuery = z.infer<typeof NetWorthQuery>;
+
+/** One point per day from the window start to today; each account's latest snapshot carries forward. */
+export const NetWorthHistory = z.object({
+  points: z.array(z.object({ date: DateStr, netWorthCents: Cents })),
+  currentCents: Cents, changeCents: Cents,
+});
+export type NetWorthHistory = z.infer<typeof NetWorthHistory>;
+
 /** The rows behind a Spending number. categoryId 'uncategorized' selects the Uncategorized bucket. */
 export const ExpensesQuery = z.object({
   period: z.enum(['month', 'year']), date: z.string(), kind: z.enum(['out', 'in']).default('out'),

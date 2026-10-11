@@ -26,6 +26,11 @@ export async function buildFixtures(): Promise<Record<string, string>> {
     plaidCategory: 'TRANSFER_IN_ACCOUNT_TRANSFER', bankDescription: 'ZELLE FROM SYNTHETIC QUILL' });
   seedTxn(db, { id: 'txn-6', accountId: 'manual', date: '2026-03-09', amountCents: -300, categoryId: 'cat-food', payee: 'Synthetic Market',
     paidByPersonId: 'person-1' });
+  const snap = db.prepare('INSERT INTO balance_snapshots (account_id, date, balance_cents) VALUES (?, ?, ?)');
+  snap.run('acct-checking', '2026-03-14', 240000);
+  snap.run('acct-card', '2026-03-14', 4000);
+  snap.run('acct-checking', '2026-03-15', 250000);
+  snap.run('acct-card', '2026-03-15', 4200);
   plaid.linkResults.set('link-create-1', { status: 'complete', publicToken: 'public-x', institutionName: 'Synthetic Bank' });
 
   const app = buildApp(deps);
@@ -47,6 +52,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
     transaction: await get('/v1/transactions/txn-3'),
     spending: await get('/v1/spending?period=month&date=2026-03'),
     expenses: await get('/v1/expenses?period=month&date=2026-03'),
+    'net-worth': await get('/v1/net-worth?range=1m'),
     banks: await get('/v1/banks'),
     'sync-status': { items: [{ itemId: 'item-1', institutionName: 'Synthetic Bank', result: 'ok', added: 2, modified: 1, removed: 0 }] },
     'link-session': { ...linkSession, sessionId: 'fixture-session' },
