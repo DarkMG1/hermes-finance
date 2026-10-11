@@ -2,6 +2,7 @@ import type { Deps } from '../deps.ts';
 import { decryptToken } from '../crypto.ts';
 import { PlaidError, type SyncPage } from '../plaid/port.ts';
 import { applyPages, getCutoverDate, upsertAccounts } from './apply.ts';
+import { localDay, snapshotBalances } from '../networth.ts';
 
 export type ItemResult = {
   itemId: string; institutionName: string; result: 'ok' | 'login_required' | 'error' | 'already_running';
@@ -47,6 +48,7 @@ export async function syncItem(deps: Deps, itemId: string): Promise<ItemResult> 
     const nowIso = deps.now().toISOString();
     const counts = db.transaction(() => {
       upsertAccounts(db, itemId, accounts, nowIso);
+      snapshotBalances(db, localDay(deps.now()));
       const c = applyPages(db, pages, { itemId, cutoverDate: getCutoverDate(db), nowIso });
       const last = pages[pages.length - 1];
       db.prepare("UPDATE items SET cursor = ?, status = 'ok', last_error_code = NULL, last_synced_at = ? WHERE id = ?").run(last?.nextCursor ?? item.cursor, nowIso, itemId);

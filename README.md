@@ -36,3 +36,5 @@ Transaction history from before Hermes was imported once from Actual Budget (row
 
 The iPhone app reaches the server through a reverse proxy with TLS: see `ops/nginx-hermes.conf.example`.
 The server itself stays bound to 127.0.0.1; every API call needs the bearer token.
+
+Set `TZ` (an IANA zone such as `America/New_York`) in `~/.config/hermes/hermes.env`: net worth snapshots are dated by the server's local day.
