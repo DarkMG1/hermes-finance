@@ -46,6 +46,8 @@ export type ListTransactionsQuery = z.infer<typeof ListTransactionsQuery>;
 export const PatchTransactionBody = z.object({
   categoryId: Id.nullable().optional(), payee: z.string().min(1).max(200).nullable().optional(), notes: z.string().max(2000).nullable().optional(),
   personId: Id.nullable().optional(), paidByPersonId: Id.nullable().optional(), repaymentDismissed: z.boolean().optional(),
+  /** The owner's date; bank sync and Apple Card re-import keep it from then on. */
+  date: DateStr.optional(),
 }).strict()
   .refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' })
   .refine((b) => !(b.categoryId && b.personId), { message: 'categoryId and personId cannot both be set', path: ['personId'] })

@@ -384,3 +384,18 @@ test('applying pages names new Zelle rows', () => {
   apply([page({ added: [txn({ transactionId: 'z1', name: 'Zelle payment from QUILL WREN 12345', merchantName: null, category: 'TRANSFER_IN_DEPOSIT' })] })]);
   assert.equal(row('z1')?.payee, 'Zelle - Quill');
 });
+
+test('an owner-set date survives bank updates and moves from pending to posted', () => {
+  const { deps, apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'p1', date: '2026-03-30' }), txn({ transactionId: 'pend1', pending: true, date: '2026-03-30' })] })]);
+  deps.db.prepare("UPDATE transactions SET date = '2026-04-01', date_owner_set = 1 WHERE source_id IN ('p1', 'pend1')").run();
+  apply([page({ modified: [txn({ transactionId: 'p1', date: '2026-03-31', amount: 11 })] })]);
+  assert.equal(row('p1')?.date, '2026-04-01');
+  assert.equal(row('p1')?.amount_cents, -1100);
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', date: '2026-03-31' })], removed: [{ transactionId: 'pend1' }] })]);
+  assert.equal(row('post1')?.date, '2026-04-01');
+  assert.equal(row('post1')?.date_owner_set, 1);
+  apply([page({ added: [txn({ transactionId: 'p2', date: '2026-03-30' })] })]);
+  apply([page({ modified: [txn({ transactionId: 'p2', date: '2026-03-31' })] })]);
+  assert.equal(row('p2')?.date, '2026-03-31', 'without an owner date the bank date still wins');
+});

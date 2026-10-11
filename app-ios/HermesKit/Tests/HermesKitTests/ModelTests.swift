@@ -136,6 +136,8 @@ func json(_ value: some Encodable) throws -> String {
     #expect(try json(PatchTransactionBody(personId: .set(nil), paidByPersonId: .set("p1"))) == #"{"paidByPersonId":"p1","personId":null}"#)
     #expect(try json(PatchTransactionBody(repaymentDismissed: false)) == #"{"repaymentDismissed":false}"#)
     #expect(PatchTransactionBody(repaymentDismissed: false).isEmpty == false)
+    #expect(try json(PatchTransactionBody(date: "2026-04-01")) == #"{"date":"2026-04-01"}"#)
+    #expect(PatchTransactionBody(date: "2026-04-01").isEmpty == false)
     let paid = CreateTransactionBody(date: "2026-03-03", amountCents: -6000, payee: "M", categoryId: nil, notes: nil, paidByPersonId: "p1")
     #expect(try json(paid) == #"{"amountCents":-6000,"date":"2026-03-03","paidByPersonId":"p1","payee":"M"}"#)
 }

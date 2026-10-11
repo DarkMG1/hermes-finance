@@ -102,6 +102,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       if (body.notes !== undefined) { sets.push('notes = ?'); args.push(body.notes); }
       if (body.paidByPersonId !== undefined) { sets.push('paid_by_person_id = ?'); args.push(body.paidByPersonId); }
       if (body.repaymentDismissed !== undefined) { sets.push('repayment_dismissed = ?'); args.push(body.repaymentDismissed ? 1 : 0); }
+      if (body.date !== undefined) { sets.push('date = ?', 'date_owner_set = 1'); args.push(body.date); }
       const now = deps.now().toISOString();
       db.prepare(`UPDATE transactions SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...args, now, req.params.id);
       if (body.categoryId) learnCategory(db, req.params.id, body.categoryId, now);

@@ -201,3 +201,13 @@ test('an undated identical row never takes the stored charge a dated row matches
   assert.equal((deps.db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE source = 'applecard'").get() as { n: number }).n, 2);
   assert.equal(balanceCents(), before);
 });
+
+test('re-import keeps a date the owner changed', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  await post(app, SEPT, 'k1');
+  deps.db.prepare("UPDATE transactions SET date = '2026-10-01', date_owner_set = 1 WHERE source = 'applecard' AND amount_cents = -1234").run();
+  await post(app, SEPT, 'k2');
+  const dates = deps.db.prepare("SELECT date FROM transactions WHERE source = 'applecard' AND amount_cents IN (-1234, -105000) ORDER BY amount_cents").all();
+  assert.deepEqual(dates, [{ date: '2026-09-03' }, { date: '2026-10-01' }]);
+});

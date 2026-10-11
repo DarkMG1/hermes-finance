@@ -118,11 +118,15 @@ struct ActivityView: View {
     }
 
     /// Re-reads one edited row in place: reloading from the first page drops the later pages and jumps the list.
+    /// A changed date is the exception, since the row moves across the paging cursor.
     private func refresh(_ id: String) async {
         guard let reader = model.reader else { return }
         do {
             let fresh = try await reader.read("/v1/transactions/\(id)", as: LedgerTransaction.self).value
-            if let index = items.firstIndex(where: { $0.id == id }) { items[index] = fresh }
+            guard let index = items.firstIndex(where: { $0.id == id }) else { return }
+            // a new date moves the row across the paging cursor, so the loaded pages are stale
+            if fresh.date != items[index].date { await load(reset: true); return }
+            items[index] = fresh
         } catch ClientError.api(status: 404, _) {
             items.removeAll { $0.id == id }
         } catch {

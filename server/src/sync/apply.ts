@@ -61,14 +61,14 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
   const moveSplit = db.prepare('UPDATE split_lines SET transaction_id = ? WHERE transaction_id = ?');
   const mappedCategory = db.prepare('SELECT category_id FROM plaid_category_map WHERE plaid_category = ?');
   const checkSuperseded = db.prepare("SELECT id FROM transactions WHERE source = 'plaid' AND pending_source_id = ?");
-  const getRow = db.prepare("SELECT id, category_id, category_owner_set, payee, notes, person_id, repayment_dismissed FROM transactions WHERE source = 'plaid' AND source_id = ?");
+  const getRow = db.prepare("SELECT id, date, date_owner_set, category_id, category_owner_set, payee, notes, person_id, repayment_dismissed FROM transactions WHERE source = 'plaid' AND source_id = ?");
   const upsert = db.prepare(`
     INSERT INTO transactions (id, account_id, source, source_id, date, authorized_date, amount_cents, bank_description, merchant_name,
-      plaid_category, pending, pending_source_id, category_id, category_owner_set, payee, notes, person_id, repayment_dismissed, created_at, updated_at)
+      plaid_category, pending, pending_source_id, category_id, category_owner_set, payee, notes, person_id, repayment_dismissed, date_owner_set, created_at, updated_at)
     VALUES (@id, @accountId, 'plaid', @sourceId, @date, @authorizedDate, @amount, @desc, @merchant, @plaidCategory, @pending,
-      @pendingSourceId, @categoryId, @ownerSet, @payee, @notes, @personId, @dismissed, @now, @now)
+      @pendingSourceId, @categoryId, @ownerSet, @payee, @notes, @personId, @dismissed, @dateOwnerSet, @now, @now)
     ON CONFLICT (source, source_id) DO UPDATE SET
-      account_id = excluded.account_id, date = excluded.date, authorized_date = excluded.authorized_date,
+      account_id = excluded.account_id, date = CASE WHEN transactions.date_owner_set = 1 THEN transactions.date ELSE excluded.date END, authorized_date = excluded.authorized_date,
       amount_cents = excluded.amount_cents, bank_description = excluded.bank_description, merchant_name = excluded.merchant_name,
       plaid_category = excluded.plaid_category, pending = excluded.pending,
       category_id = COALESCE(transactions.category_id, CASE WHEN transactions.category_owner_set = 0 THEN excluded.category_id END),
@@ -100,11 +100,13 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
     let notes: string | null = null;
     let personId: string | null = null;
     let dismissed = 0;
+    let date = t.date;
+    let dateOwnerSet = 0;
     let pendingId: string | null = null;
     if (!exists && t.pendingTransactionId) {
       const pending = getRow.get(t.pendingTransactionId) as
-        { id: string; category_id: string | null; category_owner_set: number; payee: string | null; notes: string | null; person_id: string | null;
-          repayment_dismissed: number } | undefined;
+        { id: string; date: string; date_owner_set: number; category_id: string | null; category_owner_set: number; payee: string | null;
+          notes: string | null; person_id: string | null; repayment_dismissed: number } | undefined;
       if (pending) {
         ownerSet = pending.category_owner_set;
         categoryId = pending.category_id !== null || ownerSet ? pending.category_id : mapped?.category_id ?? null;
@@ -112,13 +114,14 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
         notes = pending.notes;
         personId = pending.person_id;
         dismissed = pending.repayment_dismissed;
+        if (pending.date_owner_set) { date = pending.date; dateOwnerSet = 1; }
         pendingId = pending.id;
       }
     }
     upsert.run({
-      id: randomUUID(), accountId: accountFor(t.accountId), sourceId: t.transactionId, date: t.date, authorizedDate: t.authorizedDate,
+      id: randomUUID(), accountId: accountFor(t.accountId), sourceId: t.transactionId, date, authorizedDate: t.authorizedDate,
       amount: plaidAmountToCents(t.amount), desc: t.name, merchant: t.merchantName, plaidCategory: t.category,
-      pending: t.pending ? 1 : 0, pendingSourceId: t.pendingTransactionId, categoryId, ownerSet, payee, notes, personId, dismissed, now: opts.nowIso,
+      pending: t.pending ? 1 : 0, pendingSourceId: t.pendingTransactionId, categoryId, ownerSet, payee, notes, personId, dismissed, dateOwnerSet, now: opts.nowIso,
     });
     if (t.pendingTransactionId) {
       markRemoved.run(opts.nowIso, opts.nowIso, t.pendingTransactionId);

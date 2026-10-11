@@ -15,23 +15,27 @@ public struct PatchTransactionBody: Encodable, Sendable, Equatable {
     /// Manual rows only: someone else paid; it stays the owner's spending.
     public var paidByPersonId: FieldUpdate<String>
     public var repaymentDismissed: Bool?
+    /// `yyyy-MM-dd`. Bank sync and Apple Card re-import keep it from then on.
+    public var date: String?
 
     public init(categoryId: FieldUpdate<String> = .unchanged, payee: FieldUpdate<String> = .unchanged, notes: FieldUpdate<String> = .unchanged,
-                personId: FieldUpdate<String> = .unchanged, paidByPersonId: FieldUpdate<String> = .unchanged, repaymentDismissed: Bool? = nil) {
+                personId: FieldUpdate<String> = .unchanged, paidByPersonId: FieldUpdate<String> = .unchanged, repaymentDismissed: Bool? = nil,
+                date: String? = nil) {
         self.categoryId = categoryId
         self.payee = payee
         self.notes = notes
         self.personId = personId
         self.paidByPersonId = paidByPersonId
         self.repaymentDismissed = repaymentDismissed
+        self.date = date
     }
 
     public var isEmpty: Bool {
         categoryId == .unchanged && payee == .unchanged && notes == .unchanged && personId == .unchanged && paidByPersonId == .unchanged
-            && repaymentDismissed == nil
+            && repaymentDismissed == nil && date == nil
     }
 
-    private enum Keys: String, CodingKey { case categoryId, payee, notes, personId, paidByPersonId, repaymentDismissed }
+    private enum Keys: String, CodingKey { case categoryId, payee, notes, personId, paidByPersonId, repaymentDismissed, date }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: Keys.self)
@@ -40,6 +44,7 @@ public struct PatchTransactionBody: Encodable, Sendable, Equatable {
             if let value { try container.encode(value, forKey: key) } else { try container.encodeNil(forKey: key) }
         }
         try container.encodeIfPresent(repaymentDismissed, forKey: .repaymentDismissed)
+        try container.encodeIfPresent(date, forKey: .date)
     }
 }
 
