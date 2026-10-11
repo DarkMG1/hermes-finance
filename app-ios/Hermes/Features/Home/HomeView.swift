@@ -133,7 +133,8 @@ struct HomeView: View {
         showingBalances = true
         defer { showingBalances = false }
         showBalancesError = nil
-        switch await AppLock.confirmOwner(reason: "Show balances", allowNewBaseline: false) {
+        // a missing baseline is adopted (it only exists after a connect, which needed the server token); a saved, different one still signs out
+        switch await AppLock.confirmOwner(reason: "Show balances", allowNewBaseline: !AppLock.hasBaseline) {
         case .confirmed: hideBalances = false
         case .failed(let message): showBalancesError = message
         case .facesChanged:

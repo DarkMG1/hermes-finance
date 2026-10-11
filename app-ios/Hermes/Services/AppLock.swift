@@ -56,17 +56,20 @@ final class AppLock {
         } catch {
             return .failed(failureMessage(error))
         }
-        let key = "faceIDDomainState"
         guard let current = context.domainState.biometry.stateHash else { return .failed(nil) }
-        let saved = UserDefaults.standard.data(forKey: key)
+        let saved = UserDefaults.standard.data(forKey: baselineKey)
         // right after the server token was entered, the faces enrolled now become the baseline, replacing a stale one
         if allowNewBaseline || saved == current {
-            UserDefaults.standard.set(current, forKey: key)
+            UserDefaults.standard.set(current, forKey: baselineKey)
             return .confirmed
         }
-        UserDefaults.standard.removeObject(forKey: key)
+        UserDefaults.standard.removeObject(forKey: baselineKey)
         return .facesChanged
     }
+
+    private static let baselineKey = "faceIDDomainState"
+    /// False after a fresh connect with the lock off, or right after a faces-changed sign-out: nothing to compare against yet.
+    static var hasBaseline: Bool { UserDefaults.standard.data(forKey: baselineKey) != nil }
 
     private static func failureMessage(_ error: Error?) -> String? {
         switch (error as? LAError)?.code {
