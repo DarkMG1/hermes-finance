@@ -12,9 +12,9 @@ const cents = (dollars: number): number => {
   return c === 0 ? 0 : c; // avoid -0
 };
 
-/** Holdings of one ticker combine across accounts; every cash position is one "Cash" holding. */
+/** Holdings of one ticker combine across accounts; every cash position is one "Cash" holding, keyed `_cash` (no ticker has an underscore). */
 export function holdingKey(s: { securityId: string; ticker: string | null; type: string | null; isCash: number | boolean }): string {
-  if (s.isCash === true || s.isCash === 1 || s.type === 'cash') return 'CASH';
+  if (s.isCash === true || s.isCash === 1 || s.type === 'cash') return '_cash';
   return s.ticker ? s.ticker.toUpperCase() : s.securityId;
 }
 
@@ -55,12 +55,31 @@ export async function syncHoldings(deps: Deps, itemId: string, token: string): P
       const insert = db.prepare(`INSERT INTO holdings (account_id, security_id, quantity, price_cents, value_cents, cost_basis_cents, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)`);
       const snapshot = db.prepare('INSERT INTO holding_snapshots (account_id, security_id, date, quantity, value_cents) VALUES (?, ?, ?, ?, ?)');
+      // Plaid can report one security in one account more than once (lots): combine them
+      type Row = { accountId: string; securityId: string; quantity: number; priceCents: number; valueCents: number; costCents: number | null };
+      const combined = new Map<string, Row>();
       for (const h of data.holdings) {
         const accountId = accountIds.get(h.accountId);
         if (!accountId || !known.has(h.securityId)) continue;
-        insert.run(accountId, h.securityId, h.quantity, cents(h.price), cents(h.value), h.costBasis === null ? null : cents(h.costBasis), nowIso);
-        snapshot.run(accountId, h.securityId, day, h.quantity, cents(h.value));
+        const costCents = h.costBasis === null ? null : cents(h.costBasis);
+        const id = `${accountId}|${h.securityId}`;
+        const prev = combined.get(id);
+        if (!prev) {
+          combined.set(id, { accountId, securityId: h.securityId, quantity: h.quantity, priceCents: cents(h.price), valueCents: cents(h.value), costCents });
+          continue;
+        }
+        prev.quantity += h.quantity;
+        prev.valueCents += cents(h.value);
+        prev.costCents = prev.costCents === null || costCents === null ? null : prev.costCents + costCents;
+        prev.priceCents = prev.quantity === 0 ? cents(h.price) : Math.round(prev.valueCents / prev.quantity) || 0;
       }
+      for (const c of combined.values()) {
+        insert.run(c.accountId, c.securityId, c.quantity, c.priceCents, c.valueCents, c.costCents, nowIso);
+        snapshot.run(c.accountId, c.securityId, day, c.quantity, c.valueCents);
+      }
+      // marks the day synced even for an account left with no holdings, so its old values stop carrying forward
+      const synced = db.prepare('INSERT OR IGNORE INTO holding_syncs (account_id, date) VALUES (?, ?)');
+      for (const a of accounts) synced.run(a.id, day);
       db.prepare("UPDATE items SET investments_status = 'ok' WHERE id = ?").run(itemId);
     })();
   } catch (e) {
@@ -90,7 +109,7 @@ export function getInvestments(db: Db): Investments {
     groups.set(key, [...(groups.get(key) ?? []), r]);
   }
   const holdings: Holding[] = [...groups].map(([key, members]) => {
-    const cash = key === 'CASH';
+    const cash = key === '_cash';
     // cash with no reported cost is worth what it cost
     const cost = (r: HoldingRow) => (r.costBasisCents === null && cash ? r.valueCents : r.costBasisCents);
     const top = members.reduce((a, b) => (b.valueCents > a.valueCents ? b : a));
@@ -118,8 +137,8 @@ export function getInvestments(db: Db): Investments {
 }
 
 /**
- * One holding's value per day, summed over accounts. A day an account synced holdings without this holding counts it 0
- * (sold); a day it didn't sync carries its last value forward. Null when the holding has no snapshots.
+ * One holding's value per day, summed over accounts. A day an account synced holdings (holding_syncs) without this holding
+ * counts it 0 (sold); a day it didn't sync carries its last value forward. Null when the holding has no snapshots.
  */
 export function getHoldingHistory(db: Db, key: string, range: NetWorthQuery['range'], today: string): NetWorthHistory | null {
   const all = db.prepare(`
@@ -130,7 +149,9 @@ export function getHoldingHistory(db: Db, key: string, range: NetWorthQuery['ran
   const mine = all.filter((r) => holdingKey(r) === key);
   const first = mine[0];
   if (!first) return null;
-  const synced = new Set(all.map((r) => `${r.accountId}|${r.date}`));
+  const synced = new Set((db.prepare(`
+    SELECT hs.account_id AS accountId, hs.date FROM holding_syncs hs JOIN accounts a ON a.id = hs.account_id WHERE a.hidden = 0 AND hs.date <= ?`)
+    .all(today) as { accountId: string; date: string }[]).map((r) => `${r.accountId}|${r.date}`));
   const accounts = [...new Set(mine.map((r) => r.accountId))];
   const values = new Map<string, number>();
   for (const r of mine) values.set(`${r.accountId}|${r.date}`, (values.get(`${r.accountId}|${r.date}`) ?? 0) + r.cents);

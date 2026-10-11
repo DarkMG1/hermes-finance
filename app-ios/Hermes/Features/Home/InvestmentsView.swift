@@ -69,13 +69,13 @@ struct InvestmentsView: View {
 
     private func row(_ holding: Holding) -> some View {
         // share counts are amounts: hidden with balances
-        let shares = holding.key == "CASH" || hideBalances ? nil : "\(sharesText(holding.quantity)) shares"
+        let shares = holding.isCash || hideBalances ? nil : "\(sharesText(holding.quantity)) shares"
         let subtitle = [holding.ticker, shares].compactMap { $0 }.joined(separator: " · ")
         return ListRow(title: holding.name, subtitle: subtitle.isEmpty ? nil : subtitle) {
             VStack(alignment: .trailing, spacing: Space.xs) {
                 MoneyText(cents: holding.valueCents, colored: false, negativeIsLoss: true)
                     .redacted(reason: hideBalances ? .placeholder : [])
-                GainText(gainCents: holding.gainCents, percent: nil)
+                GainText(gainCents: holding.isCash ? nil : holding.gainCents, percent: nil)
             }
         }
     }

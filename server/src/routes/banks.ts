@@ -77,6 +77,8 @@ export function bankRoutes(app: FastifyInstance, deps: Deps): void {
         if (!itemId) throw new Error('update session without item');
         db.transaction(() => {
           db.prepare("UPDATE items SET status = 'ok', last_error_code = NULL WHERE id = ?").run(itemId);
+          // consent was just given; holdings may still answer PRODUCT_NOT_READY, and a real refusal sets it again on the sync below
+          db.prepare("UPDATE items SET investments_status = NULL WHERE id = ? AND investments_status = 'consent_required'").run(itemId);
           db.prepare('UPDATE link_sessions SET completed_at = ? WHERE id = ?').run(deps.now().toISOString(), s.id);
         })();
       }

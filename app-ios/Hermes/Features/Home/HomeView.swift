@@ -61,7 +61,7 @@ struct HomeView: View {
                 }
                 if let showBalancesError { Text(showBalancesError).textStyle(.caption, color: Palette.secondaryText) }
                 if let investments, hasInvestments || !investments.reconnect.isEmpty {
-                    investmentsCard(investments)
+                    investmentsCard(investments, signInAgain: loaded.value.reconnect)
                 }
                 let groups = AccountGrouping.group(model.accounts)
                 if !groups.isEmpty {
@@ -129,7 +129,7 @@ struct HomeView: View {
 
     private var hasInvestments: Bool { model.accounts.contains { $0.type == "investment" && !$0.hidden } }
 
-    @ViewBuilder private func investmentsCard(_ investments: Investments) -> some View {
+    @ViewBuilder private func investmentsCard(_ investments: Investments, signInAgain: [ReconnectItem]) -> some View {
         NavigationLink { InvestmentsView() } label: {
             Card {
                 Text("Investments").textStyle(.subhead, color: Palette.secondaryText)
@@ -139,7 +139,8 @@ struct HomeView: View {
             }
         }
         .buttonStyle(.plain)
-        ForEach(investments.reconnect) { item in
+        // a bank already asking to sign in again has its own card above
+        ForEach(investments.reconnect.filter { item in !signInAgain.contains { $0.itemId == item.itemId } }) { item in
             Card {
                 HButton(title: "Reconnect \(item.institutionName) to show holdings", busy: linker.busy) {
                     Task {
@@ -181,9 +182,10 @@ struct HomeView: View {
         do {
             let loaded = try await reader.read("/v1/home", as: Home.self)
             await model.refreshReferenceData()
-            investments = try? await reader.read("/v1/investments", as: Investments.self).value
+            let loadedInvestments = try? await reader.read("/v1/investments", as: Investments.self).value
             guard !Task.isCancelled else { return }
             state = .loaded(loaded)
+            investments = loadedInvestments
         } catch {
             guard !Task.isCancelled else { return }
             state = .failed(errorMessage(error))

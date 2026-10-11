@@ -80,6 +80,8 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   hs.run('acct-brokerage', 'sec-syna', '2026-03-15', 2, 100000);
   hs.run('acct-retirement', 'sec-syna', '2026-03-15', 1, 50000);
   hs.run('acct-brokerage', 'sec-cash', '2026-03-15', 50000, 50000);
+  const synced = inv.db.prepare('INSERT INTO holding_syncs (account_id, date) VALUES (?, ?)');
+  for (const day of ['2026-03-14', '2026-03-15']) for (const account of ['acct-brokerage', 'acct-retirement']) synced.run(account, day);
   const bs = inv.db.prepare('INSERT INTO balance_snapshots (account_id, date, balance_cents) VALUES (?, ?, ?)');
   bs.run('acct-brokerage', '2026-03-14', 140000);
   bs.run('acct-retirement', '2026-03-14', 50000);
@@ -89,7 +91,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   const invGet = async (url: string) => (await invApp.inject({ method: 'GET', url, headers: AUTH })).json();
   out.investments = await invGet('/v1/investments');
   out['investments-history'] = await invGet('/v1/investments/history?range=1m');
-  out['holding-history'] = await invGet('/v1/investments/holdings/SYNA/history?range=1m');
+  out['holding-history'] = await invGet('/v1/investments/holding-history?key=SYNA&range=1m');
   // ids minted at runtime are replaced so the files are stable
   const text = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
   const normalise = (s: string) => s.replace(/"accountId": "[0-9a-f-]{36}"/g, '"accountId": "fixture-applecard"').replace(/"itemId": "[0-9a-f-]{36}"/g, '"itemId": "fixture-item"');

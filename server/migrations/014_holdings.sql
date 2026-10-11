@@ -25,4 +25,9 @@ CREATE TABLE holding_snapshots (
   value_cents INTEGER NOT NULL,
   PRIMARY KEY (account_id, security_id, date)
 );
+CREATE TABLE holding_syncs (
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  PRIMARY KEY (account_id, date)
+);
 ALTER TABLE items ADD COLUMN investments_status TEXT CHECK (investments_status IN ('ok', 'consent_required', 'not_supported'));

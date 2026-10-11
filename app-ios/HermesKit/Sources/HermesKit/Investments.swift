@@ -9,7 +9,7 @@ public struct HoldingAccount: Decodable, Sendable, Hashable, Identifiable {
     public var id: String { accountId }
 }
 
-/// One holding combined across accounts; all cash is one "CASH" holding with no price.
+/// One holding combined across accounts; all cash is one holding keyed `cashKey`, with no price.
 public struct Holding: Decodable, Sendable, Hashable, Identifiable {
     public let key: String
     public let name: String
@@ -23,8 +23,12 @@ public struct Holding: Decodable, Sendable, Hashable, Identifiable {
     public let accounts: [HoldingAccount]
     public var id: String { key }
 
+    /// No ticker has an underscore, so a security whose ticker is "CASH" stays apart.
+    public static let cashKey = "_cash"
+    public var isCash: Bool { key == Holding.cashKey }
     public var gainPercent: Double? { Investments.percent(gainCents, of: costBasisCents) }
-    public var historyPath: String { "/v1/investments/holdings/\(key)/history" }
+    /// For `/v1/investments/holding-history`, with the range's items appended; a query keeps a key with "/" intact.
+    public var historyQuery: [URLQueryItem] { [URLQueryItem(name: "key", value: key)] }
 }
 
 public struct Investments: Decodable, Sendable {

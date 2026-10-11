@@ -32,7 +32,7 @@
       ]
     },
     {
-      "key": "CASH",
+      "key": "_cash",
       "name": "Cash",
       "ticker": null,
       "type": "cash",

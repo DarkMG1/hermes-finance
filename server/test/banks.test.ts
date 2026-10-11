@@ -134,3 +134,19 @@ test('an update link for a consent-required item also asks for Investments', asy
     { mode: 'create' },
   ]);
 });
+
+test('completing an update link clears consent_required even when holdings are not ready yet', async () => {
+  const { deps, plaid } = makeTestDeps();
+  seedItem(deps, { id: 'i1', plaidItemId: 'p1', institutionName: 'Synthetic Brokerage', accessToken: 'tok' });
+  plaid.accounts = [{ accountId: 'pinv', name: 'Synthetic Brokerage', mask: '0002', type: 'investment', subtype: 'brokerage', currentBalance: 0, availableBalance: null }];
+  deps.db.prepare("UPDATE items SET investments_status = 'consent_required' WHERE id = 'i1'").run();
+  const app = buildApp(deps);
+  const s = (await app.inject({ method: 'POST', url: '/v1/plaid/link-sessions', headers: w('ic-1'), payload: { mode: 'update', itemId: 'i1' } })).json();
+  const linkToken = (deps.db.prepare('SELECT link_token FROM link_sessions WHERE id = ?').get(s.sessionId) as { link_token: string }).link_token;
+  plaid.linkResults.set(linkToken, { status: 'complete', publicToken: null, institutionName: null });
+  plaid.failNextHoldings('PRODUCT_NOT_READY');
+  assert.equal((await app.inject({ method: 'POST', url: `/v1/plaid/link-sessions/${s.sessionId}/complete`, headers: w('ic-2'), payload: {} })).statusCode, 200);
+  assert.equal(plaid.holdingsCalls, 1);
+  assert.equal((deps.db.prepare("SELECT investments_status AS s FROM items WHERE id = 'i1'").get() as { s: string | null }).s, null);
+  assert.deepEqual((await app.inject({ method: 'GET', url: '/v1/investments', headers: AUTH })).json().reconnect, []);
+});
