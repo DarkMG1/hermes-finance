@@ -1,8 +1,24 @@
 {
   "points": [
     {
+      "date": "2026-03-10",
+      "netWorthCents": 96250
+    },
+    {
+      "date": "2026-03-11",
+      "netWorthCents": 97250
+    },
+    {
+      "date": "2026-03-12",
+      "netWorthCents": 97250
+    },
+    {
+      "date": "2026-03-13",
+      "netWorthCents": 397250
+    },
+    {
       "date": "2026-03-14",
-      "netWorthCents": 236000
+      "netWorthCents": 396000
     },
     {
       "date": "2026-03-15",
@@ -10,5 +26,6 @@
     }
   ],
   "currentCents": 245800,
-  "changeCents": 9800
+  "changeCents": 149550,
+  "estimatedThrough": "2026-03-13"
 }
