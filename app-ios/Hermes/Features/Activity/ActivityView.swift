@@ -19,12 +19,15 @@ struct ActivityView: View {
 
     var body: some View {
         List {
-            filterChips
-                .listRowInsets(EdgeInsets())
-                .listRowBackground(Color.clear)
-                .listRowSeparator(.hidden)
+            // its own section, so the rows' section rounds the first transaction's top corners
+            Section {
+                filterChips
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
             // rows sit on the same surface as the other tabs' cards
-            Group {
+            Section {
                 if let lastLoad { LastUpdated(loaded: lastLoad) }
                 InlineError(message: error)
                 ForEach(items) { transaction in
@@ -41,6 +44,9 @@ struct ActivityView: View {
             }
             .listRowBackground(Palette.surface)
         }
+        .listSectionSpacing(Space.xs)
+        // 12 + the chips' 4pt padding = the 16pt the other tabs leave under the title
+        .contentMargins(.top, Space.m, for: .scrollContent)
         .themedForm()
         .navigationTitle("Activity")
         .searchable(text: $query)
@@ -102,7 +108,6 @@ struct ActivityView: View {
                     chip(personId.map(model.personName) ?? "Person", active: personId != nil)
                 }
             }
-            .padding(.horizontal, Space.l)
             .padding(.vertical, Space.xs)
         }
     }
