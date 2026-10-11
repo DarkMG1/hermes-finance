@@ -63,6 +63,33 @@ export async function buildFixtures(): Promise<Record<string, string>> {
     'error-not-found': await get('/v1/transactions/missing'),
   };
   out['link-complete'] = await post(`/v1/plaid/link-sessions/${sessionId}/complete`);
+  // investments use their own database so the accounts, home and net worth fixtures stay as they are
+  const inv = makeTestDeps().deps;
+  seedAccount(inv.db, { id: 'acct-brokerage', type: 'investment', subtype: 'brokerage', balanceCents: 150000 });
+  seedAccount(inv.db, { id: 'acct-retirement', type: 'investment', subtype: 'roth', balanceCents: 50000 });
+  const sec = inv.db.prepare("INSERT INTO securities (id, name, ticker, type, is_cash, updated_at) VALUES (?, ?, ?, ?, ?, '2026-03-15T11:00:00.000Z')");
+  sec.run('sec-syna', 'Synthetic A Fund', 'SYNA', 'etf', 0);
+  sec.run('sec-cash', 'Synthetic Dollar', null, 'cash', 1);
+  const hold = inv.db.prepare("INSERT INTO holdings (account_id, security_id, quantity, price_cents, value_cents, cost_basis_cents, updated_at) VALUES (?, ?, ?, ?, ?, ?, '2026-03-15T11:00:00.000Z')");
+  hold.run('acct-brokerage', 'sec-syna', 2, 50000, 100000, 90000);
+  hold.run('acct-retirement', 'sec-syna', 1, 50000, 50000, 40000);
+  hold.run('acct-brokerage', 'sec-cash', 50000, 100, 50000, null);
+  const hs = inv.db.prepare('INSERT INTO holding_snapshots (account_id, security_id, date, quantity, value_cents) VALUES (?, ?, ?, ?, ?)');
+  hs.run('acct-brokerage', 'sec-syna', '2026-03-14', 2, 95000);
+  hs.run('acct-retirement', 'sec-syna', '2026-03-14', 1, 48000);
+  hs.run('acct-brokerage', 'sec-syna', '2026-03-15', 2, 100000);
+  hs.run('acct-retirement', 'sec-syna', '2026-03-15', 1, 50000);
+  hs.run('acct-brokerage', 'sec-cash', '2026-03-15', 50000, 50000);
+  const bs = inv.db.prepare('INSERT INTO balance_snapshots (account_id, date, balance_cents) VALUES (?, ?, ?)');
+  bs.run('acct-brokerage', '2026-03-14', 140000);
+  bs.run('acct-retirement', '2026-03-14', 50000);
+  bs.run('acct-brokerage', '2026-03-15', 150000);
+  bs.run('acct-retirement', '2026-03-15', 50000);
+  const invApp = buildApp(inv);
+  const invGet = async (url: string) => (await invApp.inject({ method: 'GET', url, headers: AUTH })).json();
+  out.investments = await invGet('/v1/investments');
+  out['investments-history'] = await invGet('/v1/investments/history?range=1m');
+  out['holding-history'] = await invGet('/v1/investments/holdings/SYNA/history?range=1m');
   // ids minted at runtime are replaced so the files are stable
   const text = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
   const normalise = (s: string) => s.replace(/"accountId": "[0-9a-f-]{36}"/g, '"accountId": "fixture-applecard"').replace(/"itemId": "[0-9a-f-]{36}"/g, '"itemId": "fixture-item"');

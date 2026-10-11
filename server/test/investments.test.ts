@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { syncItem } from '../src/sync/run.ts';
-import { localDay } from '../src/networth.ts';
-import { makeTestDeps, seedItem } from './helpers.ts';
+import { getNetWorth, localDay } from '../src/networth.ts';
+import { getInvestments, getHoldingHistory } from '../src/investments.ts';
+import { buildApp } from '../src/app.ts';
+import { AUTH, makeTestDeps, seedAccount, seedItem } from './helpers.ts';
 import type { FakePlaid } from './fake-plaid.ts';
 import type { Deps } from '../src/deps.ts';
 
@@ -95,4 +97,134 @@ test('holdings for unknown accounts or securities are skipped', async () => {
   };
   assert.equal((await syncItem(deps, 'i1')).result, 'ok');
   assert.deepEqual((holdings(deps) as { security_id: string }[]).map((h) => h.security_id), ['sa']);
+});
+
+function seedHoldings(deps: Deps): void {
+  const { db } = deps;
+  seedAccount(db, { id: 'b1', type: 'investment', balanceCents: 0 });
+  seedAccount(db, { id: 'b2', type: 'investment', balanceCents: 0 });
+  seedAccount(db, { id: 'bh', type: 'investment', balanceCents: 0, hidden: true });
+  const sec = db.prepare("INSERT INTO securities (id, name, ticker, type, is_cash, updated_at) VALUES (?, ?, ?, ?, ?, 'seed')");
+  sec.run('sa1', 'Synthetic A Fund', 'syna', 'etf', 0);
+  sec.run('sa2', 'Synthetic A Fund (other listing)', 'SYNA', 'etf', 0);
+  sec.run('sc', 'Synthetic C Corp', 'SYNC', 'equity', 0);
+  sec.run('cash1', 'Synthetic Dollar', null, 'cash', 0);
+  sec.run('cash2', 'Synthetic Sweep', 'SWEEP', 'mutual fund', 1);
+  sec.run('nt', 'Synthetic Private Note', null, 'fixed income', 0);
+  const h = db.prepare("INSERT INTO holdings (account_id, security_id, quantity, price_cents, value_cents, cost_basis_cents, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+  h.run('b1', 'sa1', 2, 10000, 20000, 15000, '2026-03-15T10:00:00.000Z');
+  h.run('b2', 'sa2', 1, 10000, 10000, 8000, '2026-03-15T11:00:00.000Z');
+  h.run('b1', 'sc', 4, 1000, 4000, null, '2026-03-15T10:00:00.000Z');
+  h.run('b1', 'cash1', 500, 100, 500, null, '2026-03-15T10:00:00.000Z');
+  h.run('b2', 'cash2', 300, 100, 300, 300, '2026-03-15T11:00:00.000Z');
+  h.run('b2', 'nt', 1, 7000, 7000, 6000, '2026-03-15T11:00:00.000Z');
+  h.run('bh', 'sc', 100, 1000, 100000, 1, '2026-03-15T12:00:00.000Z');
+}
+
+test('holdings combine by ticker across accounts, cash merges, gain needs every cost basis', () => {
+  const { deps } = makeTestDeps();
+  seedHoldings(deps);
+  seedItem(deps, { id: 'ic', plaidItemId: 'pc', institutionName: 'Synthetic Consent', accessToken: 'tok' });
+  deps.db.prepare("UPDATE items SET investments_status = 'consent_required' WHERE id = 'ic'").run();
+  const inv = getInvestments(deps.db);
+  assert.deepEqual(inv.holdings.map((h) => [h.key, h.name, h.quantity, h.priceCents, h.valueCents, h.costBasisCents, h.gainCents]), [
+    ['SYNA', 'Synthetic A Fund', 3, 10000, 30000, 23000, 7000],
+    ['nt', 'Synthetic Private Note', 1, 7000, 7000, 6000, 1000],
+    ['SYNC', 'Synthetic C Corp', 4, 1000, 4000, null, null],
+    ['CASH', 'Cash', 800, null, 800, 800, 0],
+  ]);
+  assert.deepEqual(inv.holdings[0]!.accounts.map((a) => [a.accountId, a.quantity, a.valueCents, a.costBasisCents]), [
+    ['b1', 2, 20000, 15000], ['b2', 1, 10000, 8000],
+  ]);
+  assert.equal(inv.holdings[0]!.ticker, 'syna', 'name and ticker come from the largest member');
+  assert.equal(inv.holdings[3]!.ticker, null);
+  assert.equal(inv.totalCents, 41800);
+  assert.equal(inv.costBasisCents, null, 'SYNC has no cost basis');
+  assert.equal(inv.gainCents, null);
+  assert.equal(inv.asOf, '2026-03-15T11:00:00.000Z', 'hidden accounts do not count');
+  assert.deepEqual(inv.reconnect, [{ itemId: 'ic', institutionName: 'Synthetic Consent' }]);
+});
+
+test('cash without cost basis counts as cost', () => {
+  const { deps } = makeTestDeps();
+  seedHoldings(deps);
+  deps.db.prepare("DELETE FROM holdings WHERE security_id = 'sc'").run();
+  const inv = getInvestments(deps.db);
+  assert.equal(inv.totalCents, 37800);
+  assert.equal(inv.costBasisCents, 29800);
+  assert.equal(inv.gainCents, 8000);
+});
+
+test('no holdings: zero total and no gain', () => {
+  const { deps } = makeTestDeps();
+  assert.deepEqual(getInvestments(deps.db), { totalCents: 0, costBasisCents: null, gainCents: null, asOf: null, holdings: [], reconnect: [] });
+});
+
+const hsnap = (deps: Deps, account: string, security: string, date: string, cents: number) =>
+  deps.db.prepare('INSERT INTO holding_snapshots (account_id, security_id, date, quantity, value_cents) VALUES (?, ?, ?, 1, ?)').run(account, security, date, cents);
+
+test('holding history sums accounts and carries forward', () => {
+  const { deps } = makeTestDeps();
+  seedHoldings(deps);
+  hsnap(deps, 'b1', 'sa1', '2026-03-12', 1000);
+  hsnap(deps, 'b2', 'sa2', '2026-03-13', 500);
+  hsnap(deps, 'b1', 'sa1', '2026-03-14', 1200);
+  hsnap(deps, 'bh', 'sa1', '2026-03-13', 99999);
+  const h = getHoldingHistory(deps.db, 'SYNA', 'all', '2026-03-15')!;
+  assert.deepEqual(h.points, [
+    { date: '2026-03-12', netWorthCents: 1000 },
+    { date: '2026-03-13', netWorthCents: 1500 },
+    { date: '2026-03-14', netWorthCents: 1700 },
+    { date: '2026-03-15', netWorthCents: 1700 },
+  ]);
+  assert.equal(h.currentCents, 1700);
+  assert.equal(h.changeCents, 700);
+  assert.equal(h.estimatedThrough, null);
+  assert.equal(getHoldingHistory(deps.db, 'SYNA', '1m', '2026-03-15')!.points.length, 4);
+  assert.equal(getHoldingHistory(deps.db, 'NOPE', 'all', '2026-03-15'), null);
+});
+
+test('holding history drops a sold position to 0', () => {
+  const { deps } = makeTestDeps();
+  seedHoldings(deps);
+  hsnap(deps, 'b1', 'sc', '2026-03-13', 4000);
+  hsnap(deps, 'b1', 'cash1', '2026-03-13', 100);
+  // the 03-14 sync of b1 has cash but no SYNC: sold
+  hsnap(deps, 'b1', 'cash1', '2026-03-14', 4100);
+  const h = getHoldingHistory(deps.db, 'SYNC', 'all', '2026-03-15')!;
+  assert.deepEqual(h.points.map((p) => p.netWorthCents), [4000, 0, 0]);
+});
+
+test('investments history uses only investment accounts', () => {
+  const { deps } = makeTestDeps();
+  seedAccount(deps.db, { id: 'chk', balanceCents: 5000 });
+  seedAccount(deps.db, { id: 'inv', type: 'investment', balanceCents: 3000 });
+  seedAccount(deps.db, { id: 'loan', type: 'loan', balanceCents: 1000 });
+  assert.deepEqual(getNetWorth(deps.db, 'all', '2026-03-15', 'investment'),
+    { points: [], currentCents: 3000, changeCents: 0, estimatedThrough: null }, 'no snapshots: the live investment total');
+  const snap = deps.db.prepare('INSERT INTO balance_snapshots (account_id, date, balance_cents) VALUES (?, ?, ?)');
+  snap.run('chk', '2026-03-13', 5000);
+  snap.run('inv', '2026-03-14', 2800);
+  snap.run('inv', '2026-03-15', 3000);
+  deps.db.prepare("INSERT INTO transactions (id, account_id, source, date, amount_cents, created_at, updated_at) VALUES ('t1', 'chk', 'manual', '2026-03-01', 100, 's', 's')").run();
+  const h = getNetWorth(deps.db, 'all', '2026-03-15', 'investment');
+  assert.deepEqual(h.points, [{ date: '2026-03-14', netWorthCents: 2800 }, { date: '2026-03-15', netWorthCents: 3000 }]);
+  assert.equal(h.estimatedThrough, null);
+});
+
+test('investment routes', async () => {
+  const { deps } = makeTestDeps();
+  seedHoldings(deps);
+  hsnap(deps, 'b1', 'sa1', '2026-03-15', 1000);
+  const app = buildApp(deps);
+  const get = (url: string) => app.inject({ method: 'GET', url, headers: AUTH });
+  const inv = await get('/v1/investments');
+  assert.equal(inv.statusCode, 200);
+  assert.equal(inv.headers['cache-control'], 'no-store');
+  assert.equal(inv.json().holdings.length, 4);
+  assert.equal((await get('/v1/investments/history?range=1m')).statusCode, 200);
+  assert.equal((await get('/v1/investments/history?range=2w')).statusCode, 400);
+  assert.equal((await get('/v1/investments/holdings/SYNA/history?range=all')).json().currentCents, 1000);
+  assert.equal((await get('/v1/investments/holdings/NOPE/history?range=all')).statusCode, 404);
+  assert.equal((await get('/v1/investments/holdings/SYNA/history?range=2w')).statusCode, 400);
 });

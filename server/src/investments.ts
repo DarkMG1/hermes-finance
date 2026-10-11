@@ -1,5 +1,7 @@
+import type { Holding, HoldingAccount, Investments, NetWorthHistory, NetWorthQuery } from '@hermes/shared';
+import type { Db } from './db.ts';
 import type { Deps } from './deps.ts';
-import { localDay } from './networth.ts';
+import { localDay, MONTHS, minusMonths, nextDay } from './networth.ts';
 import { PlaidError, type PlaidHoldings } from './plaid/port.ts';
 
 const CONSENT = new Set(['ADDITIONAL_CONSENT_REQUIRED', 'ACCESS_NOT_GRANTED']);
@@ -64,4 +66,82 @@ export async function syncHoldings(deps: Deps, itemId: string, token: string): P
   } catch (e) {
     console.error(`[hermes] holdings store failed item=${itemId} ${e instanceof Error ? e.message : String(e)}`);
   }
+}
+
+type HoldingRow = {
+  accountId: string; accountName: string; securityId: string; quantity: number; valueCents: number; costBasisCents: number | null;
+  updatedAt: string; name: string | null; ticker: string | null; type: string | null; isCash: number;
+};
+
+/** Sums, or null when any is unknown. */
+const sumKnown = (xs: (number | null)[]): number | null =>
+  xs.some((x) => x === null) ? null : xs.reduce<number>((a, b) => a + (b as number), 0);
+
+export function getInvestments(db: Db): Investments {
+  const rows = db.prepare(`
+    SELECT h.account_id AS accountId, COALESCE(a.display_name, a.name) AS accountName, h.security_id AS securityId, h.quantity,
+      h.value_cents AS valueCents, h.cost_basis_cents AS costBasisCents, h.updated_at AS updatedAt,
+      s.name, s.ticker, s.type, s.is_cash AS isCash
+    FROM holdings h JOIN accounts a ON a.id = h.account_id JOIN securities s ON s.id = h.security_id
+    WHERE a.hidden = 0`).all() as HoldingRow[];
+  const groups = new Map<string, HoldingRow[]>();
+  for (const r of rows) {
+    const key = holdingKey(r);
+    groups.set(key, [...(groups.get(key) ?? []), r]);
+  }
+  const holdings: Holding[] = [...groups].map(([key, members]) => {
+    const cash = key === 'CASH';
+    // cash with no reported cost is worth what it cost
+    const cost = (r: HoldingRow) => (r.costBasisCents === null && cash ? r.valueCents : r.costBasisCents);
+    const top = members.reduce((a, b) => (b.valueCents > a.valueCents ? b : a));
+    const quantity = members.reduce((a, r) => a + r.quantity, 0);
+    const valueCents = members.reduce((a, r) => a + r.valueCents, 0);
+    const costBasisCents = sumKnown(members.map(cost));
+    const byAccount = new Map<string, HoldingRow[]>();
+    for (const r of members) byAccount.set(r.accountId, [...(byAccount.get(r.accountId) ?? []), r]);
+    const accounts: HoldingAccount[] = [...byAccount].map(([accountId, rs]) => ({
+      accountId, accountName: rs[0]!.accountName, quantity: rs.reduce((a, r) => a + r.quantity, 0),
+      valueCents: rs.reduce((a, r) => a + r.valueCents, 0), costBasisCents: sumKnown(rs.map(cost)),
+    })).sort((a, b) => b.valueCents - a.valueCents);
+    return {
+      key, name: cash ? 'Cash' : top.name ?? top.ticker ?? key, ticker: cash ? null : top.ticker, type: cash ? 'cash' : top.type, quantity,
+      priceCents: cash || quantity === 0 ? null : Math.round(valueCents / quantity), valueCents, costBasisCents,
+      gainCents: costBasisCents === null ? null : valueCents - costBasisCents, accounts,
+    };
+  }).sort((a, b) => b.valueCents - a.valueCents || a.key.localeCompare(b.key));
+  const costBasisCents = holdings.length === 0 ? null : sumKnown(holdings.map((h) => h.costBasisCents));
+  const totalCents = holdings.reduce((a, h) => a + h.valueCents, 0);
+  const asOf = rows.reduce<string | null>((a, r) => (a === null || r.updatedAt > a ? r.updatedAt : a), null);
+  const reconnect = (db.prepare("SELECT id, institution_name FROM items WHERE investments_status = 'consent_required' ORDER BY institution_name").all() as
+    { id: string; institution_name: string }[]).map((i) => ({ itemId: i.id, institutionName: i.institution_name }));
+  return { totalCents, costBasisCents, gainCents: costBasisCents === null ? null : totalCents - costBasisCents, asOf, holdings, reconnect };
+}
+
+/**
+ * One holding's value per day, summed over accounts. A day an account synced holdings without this holding counts it 0
+ * (sold); a day it didn't sync carries its last value forward. Null when the holding has no snapshots.
+ */
+export function getHoldingHistory(db: Db, key: string, range: NetWorthQuery['range'], today: string): NetWorthHistory | null {
+  const all = db.prepare(`
+    SELECT hs.account_id AS accountId, hs.security_id AS securityId, hs.date, hs.value_cents AS cents, s.ticker, s.type, s.is_cash AS isCash
+    FROM holding_snapshots hs JOIN accounts a ON a.id = hs.account_id JOIN securities s ON s.id = hs.security_id
+    WHERE a.hidden = 0 AND hs.date <= ? ORDER BY hs.date`).all(today) as
+    { accountId: string; securityId: string; date: string; cents: number; ticker: string | null; type: string | null; isCash: number }[];
+  const mine = all.filter((r) => holdingKey(r) === key);
+  const first = mine[0];
+  if (!first) return null;
+  const synced = new Set(all.map((r) => `${r.accountId}|${r.date}`));
+  const accounts = [...new Set(mine.map((r) => r.accountId))];
+  const values = new Map<string, number>();
+  for (const r of mine) values.set(`${r.accountId}|${r.date}`, (values.get(`${r.accountId}|${r.date}`) ?? 0) + r.cents);
+  const wanted = range === 'all' ? first.date : minusMonths(today, MONTHS[range]);
+  const start = wanted > first.date ? wanted : first.date;
+  const latest = new Map<string, number>();
+  const points: NetWorthHistory['points'] = [];
+  for (let day = first.date; day <= today; day = nextDay(day)) {
+    for (const a of accounts) if (synced.has(`${a}|${day}`)) latest.set(a, values.get(`${a}|${day}`) ?? 0);
+    if (day >= start) points.push({ date: day, netWorthCents: [...latest.values()].reduce((x, y) => x + y, 0) });
+  }
+  const last = points[points.length - 1]!;
+  return { points, currentCents: last.netWorthCents, changeCents: last.netWorthCents - points[0]!.netWorthCents, estimatedThrough: null };
 }

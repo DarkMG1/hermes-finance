@@ -1,0 +1,56 @@
+{
+  "totalCents": 200000,
+  "costBasisCents": 180000,
+  "gainCents": 20000,
+  "asOf": "2026-03-15T11:00:00.000Z",
+  "holdings": [
+    {
+      "key": "SYNA",
+      "name": "Synthetic A Fund",
+      "ticker": "SYNA",
+      "type": "etf",
+      "quantity": 3,
+      "priceCents": 50000,
+      "valueCents": 150000,
+      "costBasisCents": 130000,
+      "gainCents": 20000,
+      "accounts": [
+        {
+          "accountId": "acct-brokerage",
+          "accountName": "Account acct-brokerage",
+          "quantity": 2,
+          "valueCents": 100000,
+          "costBasisCents": 90000
+        },
+        {
+          "accountId": "acct-retirement",
+          "accountName": "Account acct-retirement",
+          "quantity": 1,
+          "valueCents": 50000,
+          "costBasisCents": 40000
+        }
+      ]
+    },
+    {
+      "key": "CASH",
+      "name": "Cash",
+      "ticker": null,
+      "type": "cash",
+      "quantity": 50000,
+      "priceCents": null,
+      "valueCents": 50000,
+      "costBasisCents": 50000,
+      "gainCents": 0,
+      "accounts": [
+        {
+          "accountId": "acct-brokerage",
+          "accountName": "Account acct-brokerage",
+          "quantity": 50000,
+          "valueCents": 50000,
+          "costBasisCents": 50000
+        }
+      ]
+    }
+  ],
+  "reconnect": []
+}

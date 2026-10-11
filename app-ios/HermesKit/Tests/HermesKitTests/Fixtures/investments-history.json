@@ -1,0 +1,15 @@
+{
+  "points": [
+    {
+      "date": "2026-03-14",
+      "netWorthCents": 190000
+    },
+    {
+      "date": "2026-03-15",
+      "netWorthCents": 200000
+    }
+  ],
+  "currentCents": 200000,
+  "changeCents": 10000,
+  "estimatedThrough": null
+}
