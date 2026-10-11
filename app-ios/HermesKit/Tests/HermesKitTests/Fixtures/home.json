@@ -57,7 +57,7 @@
           "categoryId": "cat-food",
           "notes": null,
           "personId": null,
-          "payee": null
+          "payee": "Synthetic Lamp"
         },
         {
           "id": "line-2",

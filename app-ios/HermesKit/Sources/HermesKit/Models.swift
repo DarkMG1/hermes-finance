@@ -37,6 +37,8 @@ public struct SplitLine: Codable, Sendable, Identifiable, Hashable {
     public let categoryId: String?
     public let notes: String?
     public let personId: String?
+    /// The line's own name; nil shows the transaction's payee.
+    public let payee: String?
 }
 
 public struct LedgerTransaction: Codable, Sendable, Identifiable, Hashable {
@@ -149,11 +151,47 @@ public struct SpendingCategory: Codable, Sendable, Hashable {
     public let spentCents: Int
 }
 
-public struct Spending: Codable, Sendable {
+public struct Spending: Decodable, Sendable {
     public let from: String
     public let toExclusive: String
-    public let totalCents: Int
+    public let inCents: Int
+    public let outCents: Int
+    public let netCents: Int
     public let categories: [SpendingCategory]
+
+    private enum Keys: String, CodingKey { case from, toExclusive, inCents, outCents, netCents, totalCents, categories }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: Keys.self)
+        from = try container.decode(String.self, forKey: .from)
+        toExclusive = try container.decode(String.self, forKey: .toExclusive)
+        categories = try container.decode([SpendingCategory].self, forKey: .categories)
+        // a server before v1.3 sends only totalCents (its Out)
+        outCents = try container.decodeIfPresent(Int.self, forKey: .outCents) ?? container.decode(Int.self, forKey: .totalCents)
+        inCents = try container.decodeIfPresent(Int.self, forKey: .inCents) ?? 0
+        netCents = try container.decodeIfPresent(Int.self, forKey: .netCents) ?? inCents - outCents
+    }
+}
+
+/// One row behind a Spending number: an unsplit transaction, one of your split lines, or a split difference.
+public struct ExpenseRow: Codable, Sendable, Identifiable, Hashable {
+    public let transactionId: String
+    public let lineId: String?
+    public let date: String
+    public let name: String
+    public let categoryId: String?
+    public let categoryName: String
+    /// Out: spending is positive and a refund negative. In: income is positive.
+    public let amountCents: Int
+    public let isSplit: Bool
+    public let isSplitDifference: Bool
+
+    public var id: String { "\(transactionId)/\(lineId ?? (isSplitDifference ? "difference" : "row"))" }
+}
+
+public struct ExpensesPage: Codable, Sendable {
+    public let rows: [ExpenseRow]
+    public let nextCursor: String?
 }
 
 public struct Bank: Codable, Sendable, Identifiable, Hashable {
