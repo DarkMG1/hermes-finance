@@ -3,6 +3,7 @@ import { decryptToken } from '../crypto.ts';
 import { PlaidError, type SyncPage } from '../plaid/port.ts';
 import { applyPages, getCutoverDate, upsertAccounts } from './apply.ts';
 import { localDay, snapshotBalances } from '../networth.ts';
+import { syncHoldings } from '../investments.ts';
 
 export type ItemResult = {
   itemId: string; institutionName: string; result: 'ok' | 'login_required' | 'error' | 'already_running';
@@ -61,6 +62,7 @@ export async function syncItem(deps: Deps, itemId: string): Promise<ItemResult> 
       db.prepare('DELETE FROM link_sessions WHERE expires_at < ?').run(cutoff);
       return c;
     })();
+    await syncHoldings(deps, itemId, token);
     return { ...base, ...counts, result: 'ok' };
   } catch (e) {
     const code = e instanceof PlaidError ? e.code : 'SYNC_FAILED';
