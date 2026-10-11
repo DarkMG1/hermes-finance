@@ -164,3 +164,19 @@ func json(_ value: some Encodable) throws -> String {
     #expect(try json(PatchSplitLineBody(categoryId: .set("c"), notes: .set("n"))) == #"{"categoryId":"c","notes":"n"}"#)
     #expect(PatchSplitLineBody().isEmpty && !PatchSplitLineBody(personId: .set("p")).isEmpty)
 }
+
+@Test func netWorthDecodesAndComputesPercent() throws {
+    let history = try decode(NetWorthHistory.self, "net-worth")
+    #expect(history.points.map(\.date) == ["2026-03-14", "2026-03-15"])
+    #expect(history.currentCents == 245800 && history.changeCents == 9800)
+    #expect(abs((history.changePercent ?? 0) - 9800.0 / 236000.0) < 0.000001)
+    let body = #"{"points":[{"date":"2026-03-14","netWorthCents":0},{"date":"2026-03-15","netWorthCents":500}],"currentCents":500,"changeCents":500}"#
+    let fromZero = try JSONDecoder().decode(NetWorthHistory.self, from: Data(body.utf8))
+    #expect(fromZero.changePercent == nil)
+}
+
+@Test func netWorthRangeQuery() {
+    #expect(NetWorthRange.allCases.map(\.rawValue) == ["1m", "3m", "1y", "all"])
+    #expect(NetWorthRange.allCases.map(\.title) == ["1M", "3M", "1Y", "All"])
+    #expect(NetWorthRange.quarter.queryItems == [URLQueryItem(name: "range", value: "3m")])
+}
