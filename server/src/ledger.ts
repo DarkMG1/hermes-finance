@@ -104,7 +104,7 @@ export function assertCategoryExists(db: Db, id: string | null | undefined, fiel
   }
 }
 
-const NEGATIVE_TYPES = new Set(['credit', 'loan']);
+export const NEGATIVE_TYPES = new Set(['credit', 'loan']);
 
 /** Categorizing a bank row teaches its Plaid category: later syncs and imports use the mapping, and
  *  uncategorized unsplit bank rows with the same Plaid category take it now. Owner-set categories are never overwritten. */
@@ -180,9 +180,14 @@ export function periodRange(q: SpendingQuery): { from: string; toExclusive: stri
   return { from: `${q.date}-01`, toExclusive: `${next}-01` };
 }
 
-export function getHome(db: Db): Omit<Home, 'owedToYouCents' | 'youOweCents' | 'repaymentSuggestions'> {
+/** Today's net worth from live balances: what Home shows. */
+export function liveNetWorthCents(db: Db): number {
   const accounts = db.prepare('SELECT type, balance_current_cents AS b FROM accounts WHERE hidden = 0 AND balance_current_cents IS NOT NULL').all() as { type: string; b: number }[];
-  const netWorthCents = accounts.reduce((sum, a) => sum + (NEGATIVE_TYPES.has(a.type) ? -a.b : a.b), 0);
+  return accounts.reduce((sum, a) => sum + (NEGATIVE_TYPES.has(a.type) ? -a.b : a.b), 0);
+}
+
+export function getHome(db: Db): Omit<Home, 'owedToYouCents' | 'youOweCents' | 'repaymentSuggestions'> {
+  const netWorthCents = liveNetWorthCents(db);
   const recent = listTransactions(db, { limit: 10 }).transactions;
   const reconnect = (db.prepare("SELECT id, institution_name FROM items WHERE status = 'login_required' ORDER BY institution_name").all() as { id: string; institution_name: string }[])
     .map((i) => ({ itemId: i.id, institutionName: i.institution_name }));

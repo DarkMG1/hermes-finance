@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { AppleCardImportResult } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
+import { localDay, snapshotBalances } from './networth.ts';
 
 // Wallet's Apple Card export: purchases positive, payments and credits negative. Hermes: negative = money out.
 const AMOUNT_SIGN = -1;
@@ -164,5 +165,6 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
   const sum = (db.prepare("SELECT COALESCE(SUM(amount_cents), 0) AS s FROM transactions WHERE account_id = ? AND source = 'applecard' AND removed_at IS NULL")
     .get(accountId) as { s: number }).s;
   db.prepare('UPDATE accounts SET balance_current_cents = ?, balance_at = ? WHERE id = ?').run(sum === 0 ? 0 : -sum, nowIso, accountId);
+  snapshotBalances(db, localDay(new Date(nowIso)));
   return result;
 }
