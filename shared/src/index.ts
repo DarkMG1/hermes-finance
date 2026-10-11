@@ -67,6 +67,15 @@ export const PutSplitsBody = z.object({
 }).strict();
 export type PutSplitsBody = z.infer<typeof PutSplitsBody>;
 
+/** Changes one split line in place. A person clears the line's category and a category clears its person. */
+export const PatchSplitLineBody = z.object({
+  payee: z.string().trim().max(200).nullable().optional(), categoryId: Id.nullable().optional(),
+  personId: Id.nullable().optional(), notes: z.string().max(2000).nullable().optional(),
+}).strict()
+  .refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' })
+  .refine((b) => !(b.categoryId && b.personId), { message: 'a line with a person has no category', path: ['personId'] });
+export type PatchSplitLineBody = z.infer<typeof PatchSplitLineBody>;
+
 export const Person = z.object({ id: Id, name: z.string(), matchText: z.string().nullable(), archived: z.boolean(), balanceCents: Cents });
 export type Person = z.infer<typeof Person>;
 

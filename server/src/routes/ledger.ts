@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
-import { CreateTransactionBody, ListTransactionsQuery, PatchAccountBody, PatchTransactionBody, PutSplitsBody, SpendingQuery } from '@hermes/shared';
+import { CreateTransactionBody, ListTransactionsQuery, PatchAccountBody, PatchSplitLineBody, PatchTransactionBody, PutSplitsBody, SpendingQuery } from '@hermes/shared';
 import type { Db } from '../db.ts';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
@@ -116,6 +116,36 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       if (txn.paidByPersonId) throw new ApiError(409, 'PAID_BY_PERSON', 'a transaction someone else paid cannot be split', 'lines');
       if (!body.lines.length && !txn.splitLines.length) return { status: 200, body: txn };
       writeSplit(db, txn.id, txn.amountCents, body.lines, 'lines', deps.now().toISOString());
+      return { status: 200, body: getTransaction(db, txn.id) };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+
+  app.patch<{ Params: { id: string; lineId: string } }>('/v1/transactions/:id/lines/:lineId', async (req, reply) => {
+    const body = parseBody(PatchSplitLineBody, req.body);
+    const r = idempotentWrite(deps, req, () => {
+      const txn = getTransaction(db, req.params.id);
+      if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      if (!txn.splitLines.some((l) => l.id === req.params.lineId)) throw new ApiError(404, 'NOT_FOUND', 'split line not found');
+      assertCategoryExists(db, body.categoryId, 'categoryId');
+      assertPersonTaggable(db, body.personId, 'personId', txn.id);
+      const sets: string[] = [];
+      const args: unknown[] = [];
+      // person and category are exclusive on a line, as on a transaction; a line's category never teaches
+      if (body.categoryId !== undefined) {
+        sets.push('category_id = ?');
+        args.push(body.categoryId);
+        if (body.categoryId !== null) sets.push('person_id = NULL');
+      }
+      if (body.personId !== undefined) {
+        sets.push('person_id = ?');
+        args.push(body.personId);
+        if (body.personId !== null) sets.push('category_id = NULL');
+      }
+      if (body.payee !== undefined) { sets.push('payee = ?'); args.push(body.payee || null); }
+      if (body.notes !== undefined) { sets.push('notes = ?'); args.push(body.notes); }
+      db.prepare(`UPDATE split_lines SET ${sets.join(', ')} WHERE id = ?`).run(...args, req.params.lineId);
+      db.prepare('UPDATE transactions SET updated_at = ? WHERE id = ?').run(deps.now().toISOString(), txn.id);
       return { status: 200, body: getTransaction(db, txn.id) };
     });
     return reply.code(r.status).send(r.body);
