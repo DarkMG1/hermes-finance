@@ -15,6 +15,8 @@ final class AppLock {
     private var isActive = false
     /// Bumped on every background and every new lock, so a Face ID result that arrives later can't unlock.
     private var generation = 0
+    /// `generation` when Connect was tapped: a background before the connection completes voids the baseline trust.
+    private var connectGeneration: Int?
     private var failure: String?
     private let onFacesChanged: @MainActor () -> Void
 
@@ -80,11 +82,18 @@ final class AppLock {
         cover.show(locked: true, message: failure) { [weak self] in self?.authenticate() }
     }
 
+    /// Called right before the Connect screen sends the server token.
+    func connectStarting() {
+        connectGeneration = generation
+    }
+
     /// Called when the Connect screen succeeds: ask for Face ID right away, as a cold launch does.
     func didConnect(enabled: Bool) {
         launched = true
         backgroundedAt = nil
-        trustNewBaseline = true
+        // a face added in iOS Settings while connecting must not become the baseline: that needs no background since the tap
+        trustNewBaseline = connectGeneration == generation && isActive
+        connectGeneration = nil
         if enabled && Self.hasBiometricHardware {
             generation += 1
             locked = true

@@ -38,6 +38,7 @@ struct HermesApp: App {
                 if model.reader == nil { ConnectView() } else { MainTabs() }
             }
             .environment(model)
+            .environment(lock)
             .tint(Palette.accent)
             .preferredColorScheme(appearance.colorScheme)
             .task {

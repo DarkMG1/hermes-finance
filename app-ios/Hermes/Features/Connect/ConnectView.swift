@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ConnectView: View {
     @Environment(AppModel.self) private var model
+    @Environment(AppLock.self) private var lock
     @State private var url = ""
     @State private var token = ""
     @State private var error: String?
@@ -41,6 +42,7 @@ struct ConnectView: View {
         error = nil
         defer { busy = false }
         do {
+            lock.connectStarting()
             try await model.connect(urlText: url, token: token)
             faceIDChanged = false
         } catch {
