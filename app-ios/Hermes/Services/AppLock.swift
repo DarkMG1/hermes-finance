@@ -166,8 +166,8 @@ final class AppLock {
                 guard generation == started else { return }
                 locked = false
                 failure = nil
-                // the prompt's own result can land just before the scene is active again; the .active return hides the cover then
-                if isActive { cover.hide() }
+                // the scene is still inactive while the prompt dismisses; the unchanged generation proves no background since
+                cover.hide()
             case .failed(let message):
                 failure = message
                 if locked { showLocked() }
