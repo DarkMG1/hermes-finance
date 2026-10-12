@@ -42,6 +42,8 @@ struct ReconcileView: View {
         .overlay(alignment: .bottom) { if let undo { undoBar(undo) } }
         .task { await loadMonths() }
         .task(id: month) { await load() }
+        // an undo belongs to the month it was made in
+        .onChange(of: month) { undo = nil }
         .task(id: undo?.id) {
             guard undo != nil else { return }
             try? await Task.sleep(for: .seconds(4))
@@ -84,6 +86,8 @@ struct ReconcileView: View {
                 .buttonStyle(.plain)
             Button { Task { await check(transaction) } } label: {
                 Image(systemName: "circle").font(.title2).foregroundStyle(Palette.accent)
+                    .frame(minWidth: Space.xxl + Space.m, minHeight: Space.xxl + Space.m)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Mark reconciled")
@@ -103,8 +107,12 @@ struct ReconcileView: View {
     }
 
     private func loadMonths() async {
-        guard let reader = model.reader,
-              let loaded = try? await reader.read("/v1/reconcile/months", as: ReconcileMonths.self) else { return }
+        guard let reader = model.reader else { return }
+        guard let loaded = try? await reader.read("/v1/reconcile/months", as: ReconcileMonths.self) else {
+            // still pick a month, so load() runs and shows its own error and Retry
+            if month == nil { month = current }
+            return
+        }
         months = loaded.value.months
         // opened without a month: the oldest one with open rows, else this month
         if month == nil { month = months.first?.month ?? current }
@@ -128,29 +136,36 @@ struct ReconcileView: View {
         guard let client = model.client else { return }
         error = nil
         withAnimation { rows.removeAll { $0.id == transaction.id } }
-        withAnimation { undo = transaction }
         do {
             _ = try await client.setReconciled(id: transaction.id, reconciled: true, idempotencyKey: UUID().uuidString)
+            // Undo shows only once the write landed, so an undo can't race it
+            if inMonth(transaction) { withAnimation { undo = transaction } }
             await loadMonths()
         } catch {
-            withAnimation {
-                undo = nil
-                putBack(transaction)
-            }
+            if undo?.id == transaction.id { withAnimation { undo = nil } }
+            await restore(transaction)
             self.error = errorMessage(error)
         }
     }
 
     private func uncheck(_ transaction: LedgerTransaction) async {
         guard let client = model.client else { return }
+        error = nil
         withAnimation { undo = nil }
         do {
             _ = try await client.setReconciled(id: transaction.id, reconciled: false, idempotencyKey: UUID().uuidString)
-            withAnimation { putBack(transaction) }
+            await restore(transaction)
             await loadMonths()
         } catch {
             self.error = errorMessage(error)
         }
+    }
+
+    private func inMonth(_ transaction: LedgerTransaction) -> Bool { transaction.date.prefix(7) == month ?? "" }
+
+    /// Back into the list only if it's this month's row; the month may have changed while the write ran.
+    private func restore(_ transaction: LedgerTransaction) async {
+        if inMonth(transaction) { withAnimation { putBack(transaction) } } else { await load() }
     }
 
     private func putBack(_ transaction: LedgerTransaction) {
