@@ -60,6 +60,17 @@ struct HomeView: View {
                     .buttonStyle(.plain)
                 }
                 if let showBalancesError { Text(showBalancesError).textStyle(.caption, color: Palette.secondaryText) }
+                if let due = loaded.value.toReconcile {
+                    NavigationLink { ReconcileView(month: due.month) } label: {
+                        Card {
+                            Text("Reconcile").textStyle(.subhead, color: Palette.secondaryText)
+                            ListRow(title: "\(ReconcileMonth.title(due.month)): \(due.open) to reconcile") {
+                                Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
                 if let investments, hasInvestments || !investments.reconnect.isEmpty {
                     investmentsCard(investments, signInAgain: loaded.value.reconnect)
                 }

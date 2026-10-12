@@ -67,6 +67,9 @@ struct SettingsView: View {
                 if let syncNote { Text(syncNote).textStyle(.caption, color: Palette.secondaryText) }
             }
             Section {
+                NavigationLink { ReconcileView() } label: { Label("Reconcile", systemImage: "checkmark.circle") }
+            }
+            Section {
                 Button { importing = true } label: {
                     HStack { Text("Import Apple Card CSV"); Spacer(); if importBusy { ProgressView() } }
                 }
