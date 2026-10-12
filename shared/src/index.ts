@@ -253,3 +253,15 @@ export const AppleCardImportResult = z.object({
   accountId: Id, rows: z.number().int(), added: z.number().int(), updated: z.number().int(), skippedBeforeCutover: z.number().int(),
 });
 export type AppleCardImportResult = z.infer<typeof AppleCardImportResult>;
+
+/** What the receipt reader must return; zero-amount lines (free items) are dropped. */
+export const ReceiptReadOutput = z.object({
+  items: z.array(z.object({ name: z.string().trim().min(1).max(200), amountCents: z.number().int().min(-10_000_000).max(10_000_000) }))
+    .transform((items) => items.filter((i) => i.amountCents !== 0))
+    .refine((items) => items.length >= 1 && items.length <= 200, 'between 1 and 200 items'),
+  taxCents: z.number().int().min(0).max(10_000_000),
+  tipCents: z.number().int().min(0).max(10_000_000),
+  feesCents: z.number().int().min(0).max(10_000_000),
+  totalCents: z.number().int().min(0).max(100_000_000).nullable(),
+});
+export type ReceiptReadOutput = z.infer<typeof ReceiptReadOutput>;
