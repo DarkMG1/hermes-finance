@@ -6,10 +6,11 @@ export type TxnRow = {
   id: string; account_id: string; source: 'plaid' | 'manual' | 'actual' | 'applecard'; date: string; amount_cents: number;
   bank_description: string; merchant_name: string | null; pending: number; category_id: string | null;
   payee: string | null; notes: string | null; person_id: string | null; paid_by_person_id: string | null; repayment_dismissed: number;
+  reconciled_at: string | null; reconciled_cents: number | null;
 };
 
 export const TXN_COLS = 'id, account_id, source, date, amount_cents, bank_description, merchant_name, pending, category_id, payee, notes, person_id, '
-  + 'paid_by_person_id, repayment_dismissed';
+  + 'paid_by_person_id, repayment_dismissed, reconciled_at, reconciled_cents';
 
 export function rowToTransaction(db: Db, r: TxnRow): Transaction {
   const lines = db.prepare('SELECT id, amount_cents, category_id, notes, person_id, payee FROM split_lines WHERE transaction_id = ? ORDER BY id').all(r.id) as
@@ -21,6 +22,8 @@ export function rowToTransaction(db: Db, r: TxnRow): Transaction {
     id: r.id, accountId: r.account_id, source: r.source, date: r.date, amountCents: r.amount_cents,
     payee: r.payee ?? r.merchant_name ?? r.bank_description, bankDescription: r.bank_description,
     merchantName: r.merchant_name, pending: r.pending === 1, categoryId: r.category_id, notes: r.notes, personId: r.person_id, paidByPersonId: r.paid_by_person_id, repaymentDismissed: r.repayment_dismissed === 1, splitLines,
+    reconciled: r.reconciled_at !== null && r.reconciled_cents === r.amount_cents,
+    hasReceipt: db.prepare('SELECT 1 FROM receipts WHERE transaction_id = ?').get(r.id) !== undefined,
   };
 }
 

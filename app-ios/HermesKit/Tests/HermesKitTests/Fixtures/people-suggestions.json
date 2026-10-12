@@ -15,7 +15,9 @@
       "personId": null,
       "paidByPersonId": null,
       "repaymentDismissed": false,
-      "splitLines": []
+      "splitLines": [],
+      "reconciled": false,
+      "hasReceipt": false
     },
     "personId": "person-1"
   }

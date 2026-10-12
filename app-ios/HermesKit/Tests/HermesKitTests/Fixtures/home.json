@@ -16,7 +16,9 @@
       "personId": null,
       "paidByPersonId": null,
       "repaymentDismissed": false,
-      "splitLines": []
+      "splitLines": [],
+      "reconciled": false,
+      "hasReceipt": false
     },
     {
       "id": "txn-2",
@@ -33,7 +35,9 @@
       "personId": null,
       "paidByPersonId": null,
       "repaymentDismissed": false,
-      "splitLines": []
+      "splitLines": [],
+      "reconciled": false,
+      "hasReceipt": false
     },
     {
       "id": "txn-3",
@@ -67,7 +71,9 @@
           "personId": "person-1",
           "payee": null
         }
-      ]
+      ],
+      "reconciled": false,
+      "hasReceipt": false
     },
     {
       "id": "txn-4",
@@ -84,7 +90,9 @@
       "personId": "person-1",
       "paidByPersonId": null,
       "repaymentDismissed": false,
-      "splitLines": []
+      "splitLines": [],
+      "reconciled": false,
+      "hasReceipt": false
     },
     {
       "id": "txn-5",
@@ -101,7 +109,9 @@
       "personId": null,
       "paidByPersonId": null,
       "repaymentDismissed": false,
-      "splitLines": []
+      "splitLines": [],
+      "reconciled": false,
+      "hasReceipt": false
     },
     {
       "id": "txn-6",
@@ -118,7 +128,9 @@
       "personId": null,
       "paidByPersonId": "person-1",
       "repaymentDismissed": false,
-      "splitLines": []
+      "splitLines": [],
+      "reconciled": false,
+      "hasReceipt": false
     }
   ],
   "reconnect": [

@@ -30,6 +30,9 @@ export const Transaction = z.object({
   id: Id, accountId: Id, source: z.enum(['plaid', 'manual', 'actual', 'applecard']), date: DateStr,
   amountCents: Cents, payee: z.string(), bankDescription: z.string(), merchantName: z.string().nullable(),
   pending: z.boolean(), categoryId: Id.nullable(), notes: z.string().nullable(), personId: Id.nullable(), paidByPersonId: Id.nullable(), repaymentDismissed: z.boolean(), splitLines: z.array(SplitLine),
+  /** Marked reconciled and the bank amount unchanged since. */
+  reconciled: z.boolean(),
+  hasReceipt: z.boolean(),
 });
 export type Transaction = z.infer<typeof Transaction>;
 
