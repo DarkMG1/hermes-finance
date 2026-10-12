@@ -1,6 +1,7 @@
 import type { Holding, HoldingAccount, Investments, NetWorthHistory, NetWorthQuery } from '@hermes/shared';
 import type { Db } from './db.ts';
 import type { Deps } from './deps.ts';
+import { holdingKey } from './backfill.ts';
 import { addDays } from './days.ts';
 import { localDay, MONTHS, minusMonths, nextDay } from './networth.ts';
 import { PlaidError, type PlaidHoldings, type PlaidSecurity } from './plaid/port.ts';
@@ -13,11 +14,7 @@ const cents = (dollars: number): number => {
   return c === 0 ? 0 : c; // avoid -0
 };
 
-/** Holdings of one ticker combine across accounts; every cash position is one "Cash" holding, keyed `_cash` (no ticker has an underscore). */
-export function holdingKey(s: { securityId: string; ticker: string | null; type: string | null; isCash: number | boolean }): string {
-  if (s.isCash === true || s.isCash === 1 || s.type === 'cash') return '_cash';
-  return s.ticker ? s.ticker.toUpperCase() : s.securityId;
-}
+export { holdingKey } from './backfill.ts';
 
 function upsertSecurities(db: Db, securities: PlaidSecurity[], nowIso: string): void {
   const upsertSecurity = db.prepare(`

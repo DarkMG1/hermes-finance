@@ -261,14 +261,14 @@ test('investments history uses only investment accounts', () => {
   seedAccount(deps.db, { id: 'chk', balanceCents: 5000 });
   seedAccount(deps.db, { id: 'inv', type: 'investment', balanceCents: 3000 });
   seedAccount(deps.db, { id: 'loan', type: 'loan', balanceCents: 1000 });
-  assert.deepEqual(getNetWorth(deps.db, 'all', '2026-03-15', 'investment'),
+  assert.deepEqual(getNetWorth(deps.db, 'all', '2026-03-15', { type: 'investment' }),
     { points: [], currentCents: 3000, changeCents: 0, estimatedThrough: null }, 'no snapshots: the live investment total');
   const snap = deps.db.prepare('INSERT INTO balance_snapshots (account_id, date, balance_cents) VALUES (?, ?, ?)');
   snap.run('chk', '2026-03-13', 5000);
   snap.run('inv', '2026-03-14', 2800);
   snap.run('inv', '2026-03-15', 3000);
   deps.db.prepare("INSERT INTO transactions (id, account_id, source, date, amount_cents, created_at, updated_at) VALUES ('t1', 'chk', 'manual', '2026-03-01', 100, 's', 's')").run();
-  const h = getNetWorth(deps.db, 'all', '2026-03-15', 'investment');
+  const h = getNetWorth(deps.db, 'all', '2026-03-15', { type: 'investment' });
   assert.deepEqual(h.points, [{ date: '2026-03-14', netWorthCents: 2800 }, { date: '2026-03-15', netWorthCents: 3000 }]);
   assert.equal(h.estimatedThrough, null);
 });

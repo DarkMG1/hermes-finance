@@ -9,7 +9,7 @@ import { parseBody } from '../validate.ts';
 export function investmentRoutes(app: FastifyInstance, deps: Deps): void {
   const { db } = deps;
   app.get('/v1/investments', async () => getInvestments(db));
-  app.get('/v1/investments/history', async (req) => getNetWorth(db, parseBody(NetWorthQuery, req.query).range, localDay(deps.now()), 'investment'));
+  app.get('/v1/investments/history', async (req) => getNetWorth(db, parseBody(NetWorthQuery, req.query).range, localDay(deps.now()), { type: 'investment' }));
   // the key travels in the query: it can hold any character, '/' included
   app.get('/v1/investments/holding-history', async (req) => {
     const { key, range } = parseBody(HoldingHistoryQuery, req.query);
