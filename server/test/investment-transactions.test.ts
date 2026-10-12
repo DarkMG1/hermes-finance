@@ -27,7 +27,7 @@ function setup(): { deps: Deps; plaid: FakePlaid } {
 
 const rows = (deps: Deps) => deps.db.prepare('SELECT id, security_id, date, quantity, amount_cents, price_cents FROM investment_transactions ORDER BY id').all();
 
-test('the first fetch asks for 730 days, later ones for 30, and rows upsert', async () => {
+test('every fetch asks for 730 days, and rows upsert', async () => {
   const { deps, plaid } = setup();
   await syncItem(deps, 'i1');
   assert.deepEqual(plaid.investmentTxnCalls, [['2024-03-15', '2026-03-15']]);
@@ -38,7 +38,7 @@ test('the first fetch asks for 730 days, later ones for 30, and rows upsert', as
   assert.equal((deps.db.prepare("SELECT ticker FROM securities WHERE id = 'sold'").get() as { ticker: string }).ticker, 'SYNS');
   plaid.investmentTxns.transactions[0] = { ...plaid.investmentTxns.transactions[0]!, quantity: 4, amount: 330 };
   await syncItem(deps, 'i1');
-  assert.deepEqual(plaid.investmentTxnCalls[1], ['2026-02-13', '2026-03-15']);
+  assert.deepEqual(plaid.investmentTxnCalls[1], ['2024-03-15', '2026-03-15']);
   assert.equal((rows(deps) as { quantity: number }[])[0]!.quantity, 4);
   assert.equal((rows(deps) as unknown[]).length, 2);
 });
@@ -58,11 +58,3 @@ test('no transactions fetch without a successful holdings fetch', async () => {
   assert.deepEqual(plaid.investmentTxnCalls, []);
 });
 
-test('an account with no stored transactions gets 730 days even when another has some', async () => {
-  const { deps, plaid } = setup();
-  plaid.accounts = [BROKERAGE, { ...BROKERAGE, accountId: 'pinv2', name: 'Synthetic Retirement', mask: '0003' }];
-  await syncItem(deps, 'i1');
-  // pinv has rows after the first sync, pinv2 none: the second fetch goes back 730 days again (30 would start 2026-02-13)
-  await syncItem(deps, 'i1');
-  assert.deepEqual(plaid.investmentTxnCalls, [['2024-03-15', '2026-03-15'], ['2024-03-15', '2026-03-15']]);
-});

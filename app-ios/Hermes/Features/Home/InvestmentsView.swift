@@ -8,8 +8,6 @@ struct InvestmentsView: View {
     @State private var holdings: LoadState<Investments> = .loading
     @State private var history: LoadState<NetWorthHistory> = .loading
     @State private var scrubbed: Date?
-    /// The range and selection the shown history was read for; a spinner shows only when either changes.
-    @State private var loadedKey: String?
     /// Empty = all accounts. Per visit, not remembered.
     @State private var selected: Set<String> = []
 
@@ -49,7 +47,6 @@ struct InvestmentsView: View {
         }
         .task(id: selected) { await loadHoldings() }
         .task(id: historyKey) {
-            if loadedKey != historyKey { history = .loading }
             scrubbed = nil
             await loadHistory()
         }
@@ -66,23 +63,40 @@ struct InvestmentsView: View {
     private var accountChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Space.s) {
-                ForEach(investmentAccounts) { account in
-                    Button { toggle(account.id) } label: {
-                        FilterChip(title: account.name, active: selected.contains(account.id))
+                Menu {
+                    Toggle("All accounts", isOn: Binding(get: { selected.isEmpty }, set: { if $0 { select([]) } }))
+                    Divider()
+                    ForEach(investmentAccounts) { account in
+                        Toggle(account.name, isOn: Binding(get: { selected.contains(account.id) }, set: { on in
+                            var next = selected
+                            if on { next.insert(account.id) } else { next.remove(account.id) }
+                            select(next)
+                        }))
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(selected.contains(account.id) ? .isSelected : [])
-                    .accessibilityHint("Shows only this account")
+                } label: {
+                    FilterChip(title: accountsTitle, active: !selected.isEmpty, showsMenu: true)
                 }
+                // stays open so several accounts can be ticked in one go
+                .menuActionDismissBehavior(.disabled)
             }
             .padding(.vertical, Space.xs)
         }
     }
 
-    private func toggle(_ id: String) {
-        if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
-        // the old rows would open with the new filter: spinner until the new selection loads
+    private var accountsTitle: String {
+        switch selected.count {
+        case 0: "Account"
+        case 1: investmentAccounts.first { selected.contains($0.id) }?.name ?? "Account"
+        default: "\(selected.count) accounts"
+        }
+    }
+
+    private func select(_ ids: Set<String>) {
+        guard ids != selected else { return }
+        selected = ids
+        // the old rows and chart belong to the old selection: spinners until the new one loads
         holdings = .loading
+        history = .loading
     }
 
     /// While dragging, the header shows the chosen day's total instead of today's.
@@ -134,11 +148,9 @@ struct InvestmentsView: View {
                                          as: NetWorthHistory.self)
             guard !Task.isCancelled, requested == historyKey else { return }
             history = .loaded(loaded)
-            loadedKey = requested
         } catch {
             guard !Task.isCancelled, requested == historyKey else { return }
             history = .failed(errorMessage(error))
-            loadedKey = requested
         }
     }
 }

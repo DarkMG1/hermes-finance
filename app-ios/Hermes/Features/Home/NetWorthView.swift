@@ -7,7 +7,6 @@ struct NetWorthView: View {
     @State private var range = NetWorthRange.month
     @State private var state: LoadState<NetWorthHistory> = .loading
     @State private var scrubbed: Date?
-    @State private var loadedRange: NetWorthRange?
 
     var body: some View {
         Screen(title: "Net worth") {
@@ -31,7 +30,6 @@ struct NetWorthView: View {
             }
         }
         .task(id: range) {
-            if loadedRange != range { state = .loading }
             scrubbed = nil
             await load()
         }
@@ -71,11 +69,9 @@ struct NetWorthView: View {
             let loaded = try await reader.read("/v1/net-worth", query: requested.queryItems, as: NetWorthHistory.self)
             guard !Task.isCancelled, requested == range else { return }
             state = .loaded(loaded)
-            loadedRange = requested
         } catch {
             guard !Task.isCancelled, requested == range else { return }
             state = .failed(errorMessage(error))
-            loadedRange = requested
         }
     }
 }

@@ -9,7 +9,6 @@ struct HoldingView: View {
     @State private var range = NetWorthRange.month
     @State private var history: LoadState<NetWorthHistory> = .loading
     @State private var scrubbed: Date?
-    @State private var loadedRange: NetWorthRange?
 
     /// The Investments chips' selection; empty = all accounts.
     let accountIds: Set<String>
@@ -48,7 +47,6 @@ struct HoldingView: View {
         }
         .task { await loadHolding() }
         .task(id: range) {
-            if loadedRange != range { history = .loading }
             scrubbed = nil
             await load()
         }
@@ -98,11 +96,9 @@ struct HoldingView: View {
             let loaded = try await reader.read("/v1/investments/holding-history", query: query, as: NetWorthHistory.self)
             guard !Task.isCancelled, requested == range else { return }
             history = .loaded(loaded)
-            loadedRange = requested
         } catch {
             guard !Task.isCancelled, requested == range else { return }
             history = .failed(errorMessage(error))
-            loadedRange = requested
         }
     }
 }
