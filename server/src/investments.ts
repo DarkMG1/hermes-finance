@@ -26,15 +26,12 @@ function upsertSecurities(db: Db, securities: PlaidSecurity[], nowIso: string): 
   }
 }
 
-/** Stores the item's investment transactions: 730 days while any of its accounts has none stored, else the last 30 (Plaid corrects recent ones). Never throws. */
+/** Stores the item's last 730 days of investment transactions on every sync, so older ones Plaid makes available later still arrive. Never throws. */
 export async function syncInvestmentTransactions(deps: Deps, itemId: string, token: string, accountIds: Map<string, string>): Promise<void> {
   const { db } = deps;
   try {
-    // an account with nothing stored yet (new, or added to the item later) needs the full 730 days
-    const hasRows = db.prepare('SELECT 1 FROM investment_transactions WHERE account_id = ? LIMIT 1');
-    const full = [...accountIds.values()].some((id) => hasRows.get(id) === undefined);
     const today = localDay(deps.now());
-    const data = await deps.plaid.investmentsTransactionsGet(token, addDays(today, full ? -730 : -30), today);
+    const data = await deps.plaid.investmentsTransactionsGet(token, addDays(today, -730), today);
     const nowIso = deps.now().toISOString();
     db.transaction(() => {
       upsertSecurities(db, data.securities, nowIso);

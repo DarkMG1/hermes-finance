@@ -158,25 +158,14 @@ struct HomeView: View {
         }
     }
 
-    /// Showing needs Face ID wherever the hardware exists, even with the app lock off: hiding guards a glance at the screen.
     private func showBalances() async {
-        guard AppLock.hasBiometricHardware else {
-            hideBalances = false
-            return
-        }
         guard !showingBalances else { return }
         showingBalances = true
         defer { showingBalances = false }
         showBalancesError = nil
-        switch await lock.confirmOwnerInApp(reason: "Show balances") {
-        case .confirmed: hideBalances = false
-        case .failed(let message):
-            showBalancesError = message
-            if let message { AccessibilityNotification.Announcement(message).post() }
-        case .facesChanged:
-            UserDefaults.standard.set(true, forKey: "faceIDChanged")
-            model.disconnect()
-        }
+        let check = await confirmShowBalances(lock: lock, model: model)
+        if check.shown { hideBalances = false }
+        showBalancesError = check.error
     }
 
     private func load() async {
@@ -192,5 +181,21 @@ struct HomeView: View {
             guard !Task.isCancelled else { return }
             state = .failed(errorMessage(error))
         }
+    }
+}
+
+/// Showing hidden amounts needs Face ID wherever the hardware exists, even with the app lock off: hiding guards a glance at the screen.
+/// A changed face set signs out. `error` is the failure to show, if any.
+@MainActor func confirmShowBalances(lock: AppLock, model: AppModel) async -> (shown: Bool, error: String?) {
+    guard AppLock.hasBiometricHardware else { return (true, nil) }
+    switch await lock.confirmOwnerInApp(reason: "Show balances") {
+    case .confirmed: return (true, nil)
+    case .failed(let message):
+        if let message { AccessibilityNotification.Announcement(message).post() }
+        return (false, message)
+    case .facesChanged:
+        UserDefaults.standard.set(true, forKey: "faceIDChanged")
+        model.disconnect()
+        return (false, nil)
     }
 }

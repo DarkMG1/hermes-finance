@@ -7,6 +7,7 @@ struct HistoryChart: View {
     let points: [NetWorthPoint]
     @Binding var scrubbed: Date?
     @AppStorage("hideBalances") private var hideBalances = true
+    @Environment(\.balancesRevealed) private var revealed
 
     var body: some View {
         let floor = Double(points.map(\.netWorthCents).min() ?? 0) / 100
@@ -29,8 +30,8 @@ struct HistoryChart: View {
             }
         }
         .chartYScale(domain: .automatic(includesZero: false))
-        .chartYAxis(hideBalances ? .hidden : .automatic)
-        .accessibilityHidden(hideBalances)
+        .chartYAxis(hideBalances && !revealed ? .hidden : .automatic)
+        .accessibilityHidden(hideBalances && !revealed)
         .chartXSelection(value: $scrubbed)
         .frame(height: Space.xxl * 7)
     }

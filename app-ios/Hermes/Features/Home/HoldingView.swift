@@ -5,19 +5,25 @@ struct HoldingView: View {
     /// Starts as the tapped row; each load replaces it with the server's latest.
     @State private var holding: Holding
     @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.selectedTab) private var selectedTab
     @AppStorage("hideBalances") private var hideBalances = true
     @State private var range = NetWorthRange.month
     @State private var history: LoadState<NetWorthHistory> = .loading
     @State private var scrubbed: Date?
-    @State private var loadedRange: NetWorthRange?
 
     /// The Investments chips' selection; empty = all accounts.
     let accountIds: Set<String>
+    /// Investments' eye: amounts shown on that visit show here too.
+    @Binding var revealed: Bool
 
-    init(holding: Holding, accountIds: Set<String> = []) {
+    init(holding: Holding, accountIds: Set<String> = [], revealed: Binding<Bool> = .constant(false)) {
         _holding = State(initialValue: holding)
         self.accountIds = accountIds
+        _revealed = revealed
     }
+
+    private var hidden: Bool { hideBalances && !revealed }
 
     var body: some View {
         Screen(title: holding.ticker ?? holding.name) {
@@ -39,16 +45,19 @@ struct HoldingView: View {
             Card {
                 Text("Accounts").textStyle(.headline)
                 ForEach(holding.accounts) { account in
-                    ListRow(title: account.accountName, subtitle: holding.isCash || hideBalances ? nil : "\(sharesText(account.quantity)) shares") {
+                    ListRow(title: account.accountName, subtitle: holding.isCash || hidden ? nil : "\(sharesText(account.quantity)) shares") {
                         MoneyText(cents: account.valueCents, colored: false, negativeIsLoss: true)
-                            .redacted(reason: hideBalances ? .placeholder : [])
+                            .redacted(reason: hidden ? .placeholder : [])
                     }
                 }
             }
         }
+        .environment(\.balancesRevealed, revealed)
+        .onChange(of: scenePhase) { _, phase in if phase == .background { revealed = false } }
+        .onChange(of: selectedTab) { revealed = false }
         .task { await loadHolding() }
         .task(id: range) {
-            if loadedRange != range { history = .loading }
+            if case .failed = history { history = .loading }
             scrubbed = nil
             await load()
         }
@@ -71,21 +80,21 @@ struct HoldingView: View {
         if case .loaded(let loaded) = history, let point = HistoryChart.point(at: scrubbed, in: loaded.value.points) {
             Text(DayText.display(point.date)).textStyle(.subhead, color: Palette.secondaryText)
             MoneyText(cents: point.netWorthCents, style: .display, colored: false, negativeIsLoss: true)
-                .redacted(reason: hideBalances ? .placeholder : [])
+                .redacted(reason: hidden ? .placeholder : [])
         } else {
             Text(holding.name).textStyle(.subhead, color: Palette.secondaryText)
             MoneyText(cents: holding.valueCents, style: .display, colored: false, negativeIsLoss: true)
-                .redacted(reason: hideBalances ? .placeholder : [])
+                .redacted(reason: hidden ? .placeholder : [])
             GainText(gainCents: holding.isCash ? nil : holding.gainCents, percent: holding.gainPercent)
             if let price = holding.priceCents {
                 LabeledContent("Price") { MoneyText(cents: price, colored: false) }
                     .textStyle(.body)
-                    .redacted(reason: hideBalances ? .placeholder : [])
+                    .redacted(reason: hidden ? .placeholder : [])
             }
             if let cost = holding.costBasisCents, !holding.isCash {
                 LabeledContent("Total cost") { MoneyText(cents: cost, colored: false) }
                     .textStyle(.body)
-                    .redacted(reason: hideBalances ? .placeholder : [])
+                    .redacted(reason: hidden ? .placeholder : [])
             }
         }
     }
@@ -98,11 +107,9 @@ struct HoldingView: View {
             let loaded = try await reader.read("/v1/investments/holding-history", query: query, as: NetWorthHistory.self)
             guard !Task.isCancelled, requested == range else { return }
             history = .loaded(loaded)
-            loadedRange = requested
         } catch {
             guard !Task.isCancelled, requested == range else { return }
             history = .failed(errorMessage(error))
-            loadedRange = requested
         }
     }
 }

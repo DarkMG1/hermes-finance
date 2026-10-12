@@ -3,20 +3,26 @@ import SwiftUI
 
 struct InvestmentsView: View {
     @Environment(AppModel.self) private var model
+    @Environment(AppLock.self) private var lock
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.selectedTab) private var selectedTab
     @AppStorage("hideBalances") private var hideBalances = true
     @State private var range = NetWorthRange.month
     @State private var holdings: LoadState<Investments> = .loading
     @State private var history: LoadState<NetWorthHistory> = .loading
     @State private var scrubbed: Date?
-    /// The range and selection the shown history was read for; a spinner shows only when either changes.
-    @State private var loadedKey: String?
     /// Empty = all accounts. Per visit, not remembered.
     @State private var selected: Set<String> = []
+    /// This screen's eye: shows amounts here (and in holdings opened from here) only, until leaving or going to the background.
+    @State private var revealed = false
+    @State private var revealing = false
+    @State private var revealError: String?
 
     var body: some View {
         Screen(title: "Investments") {
             // outside the holdings state, so the chips stay usable while loading or offline
             if investmentAccounts.count > 1 { accountChips }
+            if let revealError { Text(revealError).textStyle(.caption, color: Palette.secondaryText) }
             // swiftlint:disable:next multiple_closures_with_trailing_closure
             LoadingContent(state: holdings, retry: { Task { await loadHoldings() } }) { loaded in
                 LastUpdated(loaded: loaded)
@@ -39,7 +45,7 @@ struct InvestmentsView: View {
                     Card {
                         Text("Holdings").textStyle(.headline)
                         ForEach(investments.holdings) { holding in
-                            NavigationLink { HoldingView(holding: holding, accountIds: selected) } label: { row(holding) }
+                            NavigationLink { HoldingView(holding: holding, accountIds: selected, revealed: $revealed) } label: { row(holding) }
                                 .buttonStyle(.plain)
                             if holding.id != investments.holdings.last?.id { Divider().overlay(Palette.separator) }
                         }
@@ -47,9 +53,15 @@ struct InvestmentsView: View {
                 }
             }
         }
+        .environment(\.balancesRevealed, revealed)
+        .onChange(of: scenePhase) { _, phase in if phase == .background { revealed = false } }
+        // tabs keep this screen alive: switching away counts as leaving
+        .onChange(of: selectedTab) { revealed = false }
         .task(id: selected) { await loadHoldings() }
+        // an account hidden elsewhere would stay in the filter with no chip left to clear it
+        .onChange(of: investmentAccounts.map(\.id)) { _, ids in select(selected.intersection(ids)) }
         .task(id: historyKey) {
-            if loadedKey != historyKey { history = .loading }
+            if case .failed = history { history = .loading }
             scrubbed = nil
             await loadHistory()
         }
@@ -59,6 +71,18 @@ struct InvestmentsView: View {
         }
     }
 
+    private var hidden: Bool { hideBalances && !revealed }
+
+    private func reveal() async {
+        guard !revealing else { return }
+        revealing = true
+        defer { revealing = false }
+        revealError = nil
+        let check = await confirmShowBalances(lock: lock, model: model)
+        revealed = check.shown
+        revealError = check.error
+    }
+
     private var investmentAccounts: [Account] { model.accounts.filter { $0.type == "investment" && !$0.hidden } }
 
     private var historyKey: String { "\(range.rawValue)|\(selected.sorted())" }
@@ -66,47 +90,88 @@ struct InvestmentsView: View {
     private var accountChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: Space.s) {
-                ForEach(investmentAccounts) { account in
-                    Button { toggle(account.id) } label: {
-                        FilterChip(title: account.name, active: selected.contains(account.id))
+                Menu {
+                    Toggle("All accounts", isOn: Binding(get: { selected.isEmpty }, set: { if $0 { select([]) } }))
+                    Divider()
+                    ForEach(investmentAccounts) { account in
+                        Toggle(account.name, isOn: Binding(get: { selected.contains(account.id) }, set: { on in
+                            var next = selected
+                            if on { next.insert(account.id) } else { next.remove(account.id) }
+                            select(next)
+                        }))
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityAddTraits(selected.contains(account.id) ? .isSelected : [])
-                    .accessibilityHint("Shows only this account")
+                } label: {
+                    FilterChip(title: accountsTitle, active: !selected.isEmpty, showsMenu: true)
                 }
+                // stays open so several accounts can be ticked in one go
+                .menuActionDismissBehavior(.disabled)
             }
             .padding(.vertical, Space.xs)
         }
     }
 
-    private func toggle(_ id: String) {
-        if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
-        // the old rows would open with the new filter: spinner until the new selection loads
+    private var accountsTitle: String {
+        switch selected.count {
+        case 0: "Account"
+        case 1: investmentAccounts.first { selected.contains($0.id) }?.name ?? "Account"
+        default: "\(selected.count) accounts"
+        }
+    }
+
+    private func select(_ ids: Set<String>) {
+        guard ids != selected else { return }
+        selected = ids
+        // the old rows and chart belong to the old selection: spinners until the new one loads
         holdings = .loading
+        history = .loading
     }
 
     /// While dragging, the header shows the chosen day's total instead of today's.
     @ViewBuilder private func header(_ investments: Investments) -> some View {
         if case .loaded(let loadedHistory) = history, let point = HistoryChart.point(at: scrubbed, in: loadedHistory.value.points) {
-            Text(DayText.display(point.date)).textStyle(.subhead, color: Palette.secondaryText)
+            HStack {
+                Text(DayText.display(point.date)).textStyle(.subhead, color: Palette.secondaryText)
+                Spacer()
+                eyeButton
+            }
             MoneyText(cents: point.netWorthCents, style: .display, colored: false, negativeIsLoss: true)
-                .redacted(reason: hideBalances ? .placeholder : [])
+                .redacted(reason: hidden ? .placeholder : [])
         } else {
-            Text("Investments").textStyle(.subhead, color: Palette.secondaryText)
+            HStack {
+                Text("Investments").textStyle(.subhead, color: Palette.secondaryText)
+                Spacer()
+                eyeButton
+            }
             MoneyText(cents: investments.totalCents, style: .display, colored: false, negativeIsLoss: true)
-                .redacted(reason: hideBalances ? .placeholder : [])
+                .redacted(reason: hidden ? .placeholder : [])
             GainText(gainCents: investments.gainCents, percent: investments.gainPercent)
         }
     }
 
+    /// Top right of the header card, like Home's net worth card.
+    private var eyeButton: some View {
+        Button {
+            if hidden {
+                Task { await reveal() }
+            } else {
+                revealed = false
+                hideBalances = true
+                revealError = nil
+            }
+        } label: {
+            Image(systemName: hidden ? "eye" : "eye.slash")
+        }
+        .accessibilityLabel(hidden ? "Show balances" : "Hide balances")
+    }
+
     private func row(_ holding: Holding) -> some View {
         // share counts are amounts: hidden with balances
-        let shares = holding.isCash || hideBalances ? nil : "\(sharesText(holding.quantity)) shares"
+        let shares = holding.isCash || hidden ? nil : "\(sharesText(holding.quantity)) shares"
         let subtitle = [holding.ticker, shares].compactMap { $0 }.joined(separator: " · ")
         return ListRow(title: holding.name, subtitle: subtitle.isEmpty ? nil : subtitle) {
             VStack(alignment: .trailing, spacing: Space.xs) {
                 MoneyText(cents: holding.valueCents, colored: false, negativeIsLoss: true)
-                    .redacted(reason: hideBalances ? .placeholder : [])
+                    .redacted(reason: hidden ? .placeholder : [])
                 GainText(gainCents: holding.isCash ? nil : holding.gainCents, percent: nil)
             }
             Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText)
@@ -134,11 +199,9 @@ struct InvestmentsView: View {
                                          as: NetWorthHistory.self)
             guard !Task.isCancelled, requested == historyKey else { return }
             history = .loaded(loaded)
-            loadedKey = requested
         } catch {
             guard !Task.isCancelled, requested == historyKey else { return }
             history = .failed(errorMessage(error))
-            loadedKey = requested
         }
     }
 }
@@ -157,18 +220,20 @@ struct GainText: View {
     let gainCents: Int?
     let percent: Double?
     @AppStorage("hideBalances") private var hideBalances = true
+    @Environment(\.balancesRevealed) private var revealed
 
     var body: some View {
+        let hidden = hideBalances && !revealed
         if let gainCents {
             HStack(spacing: Space.s) {
-                MoneyText(cents: gainCents, colored: !hideBalances, negativeIsLoss: !hideBalances)
+                MoneyText(cents: gainCents, colored: !hidden, negativeIsLoss: !hidden)
                 if let percent {
                     Text(percent.formatted(.percent.precision(.fractionLength(1))))
-                        .textStyle(.subhead, color: hideBalances ? Palette.text : gainColor(gainCents))
-                        .accessibilityHidden(hideBalances)
+                        .textStyle(.subhead, color: hidden ? Palette.text : gainColor(gainCents))
+                        .accessibilityHidden(hidden)
                 }
             }
-            .redacted(reason: hideBalances ? .placeholder : [])
+            .redacted(reason: hidden ? .placeholder : [])
         }
     }
 }
