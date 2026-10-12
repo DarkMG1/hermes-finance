@@ -16,6 +16,7 @@ struct TheyPaidSheet: View {
     @State private var notes = ""
     @State private var totalText = ""
     @State private var justMineText = ""
+    @State private var justTheirsText = ""
     @State private var writes = WriteGuard()
     @State private var error: String?
     @State private var busy = false
@@ -30,13 +31,15 @@ struct TheyPaidSheet: View {
                 DatePicker("Date", selection: $date, displayedComponents: .date)
                 Field(label: "Total") { TextField("0.00", text: $totalText).keyboardType(.decimalPad) }
                 Field(label: "Just mine") { TextField("0.00", text: $justMineText).keyboardType(.decimalPad) }
+                Field(label: "Just theirs") { TextField("0.00", text: $justTheirsText).keyboardType(.decimalPad) }
                 NavigationLink { CategoryPicker(selection: $categoryId) } label: {
                     LabeledContent("Category", value: model.categoryName(categoryId))
                 }
                 NotesField(text: $notes, error: error)
             } footer: {
                 if let share, let total = Money.parse(totalText) {
-                    Text("Your share: \(Money.format(share)) (\(Money.format(justMine ?? 0)) + half of \(Money.format(total - (justMine ?? 0))))")
+                    let shared = total - (justMine ?? 0) - (justTheirs ?? 0)
+                    Text("Your share: \(Money.format(share)) (\(Money.format(justMine ?? 0)) + half of \(Money.format(shared)))")
                 }
             }
             .disabled(writes.unresolved)
@@ -44,10 +47,11 @@ struct TheyPaidSheet: View {
     }
 
     private var justMine: Int? { justMineText.isEmpty ? 0 : Money.parse(justMineText) }
+    private var justTheirs: Int? { justTheirsText.isEmpty ? 0 : Money.parse(justTheirsText) }
 
     private var share: Int? {
-        guard let total = Money.parse(totalText), let justMine else { return nil }
-        return SharedCost.yourShare(totalCents: total, justMineCents: justMine)
+        guard let total = Money.parse(totalText), let justMine, let justTheirs else { return nil }
+        return SharedCost.yourShare(totalCents: total, justMineCents: justMine, justTheirsCents: justTheirs)
     }
 
     private var request: CreateTransactionBody? {

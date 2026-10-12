@@ -8,8 +8,8 @@ struct ExpensesView: View {
     let query: ExpensesQuery
     /// The number tapped on Spending, shown before every page has loaded.
     let total: Int
-    /// Spending's totals change too after an edit.
-    let onChange: () async -> Void
+    /// Spending's totals change too after an edit; it answers with this screen's new total.
+    let onChange: () async -> Int?
 
     @State private var rows: [ExpenseRow] = []
     @State private var cursor: String?
@@ -19,6 +19,7 @@ struct ExpensesView: View {
     @State private var generation = 0
     @State private var opened: Opened?
     @State private var openGeneration = 0
+    @State private var reloadedTotal: Int?
 
     private enum Opened: Identifiable {
         case transaction(LedgerTransaction)
@@ -38,7 +39,7 @@ struct ExpensesView: View {
         List {
             Group {
                 Text(query.period.title).textStyle(.subhead, color: Palette.secondaryText)
-                LabeledContent("Total") { MoneyText(cents: total, colored: false) }
+                LabeledContent("Total") { MoneyText(cents: reloadedTotal ?? total, colored: false) }
                 if let lastLoad { LastUpdated(loaded: lastLoad) }
                 InlineError(message: error)
                 ForEach(rows) { row in
@@ -77,7 +78,7 @@ struct ExpensesView: View {
 
     private func changed() async {
         await load(reset: true)
-        await onChange()
+        if let fresh = await onChange() { reloadedTotal = fresh }
     }
 
     /// Rows carry ids only, so the transaction is read fresh; a split difference opens the split editor to fix it.

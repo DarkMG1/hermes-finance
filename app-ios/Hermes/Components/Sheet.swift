@@ -17,15 +17,12 @@ struct Sheet<Content: View>: View {
             ScrollViewReader { scroller in
                 Form { content.environment(\.sheetScroller, scroller) }
                     .themedForm()
+                    // swiping the form down closes any keyboard (the number pad has no return key); no keyboard bar:
+                    // on iOS 26 it is see-through but still takes taps meant for the field behind it
                     .scrollDismissesKeyboard(.interactively)
                     .navigationTitle(title)
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
-                        // the number pad has no return key, so give every keyboard a way out
-                        ToolbarItemGroup(placement: .keyboard) {
-                            Spacer()
-                            Button("Done") { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
-                        }
                         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { unresolved ? confirmingClose = true : onCancel() }.disabled(busy) }
                         if let onSave {
                             ToolbarItem(placement: .confirmationAction) {

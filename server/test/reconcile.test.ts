@@ -41,12 +41,12 @@ function seedAll(db: Db): void {
   seedSplit(db, { id: 's4', transactionId: 'split-mixed', amountCents: -300, categoryId: 'food' });
 }
 
-const EXPECTED = ['apple', 'plaid-food', 'roommate', 'spend', 'split-mixed', 'uncat'];
+const EXPECTED = ['apple', 'paid-by', 'plaid-food', 'roommate', 'spend', 'split-mixed', 'uncat'];
 
 const needing = (db: Db) =>
   (db.prepare(`SELECT t.id FROM transactions t WHERE ${NEEDS_RECONCILE} ORDER BY t.id`).all() as { id: string }[]).map((r) => r.id);
 
-test('needs reconciling: money out only, transfers, income, card payments, pending, removed, investments and paid-by rows left out', () => {
+test('needs reconciling: money out only, transfers, income, card payments, pending, removed, and investments left out; rows someone else paid count', () => {
   const { deps } = makeTestDeps();
   seedAll(deps.db);
   assert.deepEqual(needing(deps.db), EXPECTED);

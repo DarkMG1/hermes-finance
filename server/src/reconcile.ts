@@ -3,9 +3,9 @@ import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
 import { getTransaction, periodRange, rowToTransaction, TXN_COLS, type TxnRow } from './ledger.ts';
 
-// Money out the owner should look at once a month. Over alias `t` (transactions).
+// Money out the owner should look at once a month, including their share of what someone else paid. Over alias `t` (transactions).
 export const NEEDS_RECONCILE = `(
-  t.removed_at IS NULL AND t.pending = 0 AND t.amount_cents < 0 AND t.paid_by_person_id IS NULL
+  t.removed_at IS NULL AND t.pending = 0 AND t.amount_cents < 0
   AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id = t.account_id AND a.type = 'investment')
   AND (CASE
     WHEN EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)

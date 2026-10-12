@@ -123,6 +123,10 @@ func json(_ value: some Encodable) throws -> String {
     #expect(SharedCost.yourShare(totalCents: 0, justMineCents: 0) == nil)
     #expect(SharedCost.yourShare(totalCents: 100, justMineCents: 101) == nil)
     #expect(SharedCost.yourShare(totalCents: 100, justMineCents: -1) == nil)
+    #expect(SharedCost.yourShare(totalCents: 10000, justMineCents: 2000, justTheirsCents: 3000) == 4500)
+    #expect(SharedCost.yourShare(totalCents: 1000, justMineCents: 0, justTheirsCents: 1000) == 0)
+    #expect(SharedCost.yourShare(totalCents: 1000, justMineCents: 600, justTheirsCents: 401) == nil)
+    #expect(SharedCost.yourShare(totalCents: 1000, justMineCents: 0, justTheirsCents: -1) == nil)
 }
 
 @Test func balancePhrases() {

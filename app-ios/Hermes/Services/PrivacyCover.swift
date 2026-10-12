@@ -10,6 +10,8 @@ final class PrivacyCover {
     /// Bumped by every show and hide, so a fade that finishes after a newer show or hide can't touch the window.
     private var fadeToken = 0
     private var hiddenFromVoiceOver: [UIWindow] = []
+    /// The field that had the keyboard when the cover went up; it gets it back when the cover comes down unlocked.
+    private weak var editing: UIResponder?
 
     func show(locked: Bool, message: String?, unlock: @escaping () -> Void) {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
@@ -31,6 +33,9 @@ final class PrivacyCover {
             window.rootViewController = UIHostingController(rootView: cover)
         }
         // no keyboard may stay live under the cover, and VoiceOver must not reach the app beneath it
+        if editing == nil { editing = UIResponder.current }
+        // locked: Face ID comes first, and the keyboard stays closed after it
+        if locked { editing = nil }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         window.rootViewController?.view.accessibilityViewIsModal = true
         if let key = scene.keyWindow, key !== window { previousKey = key }
@@ -51,6 +56,9 @@ final class PrivacyCover {
         guard let window else { return }
         restoreVoiceOver()
         (previousKey ?? window.windowScene?.windows.first { $0 !== window })?.makeKey()
+        // a quick switch to another app (Venmo, say) and back keeps the cursor where it was
+        if let field = editing, (field as? UIView)?.window != nil { field.becomeFirstResponder() }
+        editing = nil
         fadeToken += 1
         let token = fadeToken
         UIView.animate(withDuration: 0.2) {
@@ -66,6 +74,19 @@ final class PrivacyCover {
         hiddenFromVoiceOver.forEach { $0.accessibilityElementsHidden = false }
         hiddenFromVoiceOver = []
     }
+}
+
+private extension UIResponder {
+    @MainActor private static weak var found: UIResponder?
+
+    /// The first responder, found by sending an action to nil (UIKit delivers it to the first responder).
+    @MainActor static var current: UIResponder? {
+        found = nil
+        UIApplication.shared.sendAction(#selector(captureFirstResponder), to: nil, from: nil, for: nil)
+        return found
+    }
+
+    @objc func captureFirstResponder() { UIResponder.found = self }
 }
 
 private struct CoverView: View {
