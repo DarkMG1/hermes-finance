@@ -20,3 +20,8 @@ struct MoneyText: View {
         return colored && cents > 0 ? Palette.gain : Palette.text
     }
 }
+
+extension EnvironmentValues {
+    /// A screen's own eye button showed its amounts while balances stay hidden elsewhere (Investments and the holdings opened from it).
+    @Entry var balancesRevealed = false
+}
