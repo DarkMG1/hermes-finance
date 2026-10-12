@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { loadAccountEstimate } from '../src/backfill.ts';
 import { getNetWorth } from '../src/networth.ts';
+import { getHoldingHistory } from '../src/investments.ts';
 import { makeTestDeps, seedAccount } from './helpers.ts';
 import type { Db } from '../src/db.ts';
 
@@ -18,9 +19,10 @@ const anchor = (db: Db, account: string, holdings: [string, number, number][]) =
     db.prepare("INSERT INTO holding_snapshots (account_id, security_id, date, quantity, value_cents) VALUES (?, ?, '2026-03-15', ?, ?)").run(account, sec, qty, cents);
   }
 };
-const txn = (db: Db, id: string, account: string, sec: string | null, date: string, qty: number, amountCents: number, priceCents: number | null, subtype = 'buy') =>
+const txn = (db: Db, id: string, account: string, sec: string | null, date: string, qty: number, amountCents: number, priceCents: number | null, subtype = 'buy',
+  type = subtype.includes('split') ? 'transfer' : 'buy') =>
   db.prepare('INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, price_cents, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(id, account, sec, date, subtype.includes('split') ? 'transfer' : 'buy', subtype, qty, amountCents, priceCents, 's');
+    .run(id, account, sec, date, type, subtype, qty, amountCents, priceCents, 's');
 const price = (db: Db, ticker: string, date: string, closeCents: number, split = 1) =>
   db.prepare('INSERT INTO security_prices (ticker, date, close_cents, split_factor) VALUES (?, ?, ?, ?)').run(ticker, date, closeCents, split);
 
@@ -208,4 +210,105 @@ test('a range window that starts inside the estimate', () => {
   assert.equal(h.points.length, 32);
   assert.equal(h.changeCents, 10000);
   assert.equal(h.estimatedThrough, '2026-03-14');
+});
+
+test('a sold-out position with no price is valued at its earliest trade price before the sale', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'inv', type: 'investment', balanceCents: 5000 });
+  securities(db);
+  anchor(db, 'inv', [['cash', 5000, 5000]]);
+  txn(db, 's1', 'inv', 'sc', '2026-03-12', -1, -10000, 10000, 'sell');
+  // 03-11: 1 sh (sold 03-12), no ticker, no trade on or before, not held at H → earliest trade 10000. cash 5000 − 10000 = −5000.
+  // 1 × 10000 − 5000 = 5000 (priced at 0 it would be −5000)
+  assert.equal(loadAccountEstimate(db, 'inv')!.valueOn('2026-03-11').totalCents, 5000);
+});
+
+test('a split only Plaid records is undone with its shares', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'inv', type: 'investment', balanceCents: 200000 });
+  securities(db);
+  anchor(db, 'inv', [['sb', 20, 200000]]);
+  txn(db, 'b1', 'inv', 'sb', '2026-03-11', 10, 200000, 20000);
+  txn(db, 's1', 'inv', 'sb', '2026-03-13', 10, 0, null, 'stock split');
+  // no SYNB closes. 03-12: 20 − 10 (split undone) = 10 sh × last trade 20000 = 200000 (kept: 20 × 20000 = 400000)
+  assert.equal(loadAccountEstimate(db, 'inv')!.valueOn('2026-03-12').totalCents, 200000);
+});
+
+test('a non-stock ticker is priced from trades, never from Tiingo', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'inv', type: 'investment', balanceCents: 20000 });
+  securities(db);
+  db.prepare("INSERT INTO securities (id, name, ticker, type, is_cash, updated_at) VALUES ('sx', 'Synthetic Coin', 'SYNX', 'cryptocurrency', 0, 'seed')").run();
+  anchor(db, 'inv', [['sx', 2, 20000]]);
+  txn(db, 'b1', 'inv', 'sx', '2026-03-12', 1, 8000, 8000);
+  price(db, 'SYNX', '2026-03-11', 99999);
+  // 03-12: 2 sh × last trade 8000 = 16000 (the unrelated close would give 2 × 99999 = 199998)
+  assert.equal(loadAccountEstimate(db, 'inv')!.valueOn('2026-03-12').totalCents, 16000);
+});
+
+test('an investment account with a balance but no holdings stays flat before its first snapshot', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'inv', type: 'investment', balanceCents: 50000 });
+  seedAccount(db, { id: 'chk', balanceCents: 1000 });
+  db.prepare("INSERT INTO holding_syncs (account_id, date) VALUES ('inv', '2026-03-15')").run();
+  db.prepare("INSERT INTO balance_snapshots (account_id, date, balance_cents) VALUES ('chk', '2026-03-13', 1000), ('inv', '2026-03-15', 50000)").run();
+  // no holdings at H: no estimate, so inv holds its first snapshot 50000 before S. 03-13, 03-14: 1000 + 50000 = 51000 (estimated: 1000 + 0)
+  assert.equal(loadAccountEstimate(db, 'inv'), null);
+  assert.deepEqual(getNetWorth(db, 'all', '2026-03-15').points.map((p) => p.netWorthCents), [51000, 51000, 51000]);
+});
+
+test('cash-security rows move cash unless they are sweeps', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'inv', type: 'investment', balanceCents: 250000 });
+  securities(db);
+  anchor(db, 'inv', [['sa', 10, 100000], ['cash', 150000, 150000]]);
+  price(db, 'SYNA', '2026-03-10', 10000);
+  txn(db, 'sw', 'inv', 'cash', '2026-03-14', 1000, 1000, 100, 'buy', 'buy');
+  txn(db, 'dp', 'inv', 'cash', '2026-03-13', 0, -100000, null, 'deposit', 'cash');
+  txn(db, 'ds', 'inv', 'cash', '2026-03-12', 0, -1000, 0, 'distribution', 'cash');
+  const est = loadAccountEstimate(db, 'inv')!;
+  // H cash 150000. 03-13: sweep (buy) ignored → 150000. 03-12: deposit undone → 50000. 03-11: distribution undone → 49000.
+  // (dropping all three: 150000 every day)
+  assert.deepEqual(['2026-03-11', '2026-03-12', '2026-03-13', '2026-03-14'].map((d) => est.valueOn(d).cashCents), [49000, 50000, 150000, 150000]);
+  // 03-11: 10 × 10000 + 49000; the cash security never becomes shares
+  assert.equal(est.valueOn('2026-03-11').totalCents, 149000);
+  assert.equal(est.valueOn('2026-03-11').bySecurity.has('cash'), false);
+});
+
+test('a contribution buys shares without spending held cash', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'inv', type: 'investment', balanceCents: 100000 });
+  securities(db);
+  anchor(db, 'inv', [['sa', 10, 100000]]);
+  price(db, 'SYNA', '2026-03-10', 10000);
+  txn(db, 'c1', 'inv', 'sa', '2026-03-12', 10, 100000, 10000, 'contribution');
+  const est = loadAccountEstimate(db, 'inv')!;
+  // 03-12: 10 × 10000 = 100000. 03-11: 0 sh, cash stays 0 → 0 (undoing the cash would give a phantom 100000)
+  assert.deepEqual(['2026-03-11', '2026-03-12'].map((d) => est.valueOn(d).totalCents), [0, 100000]);
+  assert.equal(est.valueOn('2026-03-11').cashCents, 0);
+});
+
+test('holding history counts an account that sold the holding before its anchor', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'a', type: 'investment', balanceCents: 102000 });
+  seedAccount(db, { id: 'b', type: 'investment', balanceCents: 100000 });
+  securities(db);
+  anchor(db, 'a', [['sa', 10, 102000]]);
+  anchor(db, 'b', [['cash', 100000, 100000]]);
+  txn(db, 'ab', 'a', 'sa', '2026-03-10', 2, 19600, 9800);
+  txn(db, 'bs', 'b', 'sa', '2026-03-12', -10, -100000, 10000, 'sell');
+  for (const [d, c] of [['2026-03-10', 9800], ['2026-03-12', 10000], ['2026-03-14', 10200]] as const) price(db, 'SYNA', d, c);
+  // a: 10 sh every day (its buy on 03-10 is the earliest, never undone in the window): 98000, 98000, 100000, 100000, 102000, H 102000.
+  // b: 10 sh before its 03-12 sale: 03-10, 03-11 at 9800 = 98000; then 0 (synced at H without SYNA).
+  // 03-10, 03-11: 98000 + 98000 = 196000 (without b: 98000)
+  assert.deepEqual(getHoldingHistory(db, 'SYNA', 'all', '2026-03-15')!.points.map((p) => [p.date, p.netWorthCents]), [
+    ['2026-03-10', 196000], ['2026-03-11', 196000], ['2026-03-12', 100000], ['2026-03-13', 100000], ['2026-03-14', 102000], ['2026-03-15', 102000],
+  ]);
 });

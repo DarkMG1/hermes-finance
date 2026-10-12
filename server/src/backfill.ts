@@ -11,10 +11,12 @@ export type DayValue = { totalCents: number; cashCents: number; bySecurity: Map<
 export type AccountEstimate = { accountId: string; anchor: string; earliest: string; valueOn(day: string): DayValue };
 
 type Sec = { id: string; ticker: string | null; type: string | null; isCash: number };
-type Txn = { securityId: string | null; date: string; quantity: number; amountCents: number; priceCents: number | null; subtype: string | null };
+type Txn = { securityId: string | null; date: string; type: string; quantity: number; amountCents: number; priceCents: number | null; subtype: string | null };
 
 const isCashSec = (s: Sec | undefined) => s !== undefined && (s.isCash === 1 || s.type === 'cash');
 const isSplit = (t: Txn) => (t.subtype ?? '').toLowerCase().includes('split');
+/** Only these have Tiingo prices; any other ticker (crypto, bonds, options) may name an unrelated stock. */
+export const PRICED_TYPES = ['equity', 'etf', 'mutual fund'];
 
 /** Latest index with dates[i] <= day, or -1. */
 function atOrBefore(dates: string[], day: string): number {
@@ -31,27 +33,35 @@ function atOrBefore(dates: string[], day: string): number {
 /**
  * An investment account's value on days before its first holdings sync (anchor), in today's share units:
  * shares and cash walk back from the anchor through stored investment transactions; each day is priced from Tiingo closes,
- * else the last Plaid trade price, else the anchor price. Null when the account never synced holdings.
+ * else the last Plaid trade price, else the anchor price, else the earliest trade price. Null when the account never synced holdings
+ * or held nothing at its first sync.
  */
 export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate | null {
   const anchor = (db.prepare('SELECT MIN(date) AS d FROM holding_syncs WHERE account_id = ?').get(accountId) as { d: string | null }).d;
   if (!anchor) return null;
+  const rows = db.prepare('SELECT security_id AS securityId, quantity, value_cents AS valueCents FROM holding_snapshots WHERE account_id = ? AND date = ?')
+    .all(accountId, anchor) as { securityId: string; quantity: number; valueCents: number }[];
+  // nothing held at the anchor (holdings not reported): hold the first balance snapshot flat instead
+  if (rows.length === 0) return null;
   const secs = new Map((db.prepare('SELECT id, ticker, type, is_cash AS isCash FROM securities').all() as Sec[]).map((s) => [s.id, s]));
-  const tickerOf = (id: string) => secs.get(id)?.ticker?.toUpperCase() ?? null;
+  const tickerOf = (id: string) => {
+    const s = secs.get(id);
+    return s?.ticker && PRICED_TYPES.includes(s.type ?? '') ? s.ticker.toUpperCase() : null;
+  };
 
   const shares = new Map<string, number>();
   const anchorPrice = new Map<string, number>();
   let cash = 0;
-  for (const h of db.prepare('SELECT security_id AS securityId, quantity, value_cents AS valueCents FROM holding_snapshots WHERE account_id = ? AND date = ?')
-    .all(accountId, anchor) as { securityId: string; quantity: number; valueCents: number }[]) {
+  for (const h of rows) {
     if (isCashSec(secs.get(h.securityId))) { cash += h.valueCents; continue; }
     shares.set(h.securityId, (shares.get(h.securityId) ?? 0) + h.quantity);
     if (h.quantity !== 0) anchorPrice.set(h.securityId, h.valueCents / h.quantity);
   }
 
-  const txns = (db.prepare(`SELECT security_id AS securityId, date, quantity, amount_cents AS amountCents, price_cents AS priceCents, subtype
+  const txns = (db.prepare(`SELECT security_id AS securityId, date, type, quantity, amount_cents AS amountCents, price_cents AS priceCents, subtype
     FROM investment_transactions WHERE account_id = ? AND date <= ? ORDER BY date`).all(accountId, anchor) as Txn[])
-    .filter((t) => !(t.securityId && isCashSec(secs.get(t.securityId))));
+    // buys and sells of a cash security are sweeps between cash forms; its other rows (deposits, fees, distributions) move cash
+    .filter((t) => !(t.securityId && isCashSec(secs.get(t.securityId)) && (t.type === 'buy' || t.type === 'sell')));
   const earliest = txns[0]?.date ?? anchor;
 
   const ids = new Set<string>([...shares.keys(), ...txns.flatMap((t) => (t.securityId ? [t.securityId] : []))]);
@@ -68,7 +78,7 @@ export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate 
   // real trades only: distributions and fees carry price 0 and quantity 0
   const trades = new Map<string, { dates: string[]; txns: Txn[] }>();
   for (const t of txns) {
-    if (!t.securityId || t.priceCents === null || t.priceCents <= 0 || t.quantity === 0 || isSplit(t)) continue;
+    if (!t.securityId || isCashSec(secs.get(t.securityId)) || t.priceCents === null || t.priceCents <= 0 || t.quantity === 0 || isSplit(t)) continue;
     const tr = trades.get(t.securityId) ?? { dates: [], txns: [] };
     tr.dates.push(t.date);
     tr.txns.push(t);
@@ -83,7 +93,11 @@ export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate 
     const tr = trades.get(id);
     const j = tr ? atOrBefore(tr.dates, day) : -1;
     if (tr && j >= 0) return tr.txns[j]!.priceCents! / splitsAfter(ticker, tr.txns[j]!.date);
-    return anchorPrice.get(id) ?? 0;
+    const a = anchorPrice.get(id);
+    if (a !== undefined) return a;
+    // sold before the anchor with no closes: its earliest trade price
+    const e = tr?.txns[0];
+    return e ? e.priceCents! / splitsAfter(ticker, e.date) : 0;
   };
   const value = (day: string): DayValue => {
     const bySecurity = new Map<string, number>();
@@ -96,10 +110,18 @@ export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate 
     }
     return { totalCents: total, cashCents: cash, bySecurity };
   };
+  /** A Plaid split Tiingo also records (within 3 days) is already in the price conversion; one Tiingo lacks is undone as a share change. */
+  const tiingoSplit = (t: Txn) => {
+    const ticker = t.securityId ? tickerOf(t.securityId) : null;
+    const from = addDays(t.date, -3);
+    const to = addDays(t.date, 3);
+    return (ticker ? closes.get(ticker)?.splits ?? [] : []).some(([d]) => d >= from && d <= to);
+  };
   const undo = (t: Txn) => {
-    if (isSplit(t)) return;
-    cash += t.amountCents;
-    if (!t.securityId) return;
+    if (isSplit(t) && tiingoSplit(t)) return;
+    // a contribution's buy is paid from outside the account, not from its cash
+    if (!(t.type === 'buy' && (t.subtype ?? '').toLowerCase().includes('contribution'))) cash += t.amountCents;
+    if (!t.securityId || isCashSec(secs.get(t.securityId))) return;
     shares.set(t.securityId, (shares.get(t.securityId) ?? 0) - t.quantity * splitsAfter(tickerOf(t.securityId), t.date));
   };
 

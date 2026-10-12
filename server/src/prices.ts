@@ -1,6 +1,7 @@
 import type { Deps } from './deps.ts';
 import { addDays } from './days.ts';
-import { localDay, nextDay } from './networth.ts';
+import { PRICED_TYPES } from './backfill.ts';
+import { localDay } from './networth.ts';
 
 export type DailyPrice = { date: string; close: number; splitFactor: number };
 export interface PricePort { dailyPrices(ticker: string, from: string, to: string): Promise<DailyPrice[]> }
@@ -20,14 +21,15 @@ export async function syncPrices(deps: Deps): Promise<void> {
     const today = localDay(deps.now());
     const tickers = (db.prepare(`
       SELECT DISTINCT UPPER(s.ticker) AS ticker FROM securities s
-      WHERE s.ticker IS NOT NULL AND s.is_cash = 0 AND COALESCE(s.type, '') <> 'cash'
+      WHERE s.ticker IS NOT NULL AND s.is_cash = 0 AND s.type IN (${PRICED_TYPES.map(() => '?').join(', ')})
         AND (s.id IN (SELECT security_id FROM holdings) OR s.id IN (SELECT security_id FROM investment_transactions WHERE security_id IS NOT NULL))
-      ORDER BY 1`).all() as { ticker: string }[]).map((r) => r.ticker);
+      ORDER BY 1`).all(...PRICED_TYPES) as { ticker: string }[]).map((r) => r.ticker);
     const latest = db.prepare('SELECT MAX(date) AS d FROM security_prices WHERE ticker = ?');
     const insert = db.prepare('INSERT OR REPLACE INTO security_prices (ticker, date, close_cents, split_factor) VALUES (?, ?, ?, ?)');
     for (const ticker of tickers) {
       const last = (latest.get(ticker) as { d: string | null }).d;
-      const from = last ? nextDay(last) : addDays(today, -730);
+      // from the latest stored day, not after it: that close may have been provisional
+      const from = last ?? addDays(today, -730);
       if (from > today) continue;
       let rows: DailyPrice[];
       try {

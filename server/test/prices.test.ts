@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { syncPrices, tiingoTicker } from '../src/prices.ts';
+import { PriceError, syncPrices, tiingoTicker } from '../src/prices.ts';
+import { createTiingoClient } from '../src/prices/tiingo.ts';
 import { makeTestDeps, seedAccount } from './helpers.ts';
 import type { Deps } from '../src/deps.ts';
 
@@ -36,7 +37,8 @@ test('prices are fetched for held and traded tickers, from 730 days back, then i
   ]);
   prices.calls = [];
   await syncPrices(deps);
-  assert.deepEqual(prices.calls.find((c) => c[0] === 'SYNA'), ['SYNA', '2026-03-15', '2026-03-15']);
+  // starts again at the latest stored day (03-14), so a provisional close is replaced
+  assert.deepEqual(prices.calls.find((c) => c[0] === 'SYNA'), ['SYNA', '2026-03-14', '2026-03-15']);
 });
 
 test('errors never throw; not found skips, others stop the run', async () => {
@@ -55,4 +57,19 @@ test('no price port: nothing happens', async () => {
   seed(deps);
   await syncPrices({ ...deps, prices: null });
   assert.deepEqual(prices.calls, []);
+});
+
+test('only stock-like securities are priced from Tiingo', async () => {
+  const { deps, prices } = makeTestDeps();
+  seed(deps);
+  deps.db.prepare("INSERT INTO securities (id, name, ticker, type, is_cash, updated_at) VALUES ('sx', 'Synthetic Coin', 'SYNX', 'cryptocurrency', 0, 'seed')").run();
+  deps.db.prepare("INSERT INTO holdings (account_id, security_id, quantity, price_cents, value_cents, updated_at) VALUES ('inv', 'sx', 1, 100, 100, 'seed')").run();
+  await syncPrices(deps);
+  assert.deepEqual(prices.calls.map((c) => c[0]).sort(), ['SYN.B', 'SYNA', 'SYNS']);
+});
+
+test('a Tiingo reply that is not a list counts as not found', async (t) => {
+  t.mock.method(globalThis, 'fetch', async () => new Response(JSON.stringify({ detail: 'Error: Ticker not found' }), { status: 200 }));
+  await assert.rejects(createTiingoClient('k').dailyPrices('SYNA', '2026-03-01', '2026-03-15'),
+    (e: unknown) => e instanceof PriceError && e.code === 'NOT_FOUND');
 });

@@ -57,3 +57,12 @@ test('no transactions fetch without a successful holdings fetch', async () => {
   await syncItem(deps, 'i1');
   assert.deepEqual(plaid.investmentTxnCalls, []);
 });
+
+test('an account with no stored transactions gets 730 days even when another has some', async () => {
+  const { deps, plaid } = setup();
+  plaid.accounts = [BROKERAGE, { ...BROKERAGE, accountId: 'pinv2', name: 'Synthetic Retirement', mask: '0003' }];
+  await syncItem(deps, 'i1');
+  // pinv has rows after the first sync, pinv2 none: the second fetch goes back 730 days again (30 would start 2026-02-13)
+  await syncItem(deps, 'i1');
+  assert.deepEqual(plaid.investmentTxnCalls, [['2024-03-15', '2026-03-15'], ['2024-03-15', '2026-03-15']]);
+});

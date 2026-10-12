@@ -15,12 +15,13 @@ struct InvestmentsView: View {
 
     var body: some View {
         Screen(title: "Investments") {
+            // outside the holdings state, so the chips stay usable while loading or offline
+            if investmentAccounts.count > 1 { accountChips }
             // swiftlint:disable:next multiple_closures_with_trailing_closure
             LoadingContent(state: holdings, retry: { Task { await loadHoldings() } }) { loaded in
                 LastUpdated(loaded: loaded)
                 let investments = loaded.value
                 Card { header(investments) }
-                if investmentAccounts.count > 1 { accountChips }
                 Picker("Range", selection: $range) {
                     ForEach(NetWorthRange.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
@@ -71,6 +72,7 @@ struct InvestmentsView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityAddTraits(selected.contains(account.id) ? .isSelected : [])
+                    .accessibilityHint("Shows only this account")
                 }
             }
             .padding(.vertical, Space.xs)
@@ -79,6 +81,8 @@ struct InvestmentsView: View {
 
     private func toggle(_ id: String) {
         if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
+        // the old rows would open with the new filter: spinner until the new selection loads
+        holdings = .loading
     }
 
     /// While dragging, the header shows the chosen day's total instead of today's.
@@ -111,12 +115,13 @@ struct InvestmentsView: View {
 
     private func loadHoldings() async {
         guard let reader = model.reader else { return }
+        let requested = selected
         do {
-            let loaded = try await reader.read("/v1/investments", query: InvestmentFilter.queryItems(selected), as: Investments.self)
-            guard !Task.isCancelled else { return }
+            let loaded = try await reader.read("/v1/investments", query: InvestmentFilter.queryItems(requested), as: Investments.self)
+            guard !Task.isCancelled, requested == selected else { return }
             holdings = .loaded(loaded)
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, requested == selected else { return }
             holdings = .failed(errorMessage(error))
         }
     }

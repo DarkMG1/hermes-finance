@@ -26,15 +26,15 @@ function upsertSecurities(db: Db, securities: PlaidSecurity[], nowIso: string): 
   }
 }
 
-/** Stores the item's investment transactions: 730 days the first time, then the last 30 (Plaid corrects recent ones). Never throws. */
+/** Stores the item's investment transactions: 730 days while any of its accounts has none stored, else the last 30 (Plaid corrects recent ones). Never throws. */
 export async function syncInvestmentTransactions(deps: Deps, itemId: string, token: string, accountIds: Map<string, string>): Promise<void> {
   const { db } = deps;
   try {
-    const ids = [...accountIds.values()];
-    const stored = (db.prepare(`SELECT COUNT(*) AS n FROM investment_transactions WHERE account_id IN (${ids.map(() => '?').join(', ')})`)
-      .get(...ids) as { n: number }).n;
+    // an account with nothing stored yet (new, or added to the item later) needs the full 730 days
+    const hasRows = db.prepare('SELECT 1 FROM investment_transactions WHERE account_id = ? LIMIT 1');
+    const full = [...accountIds.values()].some((id) => hasRows.get(id) === undefined);
     const today = localDay(deps.now());
-    const data = await deps.plaid.investmentsTransactionsGet(token, addDays(today, stored > 0 ? -30 : -730), today);
+    const data = await deps.plaid.investmentsTransactionsGet(token, addDays(today, full ? -730 : -30), today);
     const nowIso = deps.now().toISOString();
     db.transaction(() => {
       upsertSecurities(db, data.securities, nowIso);
@@ -190,15 +190,20 @@ export function getHoldingHistory(db: Db, key: string, range: NetWorthQuery['ran
     SELECT hs.account_id AS accountId, hs.date FROM holding_syncs hs JOIN accounts a ON a.id = hs.account_id
     WHERE a.hidden = 0 AND hs.date <= ? ${inAccounts(accountIds)}`)
     .all(today, ...ids) as { accountId: string; date: string }[]).map((r) => `${r.accountId}|${r.date}`));
-  const accounts = [...new Set(mine.map((r) => r.accountId))];
+  const group = (db.prepare('SELECT id AS securityId, ticker, type, is_cash AS isCash FROM securities').all() as
+    { securityId: string; ticker: string | null; type: string | null; isCash: number }[]).filter((s) => holdingKey(s) === key).map((s) => s.securityId);
+  // accounts that traded the group before their anchor count too, even with no snapshot of it (sold out before the first sync)
+  const traded = (db.prepare(`
+    SELECT DISTINCT t.account_id AS accountId FROM investment_transactions t JOIN accounts a ON a.id = t.account_id
+    WHERE a.hidden = 0 AND a.type = 'investment' AND t.security_id IN (${group.map(() => '?').join(', ')}) ${inAccounts(accountIds)}`)
+    .all(...group, ...ids) as { accountId: string }[]).map((r) => r.accountId);
+  const accounts = [...new Set([...mine.map((r) => r.accountId), ...traded])];
   const values = new Map<string, number>();
   for (const r of mine) values.set(`${r.accountId}|${r.date}`, (values.get(`${r.accountId}|${r.date}`) ?? 0) + r.cents);
   const estimates = new Map(accounts.flatMap((a) => {
     const est = loadAccountEstimate(db, a);
     return est ? [[a, est] as const] : [];
   }));
-  const group = (db.prepare('SELECT id AS securityId, ticker, type, is_cash AS isCash FROM securities').all() as
-    { securityId: string; ticker: string | null; type: string | null; isCash: number }[]).filter((s) => holdingKey(s) === key).map((s) => s.securityId);
   const firstDay = [...estimates.values()].reduce((d, e) => (e.earliest < d ? e.earliest : d), first.date);
   const wanted = range === 'all' ? firstDay : minusMonths(today, MONTHS[range]);
   const start = wanted > firstDay ? wanted : firstDay;
