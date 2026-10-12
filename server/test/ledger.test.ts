@@ -232,6 +232,22 @@ test('create adds a manual transaction once per key', async () => {
   assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM transactions').get() as { n: number }).n, 1);
 });
 
+test('create can tag the whole row to a person (I paid, all theirs)', async () => {
+  const { deps, app } = setup();
+  seedPerson(deps.db, { id: 'p-quill', name: 'Synthetic Quill' });
+  const res = await app.inject({ method: 'POST', url: '/v1/transactions', headers: w('c-p1'),
+    payload: { date: '2026-03-05', amountCents: -1000, payee: 'Synthetic Market', personId: 'p-quill' } });
+  assert.equal(res.statusCode, 201);
+  assert.equal(res.json().personId, 'p-quill');
+  assert.equal(res.json().categoryId, null);
+  const both = await app.inject({ method: 'POST', url: '/v1/transactions', headers: w('c-p2'),
+    payload: { date: '2026-03-05', amountCents: -1000, payee: 'x', personId: 'p-quill', categoryId: 'c-food' } });
+  assert.equal(both.statusCode, 400);
+  const ghost = await app.inject({ method: 'POST', url: '/v1/transactions', headers: w('c-p3'),
+    payload: { date: '2026-03-05', amountCents: -1000, payee: 'x', personId: 'ghost' } });
+  assert.equal(ghost.statusCode, 400);
+});
+
 test('create rejects choosing an account: added rows always go to the manual account', async () => {
   const { app } = setup();
   const res = await app.inject({ method: 'POST', url: '/v1/transactions', headers: w('c-2'), payload: { accountId: 'a1', date: '2026-03-05', amountCents: -1, payee: 'x' } });

@@ -118,12 +118,17 @@ export const CreateTransactionBody = z.object({
   date: DateStr, amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'),
   payee: z.string().min(1).max(200), categoryId: Id.nullable().optional(), notes: z.string().max(2000).nullable().optional(),
   paidByPersonId: Id.optional(),
+  /** All of it is this person's: they owe the owner the whole amount. */
+  personId: Id.optional(),
   /** Saved already split: the row and its lines are written together. */
   splitLines: PutSplitsBody.shape.lines.optional(),
 }).strict()
   .refine((b) => !b.paidByPersonId || b.amountCents < 0, { message: 'a payer covers money out', path: ['paidByPersonId'] })
   .refine((b) => !(b.splitLines?.length && b.paidByPersonId), { message: 'a transaction someone else paid cannot be split', path: ['splitLines'] })
-  .refine((b) => !(b.splitLines?.length && b.categoryId), { message: "a split's category lives on its lines", path: ['categoryId'] });
+  .refine((b) => !(b.splitLines?.length && b.categoryId), { message: "a split's category lives on its lines", path: ['categoryId'] })
+  .refine((b) => !(b.personId && (b.paidByPersonId || b.categoryId || b.splitLines?.length)), {
+    message: 'a row for a person has no payer, category or split', path: ['personId'],
+  });
 export type CreateTransactionBody = z.infer<typeof CreateTransactionBody>;
 
 const Month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'expected YYYY-MM');

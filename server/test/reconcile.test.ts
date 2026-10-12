@@ -41,12 +41,12 @@ function seedAll(db: Db): void {
   seedSplit(db, { id: 's4', transactionId: 'split-mixed', amountCents: -300, categoryId: 'food' });
 }
 
-const EXPECTED = ['apple', 'plaid-food', 'roommate', 'spend', 'split-mixed', 'uncat'];
+const EXPECTED = ['apple', 'paid-by', 'plaid-food', 'roommate', 'spend', 'split-mixed', 'uncat'];
 
 const needing = (db: Db) =>
   (db.prepare(`SELECT t.id FROM transactions t WHERE ${NEEDS_RECONCILE} ORDER BY t.id`).all() as { id: string }[]).map((r) => r.id);
 
-test('needs reconciling: money out only, transfers, income, card payments, pending, removed, investments and paid-by rows left out', () => {
+test('needs reconciling: money out only, transfers, income, card payments, pending, removed, and investments left out; rows someone else paid count', () => {
   const { deps } = makeTestDeps();
   seedAll(deps.db);
   assert.deepEqual(needing(deps.db), EXPECTED);
@@ -168,4 +168,15 @@ test('marking with the amount the owner saw: a stale amount is 409 and writes no
   assert.equal(ok.json().reconciled, true);
   assert.equal((await mark('feb-a', false, 'k-un', -999)).statusCode, 200, 'unmarking ignores the amount');
   assert.equal((await mark('missing', true, 'k-miss', -200)).statusCode, 404);
+});
+
+test('a row someone else paid shows in its month and marks with the share shown', async () => {
+  const { deps, get, mark } = api();
+  seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill' });
+  seedTxn(deps.db, { id: 'theirs', accountId: 'manual', date: '2026-02-10', amountCents: -250, categoryId: 'food', paidByPersonId: 'p1' });
+  const feb = await get('/v1/reconcile?month=2026-02');
+  assert.deepEqual(feb.transactions.map((t: { id: string }) => t.id), ['feb-a', 'theirs', 'feb-b']);
+  assert.equal(feb.open, 3);
+  assert.equal((await mark('theirs', true, 'k-theirs', -250)).statusCode, 200);
+  assert.equal((await get('/v1/reconcile?month=2026-02')).open, 2);
 });

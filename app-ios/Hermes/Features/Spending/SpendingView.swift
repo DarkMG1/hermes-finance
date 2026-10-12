@@ -77,7 +77,19 @@ struct SpendingView: View {
     }
 
     private func expenses(_ title: String, _ query: ExpensesQuery, total: Int) -> some View {
-        ExpensesView(title: title, query: query, total: total) { await load() }
+        ExpensesView(title: title, query: query, total: total) {
+            await load()
+            return currentTotal(query)
+        }
+    }
+
+    /// The number behind an Expenses screen after a reload; a category that emptied out is gone from the list, so it's 0.
+    private func currentTotal(_ query: ExpensesQuery) -> Int? {
+        // a reload that fell back to saved data must not pass for the fresh total
+        guard case .loaded(let loaded) = state, !loaded.fromCache else { return nil }
+        if query.kind == .in { return loaded.value.inCents }
+        guard let id = query.categoryId else { return loaded.value.outCents }
+        return loaded.value.categories.first { $0.listId == id }?.spentCents ?? 0
     }
 
     private func amount(_ cents: Int, chevron: Bool) -> some View {

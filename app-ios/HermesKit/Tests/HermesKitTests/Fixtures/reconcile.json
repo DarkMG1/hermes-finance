@@ -1,8 +1,27 @@
 {
   "month": "2026-03",
-  "total": 1,
-  "open": 1,
+  "total": 2,
+  "open": 2,
   "transactions": [
+    {
+      "id": "txn-6",
+      "accountId": "manual",
+      "source": "manual",
+      "date": "2026-03-09",
+      "amountCents": -300,
+      "payee": "Synthetic Market",
+      "bankDescription": "SYNTHETIC",
+      "merchantName": null,
+      "pending": false,
+      "categoryId": "cat-food",
+      "notes": null,
+      "personId": null,
+      "paidByPersonId": "person-1",
+      "repaymentDismissed": false,
+      "splitLines": [],
+      "reconciled": false,
+      "hasReceipt": false
+    },
     {
       "id": "txn-1",
       "accountId": "acct-card",

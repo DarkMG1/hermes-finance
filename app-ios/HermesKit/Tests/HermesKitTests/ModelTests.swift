@@ -74,6 +74,11 @@ func json(_ value: some Encodable) throws -> String {
     #expect(try json(body) == #"{"amountCents":-500,"date":"2026-03-01","payee":"Synthetic"}"#)
 }
 
+@Test func createBodySendsTheWholeRowsPerson() throws {
+    let body = CreateTransactionBody(date: "2026-03-01", amountCents: -500, payee: "Synthetic", categoryId: nil, notes: nil, personId: "p1")
+    #expect(try json(body) == #"{"amountCents":-500,"date":"2026-03-01","payee":"Synthetic","personId":"p1"}"#)
+}
+
 @Test func peopleFixturesDecode() throws {
     let people = try decode([Person].self, "people")
     #expect(people.first?.name == "Synthetic Quill" && people.first?.balanceCents == 200)
@@ -123,6 +128,10 @@ func json(_ value: some Encodable) throws -> String {
     #expect(SharedCost.yourShare(totalCents: 0, justMineCents: 0) == nil)
     #expect(SharedCost.yourShare(totalCents: 100, justMineCents: 101) == nil)
     #expect(SharedCost.yourShare(totalCents: 100, justMineCents: -1) == nil)
+    #expect(SharedCost.yourShare(totalCents: 10000, justMineCents: 2000, justTheirsCents: 3000) == 4500)
+    #expect(SharedCost.yourShare(totalCents: 1000, justMineCents: 0, justTheirsCents: 1000) == 0)
+    #expect(SharedCost.yourShare(totalCents: 1000, justMineCents: 600, justTheirsCents: 401) == nil)
+    #expect(SharedCost.yourShare(totalCents: 1000, justMineCents: 0, justTheirsCents: -1) == nil)
 }
 
 @Test func balancePhrases() {
@@ -211,10 +220,10 @@ func json(_ value: some Encodable) throws -> String {
 
 @Test func reconcileFixturesDecode() throws {
     let list = try decode(ReconcileList.self, "reconcile")
-    #expect(list.month == "2026-03" && list.total == 1 && list.open == 1 && list.transactions.map(\.id) == ["txn-1"])
+    #expect(list.month == "2026-03" && list.total == 2 && list.open == 2 && list.transactions.map(\.id) == ["txn-6", "txn-1"])
     #expect(list.transactions.first?.reconciled == false && list.transactions.first?.hasReceipt == false)
     let months = try decode(ReconcileMonths.self, "reconcile-months")
-    #expect(months.months == [ReconcileSummary(month: "2026-03", open: 1)])
+    #expect(months.months == [ReconcileSummary(month: "2026-03", open: 2)])
     #expect(try decode(Home.self, "home").toReconcile == nil)
 }
 

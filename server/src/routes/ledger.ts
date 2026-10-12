@@ -164,11 +164,13 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       assertCategoryExists(db, body.categoryId, 'categoryId');
       const id = randomUUID();
       assertPersonTaggable(db, body.paidByPersonId, 'paidByPersonId', id);
+      assertPersonTaggable(db, body.personId, 'personId', id);
       const now = deps.now().toISOString();
       db.prepare(`INSERT INTO transactions (id, account_id, source, date, amount_cents, bank_description, payee, category_id, notes, paid_by_person_id,
-          created_at, updated_at)
-        VALUES (?, 'manual', 'manual', ?, ?, '', ?, ?, ?, ?, ?, ?)`)
-        .run(id, body.date, body.amountCents, body.payee, body.categoryId ?? null, body.notes ?? null, body.paidByPersonId ?? null, now, now);
+          person_id, created_at, updated_at)
+        VALUES (?, 'manual', 'manual', ?, ?, '', ?, ?, ?, ?, ?, ?, ?)`)
+        .run(id, body.date, body.amountCents, body.payee, body.categoryId ?? null, body.notes ?? null, body.paidByPersonId ?? null,
+          body.personId ?? null, now, now);
       // one transaction with the row: a bad line rolls the row back too
       if (body.splitLines?.length) writeSplit(db, id, body.amountCents, body.splitLines, 'splitLines', now);
       return { status: 201, body: getTransaction(db, id) };
