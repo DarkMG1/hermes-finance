@@ -19,6 +19,7 @@ struct ReceiptSection: View {
     /// Deleted here, so `hadReceipt` no longer holds.
     @State private var removed = false
     @State private var pickerItem: PhotosPickerItem?
+    @State private var choosingSource = false
     @State private var choosingPhoto = false
     @State private var takingPhoto = false
     @State private var viewing = false
@@ -34,7 +35,7 @@ struct ReceiptSection: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Receipt photo")
                 .accessibilityHint("Opens it full screen")
-                // here, not on the Menu: the Menu is disabled mid-write, and Done must still work
+                // here, not on the add Button: that Button is disabled mid-write, and Done must still work
                 .fullScreenCover(isPresented: $viewing) {
                     if let image = self.image { ReceiptViewer(image: image) }
                 }
@@ -44,16 +45,18 @@ struct ReceiptSection: View {
                 InlineError(message: loadError)
                 Button("Try again") { Task { await load() } }
             }
-            Menu {
-                if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                    Button("Take photo", systemImage: "camera") { takingPhoto = true }
-                }
-                Button("Choose photo", systemImage: "photo") { choosingPhoto = true }
-            } label: {
+            // a Button and dialog, not a Menu: a Form row's Menu only answers taps on its text, and a redraw closes it
+            Button { choosingSource = true } label: {
                 if busy { ProgressView() } else { Text((hadReceipt && !removed) || image != nil ? "Replace receipt" : "Add receipt") }
             }
             .disabled(busy || loading)
-            // on the Menu, not the Group: in a Form each Group child is its own row and would get its own copy
+            .confirmationDialog("Receipt", isPresented: $choosingSource) {
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    Button("Take photo") { takingPhoto = true }
+                }
+                Button("Choose photo") { choosingPhoto = true }
+            }
+            // on the Button, not the Group: in a Form each Group child is its own row and would get its own copy
             .photosPicker(isPresented: $choosingPhoto, selection: $pickerItem, matching: .images)
             .onChange(of: pickerItem) { _, item in
                 guard let item else { return }
