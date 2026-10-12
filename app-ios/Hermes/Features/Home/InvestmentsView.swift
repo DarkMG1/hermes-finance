@@ -54,22 +54,6 @@ struct InvestmentsView: View {
             }
         }
         .environment(\.balancesRevealed, revealed)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    if hidden {
-                        Task { await reveal() }
-                    } else {
-                        revealed = false
-                        hideBalances = true
-                        revealError = nil
-                    }
-                } label: {
-                    Image(systemName: hidden ? "eye" : "eye.slash")
-                }
-                .accessibilityLabel(hidden ? "Show balances" : "Hide balances")
-            }
-        }
         .onChange(of: scenePhase) { _, phase in if phase == .background { revealed = false } }
         // tabs keep this screen alive: switching away counts as leaving
         .onChange(of: selectedTab) { revealed = false }
@@ -145,15 +129,39 @@ struct InvestmentsView: View {
     /// While dragging, the header shows the chosen day's total instead of today's.
     @ViewBuilder private func header(_ investments: Investments) -> some View {
         if case .loaded(let loadedHistory) = history, let point = HistoryChart.point(at: scrubbed, in: loadedHistory.value.points) {
-            Text(DayText.display(point.date)).textStyle(.subhead, color: Palette.secondaryText)
+            HStack {
+                Text(DayText.display(point.date)).textStyle(.subhead, color: Palette.secondaryText)
+                Spacer()
+                eyeButton
+            }
             MoneyText(cents: point.netWorthCents, style: .display, colored: false, negativeIsLoss: true)
                 .redacted(reason: hidden ? .placeholder : [])
         } else {
-            Text("Investments").textStyle(.subhead, color: Palette.secondaryText)
+            HStack {
+                Text("Investments").textStyle(.subhead, color: Palette.secondaryText)
+                Spacer()
+                eyeButton
+            }
             MoneyText(cents: investments.totalCents, style: .display, colored: false, negativeIsLoss: true)
                 .redacted(reason: hidden ? .placeholder : [])
             GainText(gainCents: investments.gainCents, percent: investments.gainPercent)
         }
+    }
+
+    /// Top right of the header card, like Home's net worth card.
+    private var eyeButton: some View {
+        Button {
+            if hidden {
+                Task { await reveal() }
+            } else {
+                revealed = false
+                hideBalances = true
+                revealError = nil
+            }
+        } label: {
+            Image(systemName: hidden ? "eye" : "eye.slash")
+        }
+        .accessibilityLabel(hidden ? "Show balances" : "Hide balances")
     }
 
     private func row(_ holding: Holding) -> some View {
