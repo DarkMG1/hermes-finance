@@ -46,7 +46,10 @@ struct InvestmentsView: View {
             }
         }
         .task(id: selected) { await loadHoldings() }
+        // an account hidden elsewhere would stay in the filter with no chip left to clear it
+        .onChange(of: investmentAccounts.map(\.id)) { _, ids in select(selected.intersection(ids)) }
         .task(id: historyKey) {
+            if case .failed = history { history = .loading }
             scrubbed = nil
             await loadHistory()
         }

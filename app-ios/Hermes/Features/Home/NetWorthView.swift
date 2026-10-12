@@ -7,6 +7,8 @@ struct NetWorthView: View {
     @State private var range = NetWorthRange.month
     @State private var state: LoadState<NetWorthHistory> = .loading
     @State private var scrubbed: Date?
+    /// The range the shown history was read for: its change line is hidden while another range loads.
+    @State private var loadedRange: NetWorthRange?
 
     var body: some View {
         Screen(title: "Net worth") {
@@ -30,6 +32,8 @@ struct NetWorthView: View {
             }
         }
         .task(id: range) {
+            // an old error would read as this range's; the old chart stays until the new one lands
+            if case .failed = state { state = .loading }
             scrubbed = nil
             await load()
         }
@@ -55,6 +59,8 @@ struct NetWorthView: View {
                 }
             }
             .redacted(reason: hideBalances ? .placeholder : [])
+            .opacity(loadedRange == range ? 1 : 0)
+            .accessibilityHidden(loadedRange != range)
         }
     }
 
@@ -69,6 +75,7 @@ struct NetWorthView: View {
             let loaded = try await reader.read("/v1/net-worth", query: requested.queryItems, as: NetWorthHistory.self)
             guard !Task.isCancelled, requested == range else { return }
             state = .loaded(loaded)
+            loadedRange = requested
         } catch {
             guard !Task.isCancelled, requested == range else { return }
             state = .failed(errorMessage(error))

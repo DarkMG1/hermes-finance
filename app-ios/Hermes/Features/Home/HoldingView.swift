@@ -47,6 +47,7 @@ struct HoldingView: View {
         }
         .task { await loadHolding() }
         .task(id: range) {
+            if case .failed = history { history = .loading }
             scrubbed = nil
             await load()
         }
