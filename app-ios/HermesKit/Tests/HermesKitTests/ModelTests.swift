@@ -200,3 +200,11 @@ func json(_ value: some Encodable) throws -> String {
     let holding = try decode(NetWorthHistory.self, "holding-history")
     #expect(holding.changeCents == 7000 && holding.estimatedThrough == nil)
 }
+
+@Test func investmentFilterQuery() throws {
+    #expect(InvestmentFilter.queryItems([]).isEmpty)
+    #expect(InvestmentFilter.queryItems(["b", "a"]) == [URLQueryItem(name: "accountIds", value: "a,b")])
+    let estimated = try decode(NetWorthHistory.self, "holding-history-estimated")
+    #expect(estimated.estimatedThrough != nil)
+    #expect(estimated.points.count >= 3)
+}

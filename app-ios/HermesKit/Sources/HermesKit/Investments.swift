@@ -46,3 +46,10 @@ public struct Investments: Decodable, Sendable {
         return Double(gain) / Double(cost)
     }
 }
+
+/// The Investments screen's account chips: no selection means every account.
+public enum InvestmentFilter {
+    public static func queryItems(_ accountIds: Set<String>) -> [URLQueryItem] {
+        accountIds.isEmpty ? [] : [URLQueryItem(name: "accountIds", value: accountIds.sorted().joined(separator: ","))]
+    }
+}
