@@ -18,6 +18,14 @@ struct SettingsView: View {
     @State private var importBusy = false
     @State private var importNote: String?
     @State private var confirmDisconnect = false
+    @State private var serverSha: String?
+
+    private var versionText: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "Hermes \(version) (\(build))" + (serverSha.map { " · server \($0.prefix(7))" } ?? "")
+    }
 
     var body: some View {
         Form {
@@ -104,16 +112,21 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
             }
-            Section("Server") {
+            Section {
                 LabeledContent("Address", value: model.serverURL)
                 Button("Disconnect", role: .destructive) { confirmDisconnect = true }
                     .confirmationDialog("Disconnect from this server?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
                         Button("Disconnect", role: .destructive) { model.disconnect() }
                     }
+            } header: {
+                Text("Server")
+            } footer: {
+                Text(versionText).textStyle(.caption, color: Palette.secondaryText)
             }
         }
         .themedForm()
         .navigationTitle("Settings")
+        .task { serverSha = try? await model.reader?.read("/v1/health", as: Health.self).value.gitSha }
         .task { await loadBanks() }
         .refreshable { await loadBanks() }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.commaSeparatedText]) { result in

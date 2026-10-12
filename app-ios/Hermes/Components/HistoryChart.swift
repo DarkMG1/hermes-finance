@@ -6,7 +6,7 @@ import SwiftUI
 struct HistoryChart: View {
     let points: [NetWorthPoint]
     @Binding var scrubbed: Date?
-    @AppStorage("hideBalances") private var hideBalances = false
+    @AppStorage("hideBalances") private var hideBalances = true
 
     var body: some View {
         let floor = Double(points.map(\.netWorthCents).min() ?? 0) / 100

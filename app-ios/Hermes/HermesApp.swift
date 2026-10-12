@@ -30,6 +30,7 @@ struct HermesApp: App {
         })
         // an x to clear a single-line text field (payee, account name, ...)
         UITextField.appearance().clearButtonMode = .whileEditing
+        UserDefaults.standard.set(true, forKey: "hideBalances")
     }
 
     var body: some Scene {
@@ -48,6 +49,8 @@ struct HermesApp: App {
                 if connected { lock.didConnect(enabled: requireFaceID) }
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
+                // balances hide whenever Hermes leaves the screen; showing them again needs Face ID
+                if phase == .background { UserDefaults.standard.set(true, forKey: "hideBalances") }
                 if phase == .active { model.loadStoredConnection() }
                 lock.phaseChanged(to: phase, enabled: requireFaceID, connected: model.reader != nil)
             }

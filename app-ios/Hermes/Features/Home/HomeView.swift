@@ -11,7 +11,7 @@ struct HomeView: View {
     @State private var selected: LedgerTransaction?
     @State private var renaming: Account?
     @State private var linker = BankLinker()
-    @AppStorage("hideBalances") private var hideBalances = false
+    @AppStorage("hideBalances") private var hideBalances = true
     @State private var showingBalances = false
     @State private var showBalancesError: String?
 

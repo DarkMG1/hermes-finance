@@ -5,7 +5,7 @@ struct HoldingView: View {
     /// Starts as the tapped row; each load replaces it with the server's latest.
     @State private var holding: Holding
     @Environment(AppModel.self) private var model
-    @AppStorage("hideBalances") private var hideBalances = false
+    @AppStorage("hideBalances") private var hideBalances = true
     @State private var range = NetWorthRange.month
     @State private var history: LoadState<NetWorthHistory> = .loading
     @State private var scrubbed: Date?

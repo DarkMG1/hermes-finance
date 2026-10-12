@@ -3,7 +3,7 @@ import SwiftUI
 
 struct InvestmentsView: View {
     @Environment(AppModel.self) private var model
-    @AppStorage("hideBalances") private var hideBalances = false
+    @AppStorage("hideBalances") private var hideBalances = true
     @State private var range = NetWorthRange.month
     @State private var holdings: LoadState<Investments> = .loading
     @State private var history: LoadState<NetWorthHistory> = .loading
@@ -151,7 +151,7 @@ func gainColor(_ cents: Int) -> Color {
 struct GainText: View {
     let gainCents: Int?
     let percent: Double?
-    @AppStorage("hideBalances") private var hideBalances = false
+    @AppStorage("hideBalances") private var hideBalances = true
 
     var body: some View {
         if let gainCents {
