@@ -143,6 +143,25 @@ test('stop() while a scheduled sync is in flight resolves only after it finishes
   }
 });
 
+test('prices are fetched by the scheduled tick, not by syncAll', async () => {
+  mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  try {
+    const { deps } = setup();
+    const prices = deps.prices as unknown as { calls: unknown[] };
+    deps.db.prepare("INSERT INTO securities (id, name, ticker, type, is_cash, updated_at) VALUES ('sa', 'Synthetic A Fund', 'SYNA', 'etf', 0, 'seed')").run();
+    deps.db.prepare("INSERT INTO accounts (id, name, type) VALUES ('inv', 'Synthetic Brokerage', 'investment')").run();
+    deps.db.prepare("INSERT INTO holdings (account_id, security_id, quantity, price_cents, value_cents, updated_at) VALUES ('inv', 'sa', 1, 100, 100, 'seed')").run();
+    await syncAll(deps);
+    assert.deepEqual(prices.calls, []);
+    const stop = startScheduler(deps);
+    mock.timers.tick(5_000);
+    await stop();
+    assert.equal(prices.calls.length, 1);
+  } finally {
+    mock.timers.reset();
+  }
+});
+
 test('a successful sync prunes idempotency keys and link sessions older than 30 days', async () => {
   const { deps } = setup();
   const old = '2026-02-01T00:00:00.000Z';
