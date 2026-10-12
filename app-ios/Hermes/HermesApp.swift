@@ -59,12 +59,20 @@ struct HermesApp: App {
 }
 
 struct MainTabs: View {
+    @State private var tab = 0
+
     var body: some View {
-        TabView {
-            Tab("Home", systemImage: "house") { NavigationStack { HomeView() } }
-            Tab("Spending", systemImage: "chart.bar") { NavigationStack { SpendingView() } }
-            Tab("Activity", systemImage: "list.bullet") { NavigationStack { ActivityView() } }
-            Tab("Settings", systemImage: "gearshape") { NavigationStack { SettingsView() } }
+        TabView(selection: $tab) {
+            Tab("Home", systemImage: "house", value: 0) { NavigationStack { HomeView() } }
+            Tab("Spending", systemImage: "chart.bar", value: 1) { NavigationStack { SpendingView() } }
+            Tab("Activity", systemImage: "list.bullet", value: 2) { NavigationStack { ActivityView() } }
+            Tab("Settings", systemImage: "gearshape", value: 3) { NavigationStack { SettingsView() } }
         }
+        .environment(\.selectedTab, tab)
     }
+}
+
+extension EnvironmentValues {
+    /// Tabs keep their navigation stacks, so a screen that must forget something on leaving watches this.
+    @Entry var selectedTab = 0
 }

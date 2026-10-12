@@ -6,6 +6,7 @@ struct HoldingView: View {
     @State private var holding: Holding
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.selectedTab) private var selectedTab
     @AppStorage("hideBalances") private var hideBalances = true
     @State private var range = NetWorthRange.month
     @State private var history: LoadState<NetWorthHistory> = .loading
@@ -53,6 +54,7 @@ struct HoldingView: View {
         }
         .environment(\.balancesRevealed, revealed)
         .onChange(of: scenePhase) { _, phase in if phase == .background { revealed = false } }
+        .onChange(of: selectedTab) { revealed = false }
         .task { await loadHolding() }
         .task(id: range) {
             if case .failed = history { history = .loading }

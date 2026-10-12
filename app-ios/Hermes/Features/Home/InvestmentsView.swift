@@ -5,6 +5,7 @@ struct InvestmentsView: View {
     @Environment(AppModel.self) private var model
     @Environment(AppLock.self) private var lock
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.selectedTab) private var selectedTab
     @AppStorage("hideBalances") private var hideBalances = true
     @State private var range = NetWorthRange.month
     @State private var holdings: LoadState<Investments> = .loading
@@ -61,6 +62,7 @@ struct InvestmentsView: View {
                     } else {
                         revealed = false
                         hideBalances = true
+                        revealError = nil
                     }
                 } label: {
                     Image(systemName: hidden ? "eye" : "eye.slash")
@@ -69,6 +71,8 @@ struct InvestmentsView: View {
             }
         }
         .onChange(of: scenePhase) { _, phase in if phase == .background { revealed = false } }
+        // tabs keep this screen alive: switching away counts as leaving
+        .onChange(of: selectedTab) { revealed = false }
         .task(id: selected) { await loadHoldings() }
         // an account hidden elsewhere would stay in the filter with no chip left to clear it
         .onChange(of: investmentAccounts.map(\.id)) { _, ids in select(selected.intersection(ids)) }
