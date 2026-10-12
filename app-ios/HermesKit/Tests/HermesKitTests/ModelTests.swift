@@ -74,6 +74,11 @@ func json(_ value: some Encodable) throws -> String {
     #expect(try json(body) == #"{"amountCents":-500,"date":"2026-03-01","payee":"Synthetic"}"#)
 }
 
+@Test func createBodySendsTheWholeRowsPerson() throws {
+    let body = CreateTransactionBody(date: "2026-03-01", amountCents: -500, payee: "Synthetic", categoryId: nil, notes: nil, personId: "p1")
+    #expect(try json(body) == #"{"amountCents":-500,"date":"2026-03-01","payee":"Synthetic","personId":"p1"}"#)
+}
+
 @Test func peopleFixturesDecode() throws {
     let people = try decode([Person].self, "people")
     #expect(people.first?.name == "Synthetic Quill" && people.first?.balanceCents == 200)

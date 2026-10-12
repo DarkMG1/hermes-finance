@@ -169,3 +169,14 @@ test('marking with the amount the owner saw: a stale amount is 409 and writes no
   assert.equal((await mark('feb-a', false, 'k-un', -999)).statusCode, 200, 'unmarking ignores the amount');
   assert.equal((await mark('missing', true, 'k-miss', -200)).statusCode, 404);
 });
+
+test('a row someone else paid shows in its month and marks with the share shown', async () => {
+  const { deps, get, mark } = api();
+  seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill' });
+  seedTxn(deps.db, { id: 'theirs', accountId: 'manual', date: '2026-02-10', amountCents: -250, categoryId: 'food', paidByPersonId: 'p1' });
+  const feb = await get('/v1/reconcile?month=2026-02');
+  assert.deepEqual(feb.transactions.map((t: { id: string }) => t.id), ['feb-a', 'theirs', 'feb-b']);
+  assert.equal(feb.open, 3);
+  assert.equal((await mark('theirs', true, 'k-theirs', -250)).statusCode, 200);
+  assert.equal((await get('/v1/reconcile?month=2026-02')).open, 2);
+});

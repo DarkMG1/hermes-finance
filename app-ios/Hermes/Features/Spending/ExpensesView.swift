@@ -61,7 +61,7 @@ struct ExpensesView: View {
         .themedForm()
         .navigationTitle(title)
         .task { await load(reset: true) }
-        .refreshable { await load(reset: true) }
+        .refreshable { await changed() }
         .sheet(item: $opened) { opened in
             switch opened {
             case .transaction(let transaction): TransactionDetailSheet(transaction: transaction) { await changed() }

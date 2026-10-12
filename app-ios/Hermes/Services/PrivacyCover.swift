@@ -33,7 +33,8 @@ final class PrivacyCover {
             window.rootViewController = UIHostingController(rootView: cover)
         }
         // no keyboard may stay live under the cover, and VoiceOver must not reach the app beneath it
-        if editing == nil { editing = UIResponder.current }
+        // only a text input in the app's own window (a second show finds the cover itself first responder)
+        if editing == nil, let field = UIResponder.current, field is UIKeyInput, (field as? UIView)?.window !== self.window { editing = field }
         // locked: Face ID comes first, and the keyboard stays closed after it
         if locked { editing = nil }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)

@@ -37,7 +37,9 @@ struct TheyPaidSheet: View {
                 }
                 NotesField(text: $notes, error: error)
             } footer: {
-                if let share, let total = Money.parse(totalText) {
+                if share == 0 && !mePaid {
+                    Text("None of this is yours, so there's nothing to add.")
+                } else if let share, let total = Money.parse(totalText) {
                     let shared = total - (justMine ?? 0) - (justTheirs ?? 0)
                     Text("Your share: \(Money.format(share)) (\(Money.format(justMine ?? 0)) + half of \(Money.format(shared)))")
                 }
@@ -56,8 +58,14 @@ struct TheyPaidSheet: View {
 
     private var request: CreateTransactionBody? {
         let trimmed = payee.trimmingCharacters(in: .whitespaces)
-        guard let share, share > 0, !trimmed.isEmpty, let total = Money.parse(totalText) else { return nil }
+        guard let share, !trimmed.isEmpty, let total = Money.parse(totalText) else { return nil }
         let note = notes.isEmpty ? nil : notes
+        // I paid for something that is all theirs: one row they owe in full
+        if mePaid && share == 0 {
+            return CreateTransactionBody(date: DayText.ymd(date), amountCents: -total, payee: trimmed, categoryId: nil, notes: note, personId: person.id)
+        }
+        // they paid for something that is all theirs: nothing of it is yours to log
+        guard share > 0 else { return nil }
         guard mePaid else {
             return CreateTransactionBody(date: DayText.ymd(date), amountCents: -share, payee: trimmed, categoryId: categoryId,
                                          notes: note, paidByPersonId: person.id)

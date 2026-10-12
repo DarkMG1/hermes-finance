@@ -85,7 +85,8 @@ struct SpendingView: View {
 
     /// The number behind an Expenses screen after a reload; a category that emptied out is gone from the list, so it's 0.
     private func currentTotal(_ query: ExpensesQuery) -> Int? {
-        guard case .loaded(let loaded) = state else { return nil }
+        // a reload that fell back to saved data must not pass for the fresh total
+        guard case .loaded(let loaded) = state, !loaded.fromCache else { return nil }
         if query.kind == .in { return loaded.value.inCents }
         guard let id = query.categoryId else { return loaded.value.outCents }
         return loaded.value.categories.first { $0.listId == id }?.spentCents ?? 0
