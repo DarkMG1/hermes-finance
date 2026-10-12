@@ -52,3 +52,21 @@ import Testing
     let request = try #require(transport.requests.first)
     #expect(request.url.absoluteString == "https://hermes.example.com/v1/investments/holding-history?key=SYN/D&range=all")
 }
+
+@Test func receiptUploadSendsJPEGWithoutAKey() async throws {
+    let transport = FakeTransport([FakeTransport.json(200, #"{"bytes":3}"#)])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    try await client.putReceipt(transactionId: "t1", jpeg: Data([0xFF, 0xD8, 0xFF]))
+    let request = try #require(transport.requests.first)
+    #expect(request.method == "PUT" && request.url.path() == "/v1/transactions/t1/receipt")
+    #expect(request.headers["Content-Type"] == "image/jpeg" && request.headers["Idempotency-Key"] == nil)
+    #expect(request.body == Data([0xFF, 0xD8, 0xFF]))
+}
+
+@Test func reconcileSendsTheFlag() async throws {
+    let transport = FakeTransport([.success(HTTPResponse(status: 200, body: try fixture("transaction")))])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    _ = try await client.setReconciled(id: "t1", reconciled: true, idempotencyKey: "k")
+    let request = try #require(transport.requests.first)
+    #expect(request.url.path() == "/v1/transactions/t1/reconcile" && request.body == Data(#"{"reconciled":true}"#.utf8))
+}

@@ -1,0 +1,26 @@
+{
+  "month": "2026-03",
+  "total": 1,
+  "open": 1,
+  "transactions": [
+    {
+      "id": "txn-1",
+      "accountId": "acct-card",
+      "source": "plaid",
+      "date": "2026-03-14",
+      "amountCents": -1250,
+      "payee": "Synthetic Cafe",
+      "bankDescription": "SYNTHETIC CAFE 001",
+      "merchantName": "Synthetic Cafe",
+      "pending": false,
+      "categoryId": "cat-food",
+      "notes": null,
+      "personId": null,
+      "paidByPersonId": null,
+      "repaymentDismissed": false,
+      "splitLines": [],
+      "reconciled": false,
+      "hasReceipt": false
+    }
+  ]
+}

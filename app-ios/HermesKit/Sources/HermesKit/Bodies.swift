@@ -206,3 +206,8 @@ public struct PatchPersonBody: Encodable, Sendable, Equatable {
         try container.encodeIfPresent(archived, forKey: .archived)
     }
 }
+
+public struct ReconcileBody: Encodable, Sendable, Equatable {
+    public let reconciled: Bool
+    public init(reconciled: Bool) { self.reconciled = reconciled }
+}

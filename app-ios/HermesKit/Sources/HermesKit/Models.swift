@@ -58,6 +58,9 @@ public struct LedgerTransaction: Codable, Sendable, Identifiable, Hashable {
     public let paidByPersonId: String?
     /// nil from builds before v1.2; true once the owner said the deposit is not a repayment
     public let repaymentDismissed: Bool?
+    /// nil from servers before v1.5 and from cached responses saved by older builds
+    public let reconciled: Bool?
+    public let hasReceipt: Bool?
 }
 
 public struct TransactionPage: Codable, Sendable {
@@ -78,6 +81,7 @@ public struct Home: Codable, Sendable {
     public let owedToYouCents: Int
     public let youOweCents: Int
     public let repaymentSuggestions: Int
+    public let toReconcile: ReconcileSummary?
 
     // a Home cached by an older build has no Who Owes Me fields
     public init(from decoder: Decoder) throws {
@@ -88,6 +92,7 @@ public struct Home: Codable, Sendable {
         owedToYouCents = try container.decodeIfPresent(Int.self, forKey: .owedToYouCents) ?? 0
         youOweCents = try container.decodeIfPresent(Int.self, forKey: .youOweCents) ?? 0
         repaymentSuggestions = try container.decodeIfPresent(Int.self, forKey: .repaymentSuggestions) ?? 0
+        toReconcile = try container.decodeIfPresent(ReconcileSummary.self, forKey: .toReconcile)
     }
 }
 
