@@ -136,6 +136,8 @@ struct HomeView: View {
                 MoneyText(cents: investments.totalCents, style: .display, colored: false, negativeIsLoss: true)
                     .redacted(reason: hideBalances ? .placeholder : [])
                 GainText(gainCents: investments.gainCents, percent: investments.gainPercent)
+                // the same cue as net worth's History row; the whole card opens Investments
+                ListRow(title: "Holdings") { Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText) }
             }
         }
         .buttonStyle(.plain)
