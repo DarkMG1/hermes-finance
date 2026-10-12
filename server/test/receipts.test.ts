@@ -42,7 +42,7 @@ test('rejects non-JPEG bodies, other content types, oversize bodies and unknown 
   assert.equal((await put('t1', Buffer.from('not a jpeg'))).statusCode, 400);
   assert.equal((await put('t1', Buffer.alloc(0))).statusCode, 400);
   assert.equal((await put('t1', JSON.stringify({ a: 1 }), 'application/json')).statusCode, 415);
-  assert.equal((await put('t1', Buffer.concat([JPEG, Buffer.alloc(5 * 1024 * 1024)]))).statusCode, 413);
+  assert.equal((await put('t1', Buffer.concat([JPEG, Buffer.alloc(3 * 1024 * 1024 - JPEG.length + 1)]))).statusCode, 413);
   assert.equal((await put('missing', JPEG)).statusCode, 404);
   assert.equal((await put('gone', JPEG)).statusCode, 404);
   assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM receipts').get() as { n: number }).n, 0);
@@ -53,4 +53,19 @@ test('deleting a manual transaction deletes its receipt', async () => {
   await put('t1', JPEG);
   deps.db.prepare("DELETE FROM transactions WHERE id = 't1'").run();
   assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM receipts').get() as { n: number }).n, 0);
+});
+
+test('other routes keep the 64 KB limit for image/jpeg bodies', async () => {
+  const { deps } = makeTestDeps();
+  seedAccount(deps.db, { id: 'chk' });
+  seedTxn(deps.db, { id: 't1', accountId: 'chk', date: '2026-03-01', amountCents: -500 });
+  const app = buildApp(deps);
+  const res = await app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: { ...AUTH, 'content-type': 'image/jpeg', 'idempotency-key': 'k1' },
+    payload: Buffer.alloc(100 * 1024) });
+  assert.equal(res.statusCode, 413);
+});
+
+test('responses carry nosniff', async () => {
+  const { get } = setup();
+  assert.equal((await get('t1')).headers['x-content-type-options'], 'nosniff');
 });

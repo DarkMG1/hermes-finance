@@ -15,6 +15,9 @@ struct ReceiptSection: View {
     @State private var image: UIImage?
     @State private var loading = false
     @State private var error: String?
+    @State private var loadError: String?
+    /// Deleted here, so `hadReceipt` no longer holds.
+    @State private var removed = false
     @State private var pickerItem: PhotosPickerItem?
     @State private var choosingPhoto = false
     @State private var takingPhoto = false
@@ -31,8 +34,15 @@ struct ReceiptSection: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Receipt photo")
                 .accessibilityHint("Opens it full screen")
+                // here, not on the Menu: the Menu is disabled mid-write, and Done must still work
+                .fullScreenCover(isPresented: $viewing) {
+                    if let image = self.image { ReceiptViewer(image: image) }
+                }
             } else if loading {
                 ProgressView().frame(maxWidth: .infinity)
+            } else if let loadError {
+                InlineError(message: loadError)
+                Button("Try again") { Task { await load() } }
             }
             Menu {
                 if UIImagePickerController.isSourceTypeAvailable(.camera) {
@@ -40,7 +50,7 @@ struct ReceiptSection: View {
                 }
                 Button("Choose photo", systemImage: "photo") { choosingPhoto = true }
             } label: {
-                if busy { ProgressView() } else { Text(image == nil ? "Add receipt" : "Replace receipt") }
+                if busy { ProgressView() } else { Text((hadReceipt && !removed) || image != nil ? "Replace receipt" : "Add receipt") }
             }
             .disabled(busy || loading)
             // on the Menu, not the Group: in a Form each Group child is its own row and would get its own copy
@@ -48,7 +58,10 @@ struct ReceiptSection: View {
             .onChange(of: pickerItem) { _, item in
                 guard let item else { return }
                 pickerItem = nil
+                guard !busy else { return }
+                busy = true
                 Task {
+                    defer { busy = false }
                     guard let data = try? await item.loadTransferable(type: Data.self), let picked = UIImage(data: data) else {
                         error = "Couldn't read that photo."
                         return
@@ -59,12 +72,14 @@ struct ReceiptSection: View {
             .fullScreenCover(isPresented: $takingPhoto) {
                 CameraPicker { photo in
                     takingPhoto = false
-                    if let photo { Task { await upload(photo) } }
+                    guard let photo, !busy else { return }
+                    busy = true
+                    Task {
+                        defer { busy = false }
+                        await upload(photo)
+                    }
                 }
                 .ignoresSafeArea()
-            }
-            .fullScreenCover(isPresented: $viewing) {
-                if let image { ReceiptViewer(image: image) }
             }
             .task { await load() }
             if image != nil {
@@ -79,28 +94,31 @@ struct ReceiptSection: View {
     }
 
     private func load() async {
-        guard hadReceipt, let client = model.client else { return }
+        // .task runs again when a full-screen cover closes; keep the photo already shown
+        guard hadReceipt, !removed, image == nil, !loading, let client = model.client else { return }
         loading = true
+        loadError = nil
         defer { loading = false }
         do {
             image = UIImage(data: try await client.receipt(transactionId: transactionId))
         } catch {
-            self.error = errorMessage(error)
+            loadError = errorMessage(error)
         }
     }
 
+    /// The caller sets `busy` before reading the photo and clears it after.
     private func upload(_ photo: UIImage) async {
         guard let client = model.client else { return }
         guard let jpeg = ReceiptImage.jpeg(photo) else {
             error = "Couldn't prepare that photo."
             return
         }
-        busy = true
-        defer { busy = false }
         error = nil
         do {
             try await client.putReceipt(transactionId: transactionId, jpeg: jpeg)
             image = UIImage(data: jpeg)
+            loadError = nil
+            removed = false
             onChange()
         } catch {
             self.error = errorMessage(error)
@@ -115,6 +133,7 @@ struct ReceiptSection: View {
         do {
             try await client.deleteReceipt(transactionId: transactionId)
             image = nil
+            removed = true
             onChange()
         } catch {
             self.error = errorMessage(error)

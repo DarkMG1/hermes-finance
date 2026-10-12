@@ -28,6 +28,8 @@ struct TransactionDetailSheet: View {
     @State private var receiptBusy = false
     /// A reconcile or receipt change saved straight away: closing must still refresh the list behind.
     @State private var savedOutside = false
+    /// onAppear runs again when a full-screen cover (camera, receipt viewer) closes; fill the fields only once.
+    @State private var loaded = false
 
     var body: some View {
         Sheet(
@@ -113,6 +115,8 @@ struct TransactionDetailSheet: View {
             }
         }
         .onAppear {
+            guard !loaded else { return }
+            loaded = true
             payee = transaction.payee
             notes = transaction.notes ?? ""
             categoryId = transaction.categoryId
@@ -202,11 +206,14 @@ struct TransactionDetailSheet: View {
         reconcileError = nil
         defer { reconciling = false }
         do {
-            _ = try await client.setReconciled(id: transaction.id, reconciled: on, idempotencyKey: UUID().uuidString)
+            _ = try await client.setReconciled(id: transaction.id, reconciled: on, amountCents: on ? transaction.amountCents : nil,
+                                               idempotencyKey: UUID().uuidString)
             savedOutside = true
         } catch {
             reconciled = before
-            reconcileError = errorMessage(error)
+            reconcileError = reconcileErrorMessage(error)
+            // the bank changed the amount: the list behind is stale too
+            if isAmountChanged(error) { savedOutside = true }
         }
     }
 

@@ -209,5 +209,7 @@ public struct PatchPersonBody: Encodable, Sendable, Equatable {
 
 public struct ReconcileBody: Encodable, Sendable, Equatable {
     public let reconciled: Bool
-    public init(reconciled: Bool) { self.reconciled = reconciled }
+    /// The amount the owner saw; the server answers 409 AMOUNT_CHANGED if the bank changed it since. Omitted when nil.
+    public let amountCents: Int?
+    public init(reconciled: Bool, amountCents: Int? = nil) { self.reconciled = reconciled; self.amountCents = amountCents }
 }

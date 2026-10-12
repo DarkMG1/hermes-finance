@@ -4,7 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { migrate, openDb, type Db } from '../src/db.ts';
-import { NEEDS_RECONCILE } from '../src/reconcile.ts';
+import { NEEDS_RECONCILE, OPEN } from '../src/reconcile.ts';
 import { getTransaction } from '../src/ledger.ts';
 import { buildApp } from '../src/app.ts';
 import { AUTH, makeTestDeps, seedAccount, seedCategory, seedPerson, seedSplit, seedTxn } from './helpers.ts';
@@ -23,6 +23,8 @@ function seedAll(db: Db): void {
   seedTxn(db, { id: 'income-cat', accountId: 'chk', date: d, amountCents: -500, categoryId: 'pay' });
   seedTxn(db, { id: 'uncat', accountId: 'chk', date: d, amountCents: -500 });
   seedTxn(db, { id: 'plaid-xfer', accountId: 'chk', date: d, amountCents: -500, plaidCategory: 'TRANSFER_OUT_ACCOUNT_TRANSFER' });
+  seedTxn(db, { id: 'plaid-income', accountId: 'chk', date: d, amountCents: -500, plaidCategory: 'INCOME_WAGES' });
+  seedTxn(db, { id: 'plaid-xfer-in', accountId: 'chk', date: d, amountCents: -500, plaidCategory: 'TRANSFER_IN_ACCOUNT_TRANSFER' });
   seedTxn(db, { id: 'card-pay', accountId: 'chk', date: d, amountCents: -500, plaidCategory: 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' });
   seedTxn(db, { id: 'plaid-food', accountId: 'chk', date: d, amountCents: -500, plaidCategory: 'FOOD_AND_DRINK_COFFEE' });
   seedTxn(db, { id: 'pending', accountId: 'chk', date: d, amountCents: -500, categoryId: 'food', pending: true });
@@ -62,7 +64,7 @@ test('a row paid to a person counts even when Plaid calls it a transfer', () => 
   assert.ok(needing(deps.db).includes('roommate'));
 });
 
-test('migration 016 marks exactly the rows that need reconciling before 2026-09-01', () => {
+test('migration 016 marks every money-out row before 2026-09-01, whatever the rule selects today', () => {
   const dir = mkdtempSync(join(tmpdir(), 'hermes-m16-'));
   const db = openDb(join(dir, 'h.db'));
   const m = join(import.meta.dirname, '..', 'migrations');
@@ -74,8 +76,12 @@ test('migration 016 marks exactly the rows that need reconciling before 2026-09-
   seedAll(db);
   seedTxn(db, { id: 'september', accountId: 'chk', date: '2026-09-01', amountCents: -500, categoryId: 'food' });
   assert.equal(migrate(db), 16);
-  const marked = (db.prepare('SELECT id FROM transactions WHERE reconciled_at IS NOT NULL ORDER BY id').all() as { id: string }[]).map((r) => r.id);
-  assert.deepEqual(marked, EXPECTED);
+  const ids = (sql: string) => (db.prepare(sql).all() as { id: string }[]).map((r) => r.id);
+  const moneyOutBefore = ids("SELECT id FROM transactions WHERE date < '2026-09-01' AND amount_cents < 0 ORDER BY id");
+  assert.ok(moneyOutBefore.includes('xfer-cat'));
+  assert.deepEqual(ids('SELECT id FROM transactions WHERE reconciled_at IS NOT NULL ORDER BY id'), moneyOutBefore);
+  assert.ok(!moneyOutBefore.includes('refund') && !moneyOutBefore.includes('september'));
+  assert.deepEqual(ids(`SELECT t.id FROM transactions t WHERE t.date < '2026-09-01' AND ${NEEDS_RECONCILE} AND ${OPEN}`), []);
   const row = db.prepare("SELECT reconciled_cents FROM transactions WHERE id = 'spend'").get() as { reconciled_cents: number };
   assert.equal(row.reconciled_cents, -500);
 });
@@ -104,8 +110,9 @@ function api() {
   seedTxn(deps.db, { id: 'mar', accountId: 'chk', date: '2026-03-01', amountCents: -400, categoryId: 'food' });
   const app = buildApp(deps);
   const get = async (url: string) => (await app.inject({ method: 'GET', url, headers: AUTH })).json();
-  const mark = async (id: string, reconciled: boolean, key = `k-${id}-${reconciled}`) =>
-    app.inject({ method: 'POST', url: `/v1/transactions/${id}/reconcile`, headers: { ...AUTH, 'idempotency-key': key }, payload: { reconciled } });
+  const mark = async (id: string, reconciled: boolean, key = `k-${id}-${reconciled}`, amountCents?: number) =>
+    app.inject({ method: 'POST', url: `/v1/transactions/${id}/reconcile`, headers: { ...AUTH, 'idempotency-key': key },
+      payload: amountCents === undefined ? { reconciled } : { reconciled, amountCents } });
   return { deps, get, mark };
 }
 
@@ -147,4 +154,18 @@ test('reconcile rejects bad input and unknown rows', async () => {
   const { get, mark } = api();
   assert.equal((await get('/v1/reconcile?month=2026-13')).code, 'INVALID_REQUEST');
   assert.equal((await mark('missing', true)).statusCode, 404);
+});
+
+test('marking with the amount the owner saw: a stale amount is 409 and writes nothing, a matching one marks', async () => {
+  const { deps, get, mark } = api();
+  const stale = await mark('feb-a', true, 'k-stale', -150);
+  assert.equal(stale.statusCode, 409);
+  assert.equal(stale.json().code, 'AMOUNT_CHANGED');
+  assert.equal(getTransaction(deps.db, 'feb-a')?.reconciled, false);
+  assert.equal((await get('/v1/reconcile?month=2026-02')).open, 2);
+  const ok = await mark('feb-a', true, 'k-match', -200);
+  assert.equal(ok.statusCode, 200);
+  assert.equal(ok.json().reconciled, true);
+  assert.equal((await mark('feb-a', false, 'k-un', -999)).statusCode, 200, 'unmarking ignores the amount');
+  assert.equal((await mark('missing', true, 'k-miss', -200)).statusCode, 404);
 });

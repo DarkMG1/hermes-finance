@@ -2,11 +2,12 @@ import type { FastifyInstance } from 'fastify';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 
-const MAX_BYTES = 5 * 1024 * 1024;
+// production nginx caps bodies at 3 MB (client_max_body_size 3m)
+const MAX_BYTES = 3 * 1024 * 1024;
 
 export function receiptRoutes(app: FastifyInstance, deps: Deps): void {
   const { db } = deps;
-  app.addContentTypeParser('image/jpeg', { parseAs: 'buffer', bodyLimit: MAX_BYTES }, (_req, body, done) => done(null, body));
+  app.addContentTypeParser('image/jpeg', { parseAs: 'buffer' }, (_req, body, done) => done(null, body));
 
   const assertLive = (id: string) => {
     if (!db.prepare('SELECT 1 FROM transactions WHERE id = ? AND removed_at IS NULL').get(id)) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');

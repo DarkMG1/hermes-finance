@@ -25,8 +25,8 @@ extension APIClient {
         try await write("PATCH", "/v1/transactions/\(id)", body: body, key: idempotencyKey)
     }
 
-    public func setReconciled(id: String, reconciled: Bool, idempotencyKey: String) async throws -> LedgerTransaction {
-        try await write("POST", "/v1/transactions/\(id)/reconcile", body: ReconcileBody(reconciled: reconciled), key: idempotencyKey)
+    public func setReconciled(id: String, reconciled: Bool, amountCents: Int?, idempotencyKey: String) async throws -> LedgerTransaction {
+        try await write("POST", "/v1/transactions/\(id)/reconcile", body: ReconcileBody(reconciled: reconciled, amountCents: amountCents), key: idempotencyKey)
     }
 
     public func receipt(transactionId: String) async throws -> Data { try await getData("/v1/transactions/\(transactionId)/receipt") }

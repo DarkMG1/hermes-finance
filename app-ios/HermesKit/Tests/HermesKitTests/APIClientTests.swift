@@ -66,7 +66,25 @@ import Testing
 @Test func reconcileSendsTheFlag() async throws {
     let transport = FakeTransport([.success(HTTPResponse(status: 200, body: try fixture("transaction")))])
     let client = APIClient(baseURL: testBase, token: "t", transport: transport)
-    _ = try await client.setReconciled(id: "t1", reconciled: true, idempotencyKey: "k")
+    _ = try await client.setReconciled(id: "t1", reconciled: false, amountCents: nil, idempotencyKey: "k")
     let request = try #require(transport.requests.first)
-    #expect(request.url.path() == "/v1/transactions/t1/reconcile" && request.body == Data(#"{"reconciled":true}"#.utf8))
+    #expect(request.url.path() == "/v1/transactions/t1/reconcile" && request.body == Data(#"{"reconciled":false}"#.utf8))
+}
+
+@Test func reconcileSendsTheAmountSeen() async throws {
+    let transport = FakeTransport([.success(HTTPResponse(status: 200, body: try fixture("transaction")))])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    _ = try await client.setReconciled(id: "t1", reconciled: true, amountCents: -1234, idempotencyKey: "k")
+    let body = try #require(transport.requests.first?.body)
+    let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+    #expect(json["reconciled"] as? Bool == true && json["amountCents"] as? Int == -1234 && json.count == 2)
+}
+
+@Test func receiptDeleteSendsDeleteWithoutAKey() async throws {
+    let transport = FakeTransport([.success(HTTPResponse(status: 204, body: Data()))])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    try await client.deleteReceipt(transactionId: "t1")
+    let request = try #require(transport.requests.first)
+    #expect(request.method == "DELETE" && request.url.path() == "/v1/transactions/t1/receipt")
+    #expect(request.headers["Idempotency-Key"] == nil && request.body == nil)
 }

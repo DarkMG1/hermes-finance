@@ -30,7 +30,7 @@ export function buildApp(deps: Deps): FastifyInstance {
   });
 
   // financial responses must never land in a client's or proxy's cache
-  app.addHook('onSend', async (_req, reply, payload) => { reply.header('cache-control', 'no-store'); return payload; });
+  app.addHook('onSend', async (_req, reply, payload) => { reply.header('cache-control', 'no-store'); reply.header('x-content-type-options', 'nosniff'); return payload; });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ApiError) {

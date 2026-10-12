@@ -3,8 +3,7 @@ import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
 import { getTransaction, periodRange, rowToTransaction, TXN_COLS, type TxnRow } from './ledger.ts';
 
-// Money out the owner should look at once a month. Over alias `t` (transactions). Migration 016's backlog step repeats this
-// WHERE; reconcile.test.ts checks the two agree.
+// Money out the owner should look at once a month. Over alias `t` (transactions).
 export const NEEDS_RECONCILE = `(
   t.removed_at IS NULL AND t.pending = 0 AND t.amount_cents < 0 AND t.paid_by_person_id IS NULL
   AND NOT EXISTS (SELECT 1 FROM accounts a WHERE a.id = t.account_id AND a.type = 'investment')
@@ -43,10 +42,17 @@ export function oldestOpenBefore(db: Db, month: string): { month: string; open: 
   return reconcileMonths(db).months.find((m) => m.month < month) ?? null;
 }
 
-export function setReconciled(db: Db, id: string, reconciled: boolean, nowIso: string): Transaction {
-  const changes = reconciled
-    ? db.prepare('UPDATE transactions SET reconciled_at = ?, reconciled_cents = amount_cents WHERE id = ? AND removed_at IS NULL').run(nowIso, id).changes
-    : db.prepare('UPDATE transactions SET reconciled_at = NULL, reconciled_cents = NULL WHERE id = ? AND removed_at IS NULL').run(id).changes;
-  if (changes === 0) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+export function setReconciled(db: Db, id: string, reconciled: boolean, nowIso: string, amountCents?: number): Transaction {
+  // the amount check sits in the UPDATE so check and write are one step
+  const changes = !reconciled
+    ? db.prepare('UPDATE transactions SET reconciled_at = NULL, reconciled_cents = NULL WHERE id = ? AND removed_at IS NULL').run(id).changes
+    : amountCents === undefined
+      ? db.prepare('UPDATE transactions SET reconciled_at = ?, reconciled_cents = amount_cents WHERE id = ? AND removed_at IS NULL').run(nowIso, id).changes
+      : db.prepare('UPDATE transactions SET reconciled_at = ?, reconciled_cents = amount_cents WHERE id = ? AND removed_at IS NULL AND amount_cents = ?')
+        .run(nowIso, id, amountCents).changes;
+  if (changes === 0) {
+    if (reconciled && amountCents !== undefined && getTransaction(db, id)) throw new ApiError(409, 'AMOUNT_CHANGED', 'the amount changed since you looked');
+    throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+  }
   return getTransaction(db, id)!;
 }

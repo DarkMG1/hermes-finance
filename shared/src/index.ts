@@ -149,7 +149,7 @@ export type Reconcile = z.infer<typeof Reconcile>;
 export const ReconcileMonths = z.object({ months: z.array(ReconcileSummary) });
 export type ReconcileMonths = z.infer<typeof ReconcileMonths>;
 
-export const ReconcileBody = z.object({ reconciled: z.boolean() }).strict();
+export const ReconcileBody = z.object({ reconciled: z.boolean(), amountCents: Cents.optional() }).strict();
 export type ReconcileBody = z.infer<typeof ReconcileBody>;
 
 export const SpendingQuery = z.discriminatedUnion('period', [

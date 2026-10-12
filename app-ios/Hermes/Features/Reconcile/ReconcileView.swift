@@ -13,6 +13,10 @@ struct ReconcileView: View {
     @State private var selected: LedgerTransaction?
     @State private var undo: LedgerTransaction?
     @State private var error: String?
+    /// The month `rows` belong to; until the shown month's list lands, the rows stay hidden.
+    @State private var loadedMonth: String?
+    /// Bumped around every check and undo, so a list read that overlapped one is thrown away.
+    @State private var writes = 0
 
     init(month: String? = nil) { _month = State(initialValue: month) }
 
@@ -21,11 +25,13 @@ struct ReconcileView: View {
             monthChip
             InlineError(message: error)
             // swiftlint:disable:next multiple_closures_with_trailing_closure
-            LoadingContent(state: state, retry: { Task { await load() } }) { loaded in
+            LoadingContent(state: month == loadedMonth ? state : .loading, retry: { Task { await load() } }) { loaded in
                 LastUpdated(loaded: loaded)
                 if rows.isEmpty {
                     Text("\(title) is reconciled ✓").textStyle(.headline)
-                    if let next = months.first(where: { $0.month != month }) {
+                    // the next open month after this one, else the oldest other one
+                    let shown = month ?? current
+                    if let next = months.first(where: { $0.month > shown }) ?? months.first(where: { $0.month != shown }) {
                         HButton(title: "Go to \(ReconcileMonth.title(next.month))", kind: .secondary) { month = next.month }
                     }
                 } else {
@@ -120,14 +126,19 @@ struct ReconcileView: View {
 
     private func load() async {
         guard let reader = model.reader, let requested = month else { return }
+        let started = writes
         do {
             let loaded = try await reader.read("/v1/reconcile", query: ReconcileMonth.queryItems(requested), as: ReconcileList.self)
             guard !Task.isCancelled, requested == month else { return }
+            // a check or undo ran meanwhile: this answer may predate it
+            guard writes == started else { return await load() }
             rows = loaded.value.transactions
             order = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0) })
+            loadedMonth = requested
             state = .loaded(loaded)
         } catch {
             guard !Task.isCancelled, requested == month else { return }
+            loadedMonth = requested
             state = .failed(errorMessage(error))
         }
     }
@@ -135,25 +146,31 @@ struct ReconcileView: View {
     private func check(_ transaction: LedgerTransaction) async {
         guard let client = model.client else { return }
         error = nil
+        writes += 1
+        defer { writes += 1 }
         withAnimation { rows.removeAll { $0.id == transaction.id } }
         do {
-            _ = try await client.setReconciled(id: transaction.id, reconciled: true, idempotencyKey: UUID().uuidString)
+            _ = try await client.setReconciled(id: transaction.id, reconciled: true, amountCents: transaction.amountCents,
+                                               idempotencyKey: UUID().uuidString)
             // Undo shows only once the write landed, so an undo can't race it
             if inMonth(transaction) { withAnimation { undo = transaction } }
             await loadMonths()
         } catch {
             if undo?.id == transaction.id { withAnimation { undo = nil } }
-            await restore(transaction)
-            self.error = errorMessage(error)
+            // the bank changed the amount: reload so the row comes back with the new one
+            if isAmountChanged(error) { await load() } else { await restore(transaction) }
+            self.error = reconcileErrorMessage(error)
         }
     }
 
     private func uncheck(_ transaction: LedgerTransaction) async {
         guard let client = model.client else { return }
         error = nil
+        writes += 1
+        defer { writes += 1 }
         withAnimation { undo = nil }
         do {
-            _ = try await client.setReconciled(id: transaction.id, reconciled: false, idempotencyKey: UUID().uuidString)
+            _ = try await client.setReconciled(id: transaction.id, reconciled: false, amountCents: nil, idempotencyKey: UUID().uuidString)
             await restore(transaction)
             await loadMonths()
         } catch {
@@ -173,4 +190,14 @@ struct ReconcileView: View {
         rows.append(transaction)
         rows.sort { (order[$0.id] ?? .max) < (order[$1.id] ?? .max) }
     }
+}
+
+/// The bank changed the amount after the owner looked: the server refused the check (409 AMOUNT_CHANGED).
+func isAmountChanged(_ error: Error) -> Bool {
+    if case ClientError.api(409, let body) = error { return body.code == "AMOUNT_CHANGED" }
+    return false
+}
+
+func reconcileErrorMessage(_ error: Error) -> String {
+    isAmountChanged(error) ? "The amount changed. Check it again." : errorMessage(error)
 }
