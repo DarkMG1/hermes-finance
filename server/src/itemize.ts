@@ -49,6 +49,7 @@ export function computeShares(input: ShareInput): ShareResult {
   const ranked = people.filter((p) => p !== ME).sort((a, b) => (frac.get(b) ?? 0) - (frac.get(a) ?? 0) || people.indexOf(a) - people.indexOf(b));
   const queue = people.includes(ME) ? [ME, ...ranked] : ranked;
   for (let i = 0; left > 0; i += 1, left -= 1) cents.set(queue[i]!, (cents.get(queue[i]!) ?? 0) + 1);
+  if (people.some((p) => (cents.get(p) ?? 0) <= 0)) throw new ShareError("each person's share must be more than zero");
   return {
     shares: people.map((p) => ({ person: p, cents: cents.get(p) ?? 0 })),
     gapCents: targetCents - (itemsTotal + input.taxCents + input.tipCents + input.feesCents),

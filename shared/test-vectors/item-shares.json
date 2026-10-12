@@ -23,6 +23,7 @@
     { "name": "personOnlyDiscounted", "input": { "items": [{ "amountCents": 1000, "people": ["me"] }, { "amountCents": -200, "people": ["p1"] }], "taxCents": 0, "tipCents": 0, "feesCents": 0, "targetCents": 800 }, "error": true },
     { "name": "itemsNotPositive", "input": { "items": [{ "amountCents": -100, "people": ["me"] }], "taxCents": 0, "tipCents": 0, "feesCents": 0, "targetCents": 100 }, "error": true },
     { "name": "noItems", "input": { "items": [], "taxCents": 0, "tipCents": 0, "feesCents": 0, "targetCents": 100 }, "error": true },
-    { "name": "targetNotPositive", "input": { "items": [{ "amountCents": 100, "people": ["me"] }], "taxCents": 0, "tipCents": 0, "feesCents": 0, "targetCents": 0 }, "error": true }
+    { "name": "targetNotPositive", "input": { "items": [{ "amountCents": 100, "people": ["me"] }], "taxCents": 0, "tipCents": 0, "feesCents": 0, "targetCents": 0 }, "error": true },
+    { "name": "shareRoundsToZero", "input": { "items": [{ "amountCents": 1000, "people": ["me"] }, { "amountCents": 100, "people": ["p1"] }], "taxCents": 0, "tipCents": 0, "feesCents": 0, "targetCents": 5 }, "error": true }
   ]
 }

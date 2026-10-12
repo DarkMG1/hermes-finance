@@ -26,6 +26,8 @@ test('sends the photo with the forced tool and returns the validated result', as
   const image = body.messages[0]!.content.find((c) => c.type === 'image')!;
   assert.equal(image.source!.media_type, 'image/jpeg');
   assert.equal(image.source!.data, JPEG.toString('base64'));
+  assert.ok(sent!.init.signal);
+  assert.equal((body as unknown as { max_tokens: number }).max_tokens, 8192);
 });
 
 test('a non-2xx answer, a missing tool call, invalid input or a network failure is a ReaderError', async () => {
@@ -36,8 +38,19 @@ test('a non-2xx answer, a missing tool call, invalid input or a network failure 
     toolReply({}, 529),
     async () => new Response(JSON.stringify({ content: [{ type: 'text', text: 'no' }] }), { status: 200 }),
     async () => { throw new TypeError('fetch failed'); },
+    async () => new Response('null', { status: 200 }),
+    async () => new Response(JSON.stringify({ content: 'no' }), { status: 200 }),
   ];
   for (const f of bad) await assert.rejects(createAnthropicReader('k', 'm', f).read(JPEG), ReaderError);
+});
+
+test('a timeout is TIMEOUT; other fetch failures are UNREACHABLE; a null body is INVALID_OUTPUT', async () => {
+  const code = async (f: () => Promise<Response>) => {
+    try { await createAnthropicReader('k', 'm', f).read(JPEG); } catch (e) { return (e as ReaderError).code; }
+  };
+  assert.equal(await code(async () => { throw new DOMException('timed out', 'TimeoutError'); }), 'TIMEOUT');
+  assert.equal(await code(async () => { throw new TypeError('fetch failed'); }), 'UNREACHABLE');
+  assert.equal(await code(async () => new Response('null', { status: 200 })), 'INVALID_OUTPUT');
 });
 
 const base = { HERMES_API_TOKEN: 'x'.repeat(32), HERMES_TOKEN_KEY: Buffer.alloc(32).toString('base64'), HERMES_DB_PATH: '/tmp/x.db', PLAID_CLIENT_ID: 'a', PLAID_SECRET: 'b' };

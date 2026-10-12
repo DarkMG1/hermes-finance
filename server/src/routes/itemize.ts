@@ -27,9 +27,10 @@ export function itemizeRoutes(app: FastifyInstance, deps: Deps): void {
   app.post<{ Params: { id: string } }>('/v1/transactions/:id/receipt/read', async (req) => {
     const id = req.params.id;
     assertReceipt(id);
+    if (getTransaction(db, id)!.amountCents >= 0) throw new ApiError(409, 'NOT_MONEY_OUT', 'only money out can be itemized');
     const reader = deps.receiptReader;
     if (!reader) throw new ApiError(503, 'READER_NOT_CONFIGURED', 'receipt reading is not set up');
-    const { jpeg } = db.prepare('SELECT jpeg FROM receipts WHERE transaction_id = ?').get(id) as { jpeg: Buffer };
+    const { jpeg, created_at: photoAt } = db.prepare('SELECT jpeg, created_at FROM receipts WHERE transaction_id = ?').get(id) as { jpeg: Buffer; created_at: string };
     let result;
     try {
       result = await reader.read(jpeg);
@@ -40,9 +41,10 @@ export function itemizeRoutes(app: FastifyInstance, deps: Deps): void {
     db.transaction(() => {
       // the photo may have been replaced or deleted while Claude was reading
       assertReceipt(id);
+      const stored = db.prepare('UPDATE receipts SET tax_cents = ?, tip_cents = ?, fees_cents = ?, total_cents = ?, read_at = ?, model = ?, applied_lines = NULL WHERE transaction_id = ? AND created_at = ?')
+        .run(result.taxCents, result.tipCents, result.feesCents, result.totalCents, deps.now().toISOString(), result.model, id, photoAt);
+      if (stored.changes === 0) throw new ApiError(409, 'RECEIPT_CHANGED', 'the receipt photo changed while it was being read');
       replaceItems(db, id, result.items.map((i) => ({ ...i, people: [ME] })));
-      db.prepare('UPDATE receipts SET tax_cents = ?, tip_cents = ?, fees_cents = ?, total_cents = ?, read_at = ?, model = ?, applied_lines = NULL WHERE transaction_id = ?')
-        .run(result.taxCents, result.tipCents, result.feesCents, result.totalCents, deps.now().toISOString(), result.model, id);
     })();
     return getItemization(db, id);
   });
@@ -90,8 +92,10 @@ export function itemizeRoutes(app: FastifyInstance, deps: Deps): void {
           // one share: no split; the whole row is mine (owner category) or that person's
           db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(id);
           const only = shares[0]!.person;
-          db.prepare('UPDATE transactions SET category_id = ?, person_id = ?, category_owner_set = 1, updated_at = ? WHERE id = ?')
-            .run(only === ME ? ownerCategory : null, only === ME ? null : only, now, id);
+          // all mine with no category: the flag stays as it was, so the bank category can still map once posted
+          const category = only === ME ? ownerCategory : null;
+          db.prepare('UPDATE transactions SET category_id = ?, person_id = ?, category_owner_set = CASE WHEN ? THEN category_owner_set ELSE 1 END, updated_at = ? WHERE id = ?')
+            .run(category, only === ME ? null : only, only === ME && category === null ? 1 : 0, now, id);
         }
       }
       replaceItems(db, id, body.items);

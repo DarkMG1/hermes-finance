@@ -58,29 +58,17 @@ public enum ItemShares {
     }
 
     /// nil when the items can't be shared out: no items, nobody (or someone twice) on an item, items or a person's items
-    /// adding up to zero or less, or a target of zero or less.
+    /// adding up to zero or less, a target of zero or less, a share of zero cents, or amounts too big to multiply.
     public static func compute(items: [Item], taxCents: Int, tipCents: Int, feesCents: Int, targetCents: Int) -> Result? {
         guard !items.isEmpty, targetCents > 0 else { return nil }
-        let itemsTotal = items.reduce(0) { $0 + $1.amountCents }
-        guard itemsTotal > 0 else { return nil }
-        var order: [String] = []
-        var base: [String: Int] = [:]
-        for item in items {
-            guard !item.people.isEmpty, Set(item.people).count == item.people.count else { return nil }
-            for p in item.people where !order.contains(p) { order.append(p) }
-            let people = item.people.contains(me) ? [me] + item.people.filter { $0 != me } : item.people
-            let each = item.amountCents / people.count
-            let rem = item.amountCents - each * people.count
-            for (i, p) in people.enumerated() {
-                base[p, default: 0] += each + (i < abs(rem) ? rem.signum() : 0)
-            }
-        }
+        guard let itemsTotal = sum(items.map(\.amountCents)), itemsTotal > 0, let (order, base) = itemTotals(items) else { return nil }
         let people = order.contains(me) ? [me] + order.filter { $0 != me } : order
         guard people.allSatisfy({ (base[$0] ?? 0) > 0 }) else { return nil }
         var cents: [String: Int] = [:]
         var frac: [String: Int] = [:]
         for p in people {
-            let n = (base[p] ?? 0) * targetCents
+            let (n, overflow) = (base[p] ?? 0).multipliedReportingOverflow(by: targetCents)
+            if overflow { return nil }
             cents[p] = n / itemsTotal
             frac[p] = n % itemsTotal
         }
@@ -96,7 +84,38 @@ public enum ItemShares {
             i += 1
             left -= 1
         }
-        return Result(shares: people.map { Share(person: $0, cents: cents[$0] ?? 0) },
-                      gapCents: targetCents - (itemsTotal + taxCents + tipCents + feesCents))
+        guard people.allSatisfy({ (cents[$0] ?? 0) > 0 }) else { return nil }
+        guard let receipt = sum([itemsTotal, taxCents, tipCents, feesCents]) else { return nil }
+        let (gap, overflow) = targetCents.subtractingReportingOverflow(receipt)
+        if overflow { return nil }
+        return Result(shares: people.map { Share(person: $0, cents: cents[$0] ?? 0) }, gapCents: gap)
+    }
+
+    /// Each person's item total (items split evenly, odd cents to "me" first) and the order people first appear.
+    private static func itemTotals(_ items: [Item]) -> ([String], [String: Int])? {
+        var order: [String] = []
+        var base: [String: Int] = [:]
+        for item in items {
+            guard !item.people.isEmpty, Set(item.people).count == item.people.count else { return nil }
+            for p in item.people where !order.contains(p) { order.append(p) }
+            let people = item.people.contains(me) ? [me] + item.people.filter { $0 != me } : item.people
+            let each = item.amountCents / people.count
+            let rem = item.amountCents - each * people.count
+            for (i, p) in people.enumerated() {
+                guard let b = sum([base[p] ?? 0, each, i < abs(rem) ? rem.signum() : 0]) else { return nil }
+                base[p] = b
+            }
+        }
+        return (order, base)
+    }
+
+    private static func sum(_ values: [Int]) -> Int? {
+        var total = 0
+        for v in values {
+            let (t, overflow) = total.addingReportingOverflow(v)
+            if overflow { return nil }
+            total = t
+        }
+        return total
     }
 }

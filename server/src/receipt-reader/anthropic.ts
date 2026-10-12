@@ -30,7 +30,7 @@ export function createAnthropicReader(apiKey: string, model: string, fetchFn: ty
           method: 'POST',
           headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
           body: JSON.stringify({
-            model, max_tokens: 4096, tools: [TOOL], tool_choice: { type: 'tool', name: 'record_receipt' },
+            model, max_tokens: 8192, tools: [TOOL], tool_choice: { type: 'tool', name: 'record_receipt' },
             messages: [{ role: 'user', content: [
               { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: jpeg.toString('base64') } },
               { type: 'text', text: INSTRUCTIONS },
@@ -38,16 +38,17 @@ export function createAnthropicReader(apiKey: string, model: string, fetchFn: ty
           }),
           signal: AbortSignal.timeout(60_000),
         });
-      } catch {
-        throw new ReaderError('UNREACHABLE');
+      } catch (e) {
+        throw new ReaderError(e instanceof Error && e.name === 'TimeoutError' ? 'TIMEOUT' : 'UNREACHABLE');
       }
       if (!res.ok) throw new ReaderError(`HTTP_${res.status}`);
-      const reply = await res.json().catch(() => ({})) as MessagesReply;
-      const call = reply.content?.find((c) => c.type === 'tool_use' && c.name === 'record_receipt');
+      const reply = await res.json().catch(() => null) as MessagesReply | null;
+      const content = reply?.content;
+      const call = Array.isArray(content) ? content.find((c) => c.type === 'tool_use' && c.name === 'record_receipt') : undefined;
       const parsed = ReceiptReadOutput.safeParse(call?.input);
       if (!parsed.success) throw new ReaderError('INVALID_OUTPUT');
       // counts only: never the key, the image or the item text
-      console.log(`[hermes] receipt read model=${model} in=${reply.usage?.input_tokens ?? '?'} out=${reply.usage?.output_tokens ?? '?'} items=${parsed.data.items.length}`);
+      console.log(`[hermes] receipt read model=${model} in=${reply?.usage?.input_tokens ?? '?'} out=${reply?.usage?.output_tokens ?? '?'} items=${parsed.data.items.length}`);
       return { ...parsed.data, model };
     },
   };

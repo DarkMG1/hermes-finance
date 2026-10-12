@@ -191,3 +191,59 @@ test('an existing split keeps its owner category from the first line without a p
   await save('own', body([['A', 1080, ['me']], ['B', 1080, ['p2']]]));
   assert.deepEqual(getTransaction(deps.db, 'own')!.splitLines.map((l) => [l.categoryId, l.personId]), [['cat-food', null], [null, 'p2']]);
 });
+
+test('a photo replaced during the read answers 409 and stores nothing', async () => {
+  const s = setup();
+  s.reader.onRead = () => s.deps.db.prepare("UPDATE receipts SET created_at = 'replaced' WHERE transaction_id = 'own'").run();
+  const r = await s.read('own');
+  assert.equal(r.statusCode, 409);
+  assert.equal(r.json().code, 'RECEIPT_CHANGED');
+  assert.equal((s.deps.db.prepare('SELECT COUNT(*) AS n FROM receipt_items').get() as { n: number }).n, 0);
+  assert.equal((await s.items('own')).json().readAt, null);
+});
+
+test('reading money in is refused before the reader runs', async () => {
+  const { read, reader } = setup();
+  const r = await read('refund');
+  assert.equal(r.statusCode, 409);
+  assert.equal(r.json().code, 'NOT_MONEY_OUT');
+  assert.equal(reader.calls, 0);
+});
+
+test('a share that rounds to zero cents is refused', async () => {
+  const { save, deps } = setup();
+  deps.db.prepare("UPDATE transactions SET amount_cents = -5 WHERE id = 'own'").run();
+  const r = await save('own', body([['A', 1000, ['me']], ['B', 100, ['p1']]]));
+  assert.equal(r.statusCode, 400);
+  assert.match(r.json().message, /each person's share must be more than zero/);
+});
+
+test('all mine with no owner category leaves the bank category free; one person still marks it owner-set', async () => {
+  const { save, deps } = setup();
+  deps.db.prepare("UPDATE transactions SET category_id = NULL WHERE id = 'own'").run();
+  const ownerSet = () => (deps.db.prepare("SELECT category_owner_set AS s FROM transactions WHERE id = 'own'").get() as { s: number }).s;
+  await save('own', body([['A', 2160, ['me']]]));
+  assert.equal(ownerSet(), 0);
+  await save('own', body([['A', 2160, ['p1']]]));
+  assert.equal(ownerSet(), 1);
+});
+
+test('they paid: handEdited turns on when the amount changes after saving', async () => {
+  const { save, items, deps } = setup();
+  await save('paid', body([['A', 1000, ['me']], ['B', 1000, ['p1']]]));
+  assert.equal((await items('paid')).json().handEdited, false);
+  deps.db.prepare("UPDATE transactions SET amount_cents = -900 WHERE id = 'paid'").run();
+  assert.equal((await items('paid')).json().handEdited, true);
+});
+
+test('saving items on a removed transaction is 404', async () => {
+  const { save, deps } = setup();
+  deps.db.prepare("UPDATE transactions SET removed_at = '2026-03-14T00:00:00.000Z' WHERE id = 'own'").run();
+  assert.equal((await save('own', body([['A', 2160, ['me']]]))).statusCode, 404);
+});
+
+test('a hand save without a read leaves readAt null', async () => {
+  const { save, items } = setup();
+  await save('own', body([['A', 2160, ['me']]]));
+  assert.equal((await items('own')).json().readAt, null);
+});

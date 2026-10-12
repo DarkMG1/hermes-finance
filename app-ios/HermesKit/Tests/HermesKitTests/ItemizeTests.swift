@@ -25,9 +25,18 @@ private struct VectorFile: Decodable { let cases: [VectorCase] }
         if c.error == true {
             #expect(result == nil, "\(c.name)")
         } else {
-            #expect(result?.shares == c.expected?.shares && result?.gapCents == c.expected?.gapCents, "\(c.name)")
+            let expected = try #require(c.expected, "\(c.name)")
+            #expect(result?.shares == expected.shares && result?.gapCents == expected.gapCents, "\(c.name)")
         }
     }
+}
+
+@Test func overflowingAmountsGiveNilInsteadOfTrapping() {
+    let huge = ItemShares.Item(amountCents: 10_000_000_000, people: ["me"])
+    #expect(ItemShares.compute(items: [huge], taxCents: 0, tipCents: 0, feesCents: 0, targetCents: 10_000_000_000) == nil)
+    #expect(ItemShares.compute(items: [.init(amountCents: Int.max, people: ["me"]), .init(amountCents: 1, people: ["me"])],
+                               taxCents: 0, tipCents: 0, feesCents: 0, targetCents: 100) == nil)
+    #expect(ItemShares.compute(items: [.init(amountCents: 100, people: ["me"])], taxCents: Int.max, tipCents: 1, feesCents: 0, targetCents: 100) == nil)
 }
 
 @Test func itemizationDecodes() throws {
