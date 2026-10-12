@@ -22,12 +22,23 @@ struct TransactionDetailSheet: View {
     @State private var confirmDelete = false
     @State private var splitting: LedgerTransaction?
     @State private var savedForSplit = false
+    @State private var reconciled = false
+    @State private var reconciling = false
+    @State private var reconcileError: String?
+    @State private var receiptBusy = false
+    /// A reconcile or receipt change saved straight away: closing must still refresh the list behind.
+    @State private var savedOutside = false
+    /// onAppear runs again when a full-screen cover (camera, receipt viewer) closes; fill the fields only once.
+    @State private var loaded = false
 
     var body: some View {
         Sheet(
-            title: "Transaction", canSave: !patch.isEmpty && !payeeInvalid && !deleteWrites.unresolved, busy: busy,
+            title: "Transaction", canSave: !patch.isEmpty && !payeeInvalid && !deleteWrites.unresolved, busy: busy || reconciling || receiptBusy,
             unresolved: writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved,
-            onCancel: { if writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved { Task { await onChange() } }; dismiss() },
+            onCancel: {
+                if writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved { Task { await onChange() } }
+                dismiss()
+            },
             onSave: { Task { await save() } }
         ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
@@ -37,6 +48,11 @@ struct TransactionDetailSheet: View {
                 LabeledContent("Account", value: model.accountName(transaction.accountId))
                 if transaction.pending { LabeledContent("Status", value: "Pending") }
                 if !transaction.bankDescription.isEmpty { LabeledContent("Bank description", value: transaction.bankDescription) }
+            }
+            Section {
+                Toggle("Reconciled", isOn: Binding(get: { reconciled }, set: { on in Task { await setReconciled(on) } }))
+                    .disabled(busy || reconciling || deleteWrites.unresolved)
+                InlineError(message: reconcileError)
             }
             Section {
                 Field(label: "Payee", error: payeeInvalid ? "Payee can't be empty" : nil) { TextField("Payee", text: $payee) }
@@ -77,6 +93,10 @@ struct TransactionDetailSheet: View {
                         .disabled(busy || payeeInvalid || deleteWrites.unresolved)
                 }
             }
+            Section("Receipt") {
+                ReceiptSection(transactionId: transaction.id, hadReceipt: transaction.hasReceipt ?? false, busy: $receiptBusy) { savedOutside = true }
+            }
+            .disabled(deleteWrites.unresolved)
             if transaction.repaymentDismissed == true {
                 Section {
                     Text("Hidden from repayment suggestions").textStyle(.subhead, color: Palette.secondaryText)
@@ -95,6 +115,8 @@ struct TransactionDetailSheet: View {
             }
         }
         .onAppear {
+            guard !loaded else { return }
+            loaded = true
             payee = transaction.payee
             notes = transaction.notes ?? ""
             categoryId = transaction.categoryId
@@ -102,7 +124,10 @@ struct TransactionDetailSheet: View {
             paidById = transaction.paidByPersonId
             date = DayText.date(transaction.date) ?? .now
             loadedDate = DayText.ymd(date)
+            reconciled = transaction.reconciled ?? false
         }
+        // a swipe-down skips onCancel, so the reconcile or receipt change refreshes the list here
+        .onDisappear { if savedOutside { Task { await onChange() } } }
         .sheet(item: $splitting, onDismiss: {
             // the edits were saved but the split was cancelled: this sheet's copy is stale, so close it
             if savedForSplit {
@@ -169,6 +194,26 @@ struct TransactionDetailSheet: View {
         } catch {
             writes.didFail(error)
             self.error = writes.unresolved ? "Couldn't confirm the save. Try again." : errorMessage(error)
+        }
+    }
+
+    /// Saved at once. The server sets the state outright, so a retry with a fresh key is safe.
+    private func setReconciled(_ on: Bool) async {
+        guard let client = model.client else { return }
+        let before = reconciled
+        reconciled = on
+        reconciling = true
+        reconcileError = nil
+        defer { reconciling = false }
+        do {
+            _ = try await client.setReconciled(id: transaction.id, reconciled: on, amountCents: on ? transaction.amountCents : nil,
+                                               idempotencyKey: UUID().uuidString)
+            savedOutside = true
+        } catch {
+            reconciled = before
+            reconcileError = reconcileErrorMessage(error)
+            // the bank changed the amount: the list behind is stale too
+            if isAmountChanged(error) { savedOutside = true }
         }
     }
 

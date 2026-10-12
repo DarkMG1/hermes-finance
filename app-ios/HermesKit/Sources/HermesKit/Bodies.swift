@@ -206,3 +206,10 @@ public struct PatchPersonBody: Encodable, Sendable, Equatable {
         try container.encodeIfPresent(archived, forKey: .archived)
     }
 }
+
+public struct ReconcileBody: Encodable, Sendable, Equatable {
+    public let reconciled: Bool
+    /// The amount the owner saw; the server answers 409 AMOUNT_CHANGED if the bank changed it since. Omitted when nil.
+    public let amountCents: Int?
+    public init(reconciled: Bool, amountCents: Int? = nil) { self.reconciled = reconciled; self.amountCents = amountCents }
+}

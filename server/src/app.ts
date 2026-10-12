@@ -9,6 +9,8 @@ import { syncRoutes } from './routes/sync.ts';
 import { bankRoutes } from './routes/banks.ts';
 import { importRoutes } from './routes/imports.ts';
 import { investmentRoutes } from './routes/investments.ts';
+import { reconcileRoutes } from './routes/reconcile.ts';
+import { receiptRoutes } from './routes/receipts.ts';
 
 function tokenMatches(header: string | undefined, token: string): boolean {
   if (!header?.startsWith('Bearer ')) return false;
@@ -28,7 +30,7 @@ export function buildApp(deps: Deps): FastifyInstance {
   });
 
   // financial responses must never land in a client's or proxy's cache
-  app.addHook('onSend', async (_req, reply, payload) => { reply.header('cache-control', 'no-store'); return payload; });
+  app.addHook('onSend', async (_req, reply, payload) => { reply.header('cache-control', 'no-store'); reply.header('x-content-type-options', 'nosniff'); return payload; });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ApiError) {
@@ -60,6 +62,8 @@ export function buildApp(deps: Deps): FastifyInstance {
   bankRoutes(app, deps);
   importRoutes(app, deps);
   investmentRoutes(app, deps);
+  reconcileRoutes(app, deps);
+  receiptRoutes(app, deps);
 
   return app;
 }

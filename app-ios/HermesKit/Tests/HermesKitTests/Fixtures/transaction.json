@@ -30,5 +30,7 @@
       "personId": "person-1",
       "payee": null
     }
-  ]
+  ],
+  "reconciled": false,
+  "hasReceipt": false
 }

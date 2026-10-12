@@ -7,6 +7,11 @@ struct TransactionRow: View {
 
     var body: some View {
         ListRow(title: transaction.payee, subtitle: subtitle) {
+            if transaction.hasReceipt == true {
+                Image(systemName: "doc.text")
+                    .textStyle(.caption, color: Palette.secondaryText)
+                    .accessibilityLabel("Has receipt")
+            }
             MoneyText(cents: transaction.amountCents)
         }
     }

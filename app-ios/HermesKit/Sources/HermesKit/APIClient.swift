@@ -27,7 +27,7 @@ public final class APIClient: Sendable {
     }
 
     @discardableResult
-    func send(_ method: String, _ path: String, query: [URLQueryItem] = [], body: Data?,
+    func send(_ method: String, _ path: String, query: [URLQueryItem] = [], body: Data?, contentType: String = "application/json",
               idempotencyKey: String?, timeout: TimeInterval) async throws -> HTTPResponse {
         guard var components = URLComponents(url: baseURL.appending(path: path), resolvingAgainstBaseURL: false) else {
             throw ClientError.transport("bad server address")
@@ -35,7 +35,7 @@ public final class APIClient: Sendable {
         if !query.isEmpty { components.queryItems = query }
         guard let url = components.url else { throw ClientError.transport("bad server address") }
         var headers = ["Authorization": "Bearer \(token)", "Accept": "application/json"]
-        if body != nil { headers["Content-Type"] = "application/json" }
+        if body != nil { headers["Content-Type"] = contentType }
         if let idempotencyKey { headers["Idempotency-Key"] = idempotencyKey }
         let response: HTTPResponse
         do {

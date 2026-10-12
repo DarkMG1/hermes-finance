@@ -30,6 +30,9 @@ export const Transaction = z.object({
   id: Id, accountId: Id, source: z.enum(['plaid', 'manual', 'actual', 'applecard']), date: DateStr,
   amountCents: Cents, payee: z.string(), bankDescription: z.string(), merchantName: z.string().nullable(),
   pending: z.boolean(), categoryId: Id.nullable(), notes: z.string().nullable(), personId: Id.nullable(), paidByPersonId: Id.nullable(), repaymentDismissed: z.boolean(), splitLines: z.array(SplitLine),
+  /** Marked reconciled and the bank amount unchanged since. */
+  reconciled: z.boolean(),
+  hasReceipt: z.boolean(),
 });
 export type Transaction = z.infer<typeof Transaction>;
 
@@ -123,12 +126,31 @@ export const CreateTransactionBody = z.object({
   .refine((b) => !(b.splitLines?.length && b.categoryId), { message: "a split's category lives on its lines", path: ['categoryId'] });
 export type CreateTransactionBody = z.infer<typeof CreateTransactionBody>;
 
+const Month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'expected YYYY-MM');
+
+export const ReconcileSummary = z.object({ month: Month, open: z.number().int() });
+export type ReconcileSummary = z.infer<typeof ReconcileSummary>;
+
 export const Home = z.object({
   netWorthCents: Cents, recent: z.array(Transaction),
   owedToYouCents: Cents, youOweCents: Cents, repaymentSuggestions: z.number().int(),
+  toReconcile: ReconcileSummary.nullable(),
   reconnect: z.array(z.object({ itemId: Id, institutionName: z.string() })),
 });
 export type Home = z.infer<typeof Home>;
+
+export const ReconcileQuery = z.object({ month: Month }).strict();
+export type ReconcileQuery = z.infer<typeof ReconcileQuery>;
+
+/** One month's money-out rows: how many need reconciling, how many are still open, and the open ones oldest first. */
+export const Reconcile = z.object({ month: Month, total: z.number().int(), open: z.number().int(), transactions: z.array(Transaction) });
+export type Reconcile = z.infer<typeof Reconcile>;
+
+export const ReconcileMonths = z.object({ months: z.array(ReconcileSummary) });
+export type ReconcileMonths = z.infer<typeof ReconcileMonths>;
+
+export const ReconcileBody = z.object({ reconciled: z.boolean(), amountCents: Cents.optional() }).strict();
+export type ReconcileBody = z.infer<typeof ReconcileBody>;
 
 export const SpendingQuery = z.discriminatedUnion('period', [
   z.object({ period: z.literal('month'), date: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) }),

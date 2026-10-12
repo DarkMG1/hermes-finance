@@ -52,3 +52,39 @@ import Testing
     let request = try #require(transport.requests.first)
     #expect(request.url.absoluteString == "https://hermes.example.com/v1/investments/holding-history?key=SYN/D&range=all")
 }
+
+@Test func receiptUploadSendsJPEGWithoutAKey() async throws {
+    let transport = FakeTransport([FakeTransport.json(200, #"{"bytes":3}"#)])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    try await client.putReceipt(transactionId: "t1", jpeg: Data([0xFF, 0xD8, 0xFF]))
+    let request = try #require(transport.requests.first)
+    #expect(request.method == "PUT" && request.url.path() == "/v1/transactions/t1/receipt")
+    #expect(request.headers["Content-Type"] == "image/jpeg" && request.headers["Idempotency-Key"] == nil)
+    #expect(request.body == Data([0xFF, 0xD8, 0xFF]))
+}
+
+@Test func reconcileSendsTheFlag() async throws {
+    let transport = FakeTransport([.success(HTTPResponse(status: 200, body: try fixture("transaction")))])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    _ = try await client.setReconciled(id: "t1", reconciled: false, amountCents: nil, idempotencyKey: "k")
+    let request = try #require(transport.requests.first)
+    #expect(request.url.path() == "/v1/transactions/t1/reconcile" && request.body == Data(#"{"reconciled":false}"#.utf8))
+}
+
+@Test func reconcileSendsTheAmountSeen() async throws {
+    let transport = FakeTransport([.success(HTTPResponse(status: 200, body: try fixture("transaction")))])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    _ = try await client.setReconciled(id: "t1", reconciled: true, amountCents: -1234, idempotencyKey: "k")
+    let body = try #require(transport.requests.first?.body)
+    let json = try #require(try JSONSerialization.jsonObject(with: body) as? [String: Any])
+    #expect(json["reconciled"] as? Bool == true && json["amountCents"] as? Int == -1234 && json.count == 2)
+}
+
+@Test func receiptDeleteSendsDeleteWithoutAKey() async throws {
+    let transport = FakeTransport([.success(HTTPResponse(status: 204, body: Data()))])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    try await client.deleteReceipt(transactionId: "t1")
+    let request = try #require(transport.requests.first)
+    #expect(request.method == "DELETE" && request.url.path() == "/v1/transactions/t1/receipt")
+    #expect(request.headers["Idempotency-Key"] == nil && request.body == nil)
+}

@@ -25,6 +25,21 @@ extension APIClient {
         try await write("PATCH", "/v1/transactions/\(id)", body: body, key: idempotencyKey)
     }
 
+    public func setReconciled(id: String, reconciled: Bool, amountCents: Int?, idempotencyKey: String) async throws -> LedgerTransaction {
+        try await write("POST", "/v1/transactions/\(id)/reconcile", body: ReconcileBody(reconciled: reconciled, amountCents: amountCents), key: idempotencyKey)
+    }
+
+    public func receipt(transactionId: String) async throws -> Data { try await getData("/v1/transactions/\(transactionId)/receipt") }
+
+    /// Same photo, same result: no idempotency key needed.
+    public func putReceipt(transactionId: String, jpeg: Data) async throws {
+        try await send("PUT", "/v1/transactions/\(transactionId)/receipt", body: jpeg, contentType: "image/jpeg", idempotencyKey: nil, timeout: 60)
+    }
+
+    public func deleteReceipt(transactionId: String) async throws {
+        try await send("DELETE", "/v1/transactions/\(transactionId)/receipt", body: nil, idempotencyKey: nil, timeout: 30)
+    }
+
     public func createTransaction(_ body: CreateTransactionBody, idempotencyKey: String) async throws -> LedgerTransaction {
         try await write("POST", "/v1/transactions", body: body, key: idempotencyKey)
     }

@@ -53,6 +53,8 @@ export async function buildFixtures(): Promise<Record<string, string>> {
     transaction: await get('/v1/transactions/txn-3'),
     spending: await get('/v1/spending?period=month&date=2026-03'),
     expenses: await get('/v1/expenses?period=month&date=2026-03'),
+    reconcile: await get('/v1/reconcile?month=2026-03'),
+    'reconcile-months': await get('/v1/reconcile/months'),
     'net-worth': await get('/v1/net-worth?range=1m'),
     banks: await get('/v1/banks'),
     'sync-status': { items: [{ itemId: 'item-1', institutionName: 'Synthetic Bank', result: 'ok', added: 2, modified: 1, removed: 0 }] },
