@@ -20,9 +20,14 @@ export function receiptRoutes(app: FastifyInstance, deps: Deps): void {
       throw new ApiError(400, 'INVALID_IMAGE', 'the receipt must be a JPEG');
     }
     assertLive(req.params.id);
-    db.prepare(`INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES (?, ?, ?, ?)
-      ON CONFLICT (transaction_id) DO UPDATE SET jpeg = excluded.jpeg, bytes = excluded.bytes, created_at = excluded.created_at`)
-      .run(req.params.id, jpeg, jpeg.length, deps.now().toISOString());
+    db.transaction(() => {
+      db.prepare(`INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT (transaction_id) DO UPDATE SET jpeg = excluded.jpeg, bytes = excluded.bytes, created_at = excluded.created_at,
+          tax_cents = NULL, tip_cents = NULL, fees_cents = NULL, total_cents = NULL, read_at = NULL, model = NULL, applied_lines = NULL`)
+        .run(req.params.id, jpeg, jpeg.length, deps.now().toISOString());
+      // the items belong to the old photo; the split they produced stays
+      db.prepare('DELETE FROM receipt_items WHERE transaction_id = ?').run(req.params.id);
+    })();
     return { bytes: jpeg.length };
   });
 
@@ -35,7 +40,10 @@ export function receiptRoutes(app: FastifyInstance, deps: Deps): void {
 
   app.delete<{ Params: { id: string } }>('/v1/transactions/:id/receipt', async (req, reply) => {
     assertLive(req.params.id);
-    db.prepare('DELETE FROM receipts WHERE transaction_id = ?').run(req.params.id);
+    db.transaction(() => {
+      db.prepare('DELETE FROM receipts WHERE transaction_id = ?').run(req.params.id);
+      db.prepare('DELETE FROM receipt_items WHERE transaction_id = ?').run(req.params.id);
+    })();
     return reply.code(204).send();
   });
 }

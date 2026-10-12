@@ -10,6 +10,8 @@ struct ReceiptSection: View {
     let hadReceipt: Bool
     /// Owned by the sheet, so it can't close mid-upload or mid-delete.
     @Binding var busy: Bool
+    /// Opens the Itemize screen; nil hides the button.
+    var onItemize: (() -> Void)?
     let onChange: () -> Void
 
     @State private var image: UIImage?
@@ -38,6 +40,9 @@ struct ReceiptSection: View {
                 // here, not on the add Button: that Button is disabled mid-write, and Done must still work
                 .fullScreenCover(isPresented: $viewing) {
                     if let image = self.image { ReceiptViewer(image: image) }
+                }
+                if let onItemize {
+                    Button("Itemize", action: onItemize).disabled(busy)
                 }
             } else if loading {
                 ProgressView().frame(maxWidth: .infinity)

@@ -253,3 +253,38 @@ export const AppleCardImportResult = z.object({
   accountId: Id, rows: z.number().int(), added: z.number().int(), updated: z.number().int(), skippedBeforeCutover: z.number().int(),
 });
 export type AppleCardImportResult = z.infer<typeof AppleCardImportResult>;
+
+/** What the receipt reader must return; zero-amount lines (free items) are dropped. */
+export const ReceiptReadOutput = z.object({
+  items: z.array(z.object({ name: z.string().trim().min(1).max(200), amountCents: z.number().int().min(-10_000_000).max(10_000_000) }))
+    .transform((items) => items.filter((i) => i.amountCents !== 0))
+    .refine((items) => items.length >= 1 && items.length <= 200, 'between 1 and 200 items'),
+  taxCents: z.number().int().min(0).max(10_000_000),
+  tipCents: z.number().int().min(0).max(10_000_000),
+  feesCents: z.number().int().min(0).max(10_000_000),
+  totalCents: z.number().int().min(0).max(100_000_000).nullable(),
+});
+export type ReceiptReadOutput = z.infer<typeof ReceiptReadOutput>;
+
+export const ReceiptItem = z.object({ id: Id, name: z.string(), amountCents: Cents, people: z.array(z.string()) });
+export type ReceiptItem = z.infer<typeof ReceiptItem>;
+
+export const Itemization = z.object({
+  items: z.array(ReceiptItem),
+  taxCents: Cents.nullable(), tipCents: Cents.nullable(), feesCents: Cents.nullable(), totalCents: Cents.nullable(),
+  readAt: z.string().nullable(),
+  /** The split (or a "they paid" amount) changed since the items were last saved. */
+  handEdited: z.boolean(),
+});
+export type Itemization = z.infer<typeof Itemization>;
+
+const Extra = z.number().int().min(0).max(10_000_000);
+export const SaveItemsBody = z.object({
+  items: z.array(z.object({
+    name: z.string().trim().min(1).max(200),
+    amountCents: Cents.refine((n) => n !== 0 && Math.abs(n) <= 10_000_000, 'amount must be non-zero and at most 100,000.00'),
+    people: z.array(Id).min(1).max(20).refine((p) => new Set(p).size === p.length, 'a person is listed twice'),
+  }).strict()).min(1).max(200),
+  taxCents: Extra, tipCents: Extra, feesCents: Extra,
+}).strict();
+export type SaveItemsBody = z.infer<typeof SaveItemsBody>;

@@ -22,6 +22,8 @@ struct TransactionDetailSheet: View {
     @State private var confirmDelete = false
     @State private var splitting: LedgerTransaction?
     @State private var savedForSplit = false
+    @State private var itemizing = false
+    @State private var savedFromItems = false
     @State private var reconciled = false
     @State private var reconciling = false
     @State private var reconcileError: String?
@@ -98,7 +100,8 @@ struct TransactionDetailSheet: View {
                 }
             }
             Section("Receipt") {
-                ReceiptSection(transactionId: transaction.id, hadReceipt: transaction.hasReceipt ?? false, busy: $receiptBusy) { savedOutside = true }
+                ReceiptSection(transactionId: transaction.id, hadReceipt: transaction.hasReceipt ?? false, busy: $receiptBusy,
+                               onItemize: patch.isEmpty && transaction.amountCents < 0 ? { itemizing = true } : nil) { savedOutside = true }
             }
             .disabled(deleteWrites.unresolved)
             if transaction.repaymentDismissed == true {
@@ -144,6 +147,15 @@ struct TransactionDetailSheet: View {
                 await onChange()
                 dismiss()
             }
+        })
+        .sheet(isPresented: $itemizing, onDismiss: {
+            // the items save rewrote the split or the amount: this sheet's copy is stale, so close it
+            if savedFromItems {
+                busy = true
+                Task { await onChange(); dismiss() }
+            }
+        }, content: {
+            ItemizeView(transaction: transaction) { savedFromItems = true }
         })
     }
 

@@ -3,6 +3,7 @@ import { loadConfig } from './config.ts';
 import { migrate, openDb } from './db.ts';
 import { createPlaidClient } from './plaid/client.ts';
 import { createTiingoClient } from './prices/tiingo.ts';
+import { createAnthropicReader } from './receipt-reader/anthropic.ts';
 import { buildApp } from './app.ts';
 import { startScheduler } from './scheduler.ts';
 
@@ -11,7 +12,9 @@ export async function start(env: NodeJS.ProcessEnv): Promise<{ close: () => Prom
   const db = openDb(config.dbPath);
   migrate(db);
   if (!config.tiingoApiKey) console.log('[hermes] no TIINGO_API_KEY: investment prices are off');
-  const deps = { db, config, plaid: createPlaidClient(config), prices: config.tiingoApiKey ? createTiingoClient(config.tiingoApiKey) : null, now: () => new Date() };
+  if (!config.anthropicApiKey) console.log('[hermes] no ANTHROPIC_API_KEY: receipt reading is off');
+  const deps = { db, config, plaid: createPlaidClient(config), prices: config.tiingoApiKey ? createTiingoClient(config.tiingoApiKey) : null,
+    receiptReader: config.anthropicApiKey ? createAnthropicReader(config.anthropicApiKey, config.anthropicModel) : null, now: () => new Date() };
   const app = buildApp(deps);
   await app.listen({ host: config.host, port: config.port });
   const stop = startScheduler(deps);

@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyPages, upsertAccounts } from '../src/sync/apply.ts';
 import { txn } from './fake-plaid.ts';
-import { makeTestDeps, seedCategory, seedItem, seedSplit, seedPerson } from './helpers.ts';
+import { AUTH, makeTestDeps, seedCategory, seedItem, seedSplit, seedPerson } from './helpers.ts';
+import { buildApp } from '../src/app.ts';
 import type { SyncPage } from '../src/plaid/port.ts';
 
 const NOW = '2026-03-15T12:00:00.000Z';
@@ -405,8 +406,29 @@ test('a receipt on a pending row moves to the posted row', () => {
   apply([page({ added: [txn({ transactionId: 'pend1', pending: true, amount: 20 })] })]);
   const pendingId = row('pend1')?.id as string;
   deps.db.prepare("INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES (?, x'FFD8FF', 3, 'x')").run(pendingId);
+  deps.db.prepare("INSERT INTO receipt_items (id, transaction_id, position, name, amount_cents, people) VALUES ('ri-1', ?, 0, 'Synthetic Item', 500, '[\"me\"]')").run(pendingId);
   apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', amount: 21 })], removed: [{ transactionId: 'pend1' }] })]);
   const postedId = row('post1')?.id as string;
   const r = deps.db.prepare('SELECT transaction_id FROM receipts').all() as { transaction_id: string }[];
   assert.deepEqual(r, [{ transaction_id: postedId }]);
+  assert.equal((deps.db.prepare('SELECT transaction_id FROM receipt_items WHERE id = ?').get('ri-1') as { transaction_id: string }).transaction_id, postedId);
+});
+
+test('an itemized pending row posts at a new amount: items and receipt move, the split resizes, handEdited turns on', async () => {
+  const { deps, apply, row } = setup();
+  seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill' });
+  apply([page({ added: [txn({ transactionId: 'pend1', pending: true, amount: 20 })] })]);
+  const pendId = row('pend1')?.id as string;
+  deps.db.prepare("INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES (?, x'FFD8FF', 3, 'x')").run(pendId);
+  const app = buildApp(deps);
+  const saved = await app.inject({ method: 'PUT', url: `/v1/transactions/${pendId}/receipt/items`, headers: { ...AUTH, 'idempotency-key': 'k1' },
+    payload: { items: [{ name: 'Synthetic Soup', amountCents: 1000, people: ['me'] }, { name: 'Synthetic Pie', amountCents: 1000, people: ['p1'] }], taxCents: 0, tipCents: 0, feesCents: 0 } });
+  assert.equal(saved.statusCode, 200);
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', amount: 24 })], removed: [{ transactionId: 'pend1' }] })]);
+  const postId = row('post1')?.id as string;
+  const lines = deps.db.prepare('SELECT amount_cents AS a, person_id AS p FROM split_lines WHERE transaction_id = ?').all(postId) as { a: number; p: string | null }[];
+  assert.deepEqual(lines.map((l) => `${l.p}:${l.a}`).sort(), ['null:-1200', 'p1:-1200']);
+  const it = (await app.inject({ method: 'GET', url: `/v1/transactions/${postId}/receipt/items`, headers: AUTH })).json();
+  assert.deepEqual(it.items.map((i: { name: string }) => i.name), ['Synthetic Soup', 'Synthetic Pie']);
+  assert.equal(it.handEdited, true);
 });

@@ -7,6 +7,10 @@ export type Config = {
   syncIntervalMs: number;
   gitSha: string;
   tiingoApiKey: string | null;
+  /** ANTHROPIC_API_KEY: unset turns receipt reading off. */
+  anthropicApiKey: string | null;
+  /** ANTHROPIC_MODEL: the receipt reader's model. */
+  anthropicModel: string;
   plaid: { clientId: string; secret: string; env: 'sandbox' | 'production' };
 };
 
@@ -40,6 +44,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     syncIntervalMs: intInRange(env, 'HERMES_SYNC_INTERVAL_MS', 6 * 60 * 60 * 1000, 60000, 2147483647),
     gitSha: env.HERMES_GIT_SHA ?? 'dev',
     tiingoApiKey: env.TIINGO_API_KEY?.trim() || null,
+    anthropicApiKey: env.ANTHROPIC_API_KEY?.trim() || null,
+    anthropicModel: env.ANTHROPIC_MODEL?.trim() || 'claude-sonnet-5-5',
     plaid: { clientId: required(env, 'PLAID_CLIENT_ID'), secret: required(env, 'PLAID_SECRET'), env: plaidEnv },
   };
 }
