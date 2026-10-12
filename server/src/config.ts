@@ -6,6 +6,7 @@ export type Config = {
   port: number;
   syncIntervalMs: number;
   gitSha: string;
+  tiingoApiKey: string | null;
   plaid: { clientId: string; secret: string; env: 'sandbox' | 'production' };
 };
 
@@ -38,6 +39,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     port: intInRange(env, 'HERMES_PORT', 5010, 0, 65535),
     syncIntervalMs: intInRange(env, 'HERMES_SYNC_INTERVAL_MS', 6 * 60 * 60 * 1000, 60000, 2147483647),
     gitSha: env.HERMES_GIT_SHA ?? 'dev',
+    tiingoApiKey: env.TIINGO_API_KEY?.trim() || null,
     plaid: { clientId: required(env, 'PLAID_CLIENT_ID'), secret: required(env, 'PLAID_SECRET'), env: plaidEnv },
   };
 }

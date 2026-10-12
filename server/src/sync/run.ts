@@ -4,6 +4,7 @@ import { PlaidError, type SyncPage } from '../plaid/port.ts';
 import { applyPages, getCutoverDate, upsertAccounts } from './apply.ts';
 import { localDay, snapshotBalances } from '../networth.ts';
 import { syncHoldings } from '../investments.ts';
+import { syncPrices } from '../prices.ts';
 
 export type ItemResult = {
   itemId: string; institutionName: string; result: 'ok' | 'login_required' | 'error' | 'already_running';
@@ -84,5 +85,6 @@ export async function syncAll(deps: Deps): Promise<ItemResult[]> {
   const ids = (deps.db.prepare('SELECT id FROM items ORDER BY institution_name').all() as { id: string }[]).map((r) => r.id);
   const results: ItemResult[] = [];
   for (const id of ids) results.push(await syncItem(deps, id));
+  await syncPrices(deps);
   return results;
 }

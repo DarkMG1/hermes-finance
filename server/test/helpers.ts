@@ -6,25 +6,28 @@ import { openDb, migrate, type Db } from '../src/db.ts';
 import { encryptToken } from '../src/crypto.ts';
 import type { Deps } from '../src/deps.ts';
 import { FakePlaid } from './fake-plaid.ts';
+import { FakePrices } from './fake-prices.ts';
 
 export const API_TOKEN = 'test-token-0123456789-0123456789-abcdef';
 export const AUTH = { authorization: `Bearer ${API_TOKEN}` };
 
-export function makeTestDeps(): { deps: Deps; plaid: FakePlaid } {
+export function makeTestDeps(): { deps: Deps; plaid: FakePlaid; prices: FakePrices } {
   const dir = mkdtempSync(join(tmpdir(), 'hermes-test-'));
   const db = openDb(join(dir, 'hermes.db'));
   migrate(db);
   const plaid = new FakePlaid();
+  const prices = new FakePrices();
   const deps: Deps = {
     db,
     plaid,
+    prices,
     now: () => new Date('2026-03-15T12:00:00Z'),
     config: {
       dbPath: join(dir, 'hermes.db'), apiToken: API_TOKEN, tokenKey: randomBytes(32), host: '127.0.0.1', port: 0,
-      syncIntervalMs: 60_000, gitSha: 'test-sha', plaid: { clientId: 'x', secret: 'y', env: 'sandbox' },
+      syncIntervalMs: 60_000, gitSha: 'test-sha', tiingoApiKey: 'test-key', plaid: { clientId: 'x', secret: 'y', env: 'sandbox' },
     },
   };
-  return { deps, plaid };
+  return { deps, plaid, prices };
 }
 
 export function seedCategory(db: Db, c: { id: string; name: string; isIncome?: boolean; isTransfer?: boolean }): void {
