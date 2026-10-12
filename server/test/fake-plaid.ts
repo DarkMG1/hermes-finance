@@ -1,4 +1,4 @@
-import { PlaidError, type LinkResult, type LinkTokenOpts, type PlaidAccount, type PlaidHoldings, type PlaidPort, type PlaidTxn, type SyncPage } from '../src/plaid/port.ts';
+import { PlaidError, type LinkResult, type LinkTokenOpts, type PlaidAccount, type PlaidHoldings, type PlaidInvestmentTxn, type PlaidSecurity, type PlaidPort, type PlaidTxn, type SyncPage } from '../src/plaid/port.ts';
 
 export function txn(over: Partial<PlaidTxn> & { transactionId: string }): PlaidTxn {
   return {
@@ -16,6 +16,9 @@ export class FakePlaid implements PlaidPort {
   exchanged: string[] = [];
   syncCalls: (string | null)[] = [];
   holdings: PlaidHoldings = { holdings: [], securities: [] };
+  investmentTxns: { transactions: PlaidInvestmentTxn[]; securities: PlaidSecurity[] } = { transactions: [], securities: [] };
+  investmentTxnCalls: [string, string][] = [];
+  private investmentTxnFailures: string[] = [];
   holdingsCalls = 0;
   linkOpts: LinkTokenOpts[] = [];
   private holdingsFailures: string[] = [];
@@ -37,6 +40,15 @@ export class FakePlaid implements PlaidPort {
     this.pageIndex += 1;
     if (!page.hasMore) { this.runs.shift(); this.pageIndex = 0; }
     return page;
+  }
+
+  failNextInvestmentTxns(code: string): void { this.investmentTxnFailures.push(code); }
+
+  async investmentsTransactionsGet(_token: string, startDate: string, endDate: string) {
+    this.investmentTxnCalls.push([startDate, endDate]);
+    const failure = this.investmentTxnFailures.shift();
+    if (failure) throw new PlaidError(failure);
+    return this.investmentTxns;
   }
 
   failNextHoldings(code: string): void { this.holdingsFailures.push(code); }

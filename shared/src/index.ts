@@ -147,7 +147,11 @@ export type Spending = z.infer<typeof Spending>;
 export const NetWorthQuery = z.object({ range: z.enum(['1m', '3m', '1y', 'all']) }).strict();
 export type NetWorthQuery = z.infer<typeof NetWorthQuery>;
 
-export const HoldingHistoryQuery = z.object({ key: z.string().min(1), range: NetWorthQuery.shape.range }).strict();
+const AccountIdsParam = z.string().max(4000).optional();
+export const InvestmentsQuery = z.object({ accountIds: AccountIdsParam }).strict();
+export type InvestmentsQuery = z.infer<typeof InvestmentsQuery>;
+export const InvestmentsHistoryQuery = NetWorthQuery.extend({ accountIds: AccountIdsParam }).strict();
+export const HoldingHistoryQuery = z.object({ key: z.string().min(1), range: NetWorthQuery.shape.range, accountIds: AccountIdsParam }).strict();
 export type HoldingHistoryQuery = z.infer<typeof HoldingHistoryQuery>;
 
 /** One point per day from the window start to today; each account's latest snapshot carries forward.

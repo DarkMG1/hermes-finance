@@ -92,6 +92,13 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   out.investments = await invGet('/v1/investments');
   out['investments-history'] = await invGet('/v1/investments/history?range=1m');
   out['holding-history'] = await invGet('/v1/investments/holding-history?key=SYNA&range=1m');
+  // estimate inputs go in after the fixtures above so those stay as they are
+  inv.db.prepare("INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, price_cents, updated_at) VALUES ('it-1', 'acct-brokerage', 'sec-syna', '2026-03-12', 'buy', 'buy', 1, 48000, 48000, 's')").run();
+  const px = inv.db.prepare('INSERT INTO security_prices (ticker, date, close_cents) VALUES (?, ?, ?)');
+  px.run('SYNA', '2026-03-11', 47000);
+  px.run('SYNA', '2026-03-12', 48000);
+  px.run('SYNA', '2026-03-13', 47500);
+  out['holding-history-estimated'] = await invGet('/v1/investments/holding-history?key=SYNA&range=1m');
   // ids minted at runtime are replaced so the files are stable
   const text = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
   const normalise = (s: string) => s.replace(/"accountId": "[0-9a-f-]{36}"/g, '"accountId": "fixture-applecard"').replace(/"itemId": "[0-9a-f-]{36}"/g, '"itemId": "fixture-item"');

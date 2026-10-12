@@ -1,5 +1,6 @@
 import type { NetWorthHistory, NetWorthQuery } from '@hermes/shared';
 import type { Db } from './db.ts';
+import { type AccountEstimate, loadAccountEstimate } from './backfill.ts';
 import { liveNetWorthCents, NEGATIVE_TYPES } from './ledger.ts';
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -37,19 +38,27 @@ export function nextDay(day: string): string {
 /** Rebuilt from transactions before their first snapshot; every other type holds flat at it. */
 const REBUILT_TYPES = ['depository', 'credit', 'loan'];
 
-/** The live balance total of visible accounts of one type, signed as on Home. */
-function liveTypeCents(db: Db, type: string): number {
-  const row = db.prepare('SELECT COALESCE(SUM(balance_current_cents), 0) AS c FROM accounts WHERE hidden = 0 AND type = ?').get(type) as { c: number };
-  return NEGATIVE_TYPES.has(type) ? -row.c : row.c;
+/** The live balance total of visible accounts matching the filter, signed as on Home. */
+function liveCents(db: Db, type: string | null, ids: string[] | undefined): number {
+  if (type === null && !ids) return liveNetWorthCents(db);
+  const rows = db.prepare(`SELECT type, balance_current_cents AS c FROM accounts a WHERE hidden = 0 AND balance_current_cents IS NOT NULL
+    AND (? IS NULL OR type = ?) ${ids ? `AND a.id IN (${ids.map(() => '?').join(', ')})` : ''}`).all(type, type, ...(ids ?? [])) as { type: string; c: number }[];
+  return rows.reduce((s, r) => s + (NEGATIVE_TYPES.has(r.type) ? -r.c : r.c), 0);
 }
 
-export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string, onlyType: string | null = null): NetWorthHistory {
+export type NetWorthFilter = { type?: string; accountIds?: string[] };
+
+export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string, filter: NetWorthFilter = {}): NetWorthHistory {
+  const type = filter.type ?? null;
+  const ids = filter.accountIds;
+  const idClause = ids ? `AND a.id IN (${ids.map(() => '?').join(', ')})` : '';
+  const idArgs = ids ?? [];
   const snaps = db.prepare(`
     SELECT s.account_id AS accountId, s.date, s.balance_cents AS cents, a.type FROM balance_snapshots s
-    JOIN accounts a ON a.id = s.account_id WHERE a.hidden = 0 AND s.date <= ? AND (? IS NULL OR a.type = ?) ORDER BY s.date`).all(today, onlyType, onlyType) as
+    JOIN accounts a ON a.id = s.account_id WHERE a.hidden = 0 AND s.date <= ? AND (? IS NULL OR a.type = ?) ${idClause} ORDER BY s.date`).all(today, type, type, ...idArgs) as
     { accountId: string; date: string; cents: number; type: string }[];
   const first = snaps[0];
-  if (!first) return { points: [], currentCents: onlyType === null ? liveNetWorthCents(db) : liveTypeCents(db, onlyType), changeCents: 0, estimatedThrough: null };
+  if (!first) return { points: [], currentCents: liveCents(db, type, ids), changeCents: 0, estimatedThrough: null };
   const signed = (s: { cents: number; type: string }) => (NEGATIVE_TYPES.has(s.type) ? -s.cents : s.cents);
   // each account's first snapshot (S) anchors its estimate for every earlier day
   const anchors = new Map<string, string>();
@@ -59,17 +68,25 @@ export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string
     anchors.set(s.accountId, s.date);
     latest.set(s.accountId, signed(s));
   }
+  // investment accounts: estimated from investment transactions and prices before their first snapshot
+  const estimates = new Map<string, AccountEstimate>();
+  for (const s of snaps) {
+    if (s.type !== 'investment' || estimates.has(s.accountId)) continue;
+    const est = loadAccountEstimate(db, s.accountId);
+    if (est) estimates.set(s.accountId, est);
+  }
   // counted transactions per account and day, up to and including S; v(d) = v(S) - (moves in (d, S])
   const moves = db.prepare(`
     SELECT t.account_id AS accountId, t.date, SUM(t.amount_cents) AS cents FROM transactions t
     JOIN accounts a ON a.id = t.account_id
-    WHERE a.hidden = 0 AND a.type IN (${REBUILT_TYPES.map(() => '?').join(', ')}) AND (? IS NULL OR a.type = ?) AND t.pending = 0 AND t.removed_at IS NULL
+    WHERE a.hidden = 0 AND a.type IN (${REBUILT_TYPES.map(() => '?').join(', ')}) AND (? IS NULL OR a.type = ?) ${idClause} AND t.pending = 0 AND t.removed_at IS NULL
       AND t.date <= (SELECT MIN(s.date) FROM balance_snapshots s WHERE s.account_id = t.account_id AND s.date <= ?)
-    GROUP BY t.account_id, t.date ORDER BY t.date`).all(...REBUILT_TYPES, onlyType, onlyType, today) as { accountId: string; date: string; cents: number }[];
+    GROUP BY t.account_id, t.date ORDER BY t.date`).all(...REBUILT_TYPES, type, type, ...idArgs, today) as { accountId: string; date: string; cents: number }[];
   // start every account at its balance before anything recorded, then add each day's moves walking forward
   for (const m of moves) latest.set(m.accountId, latest.get(m.accountId)! - m.cents);
   const lastAnchor = [...anchors.values()].reduce((a, b) => (b > a ? b : a));
-  const earliest = moves[0] && moves[0].date < first.date ? moves[0].date : first.date;
+  const earliest = [...estimates.values()].reduce((e, est) => (est.earliest < e ? est.earliest : e),
+    moves[0] && moves[0].date < first.date ? moves[0].date : first.date);
   const wanted = range === 'all' ? earliest : minusMonths(today, MONTHS[range]);
   const start = wanted > earliest ? wanted : earliest;
   const points: NetWorthHistory['points'] = [];
@@ -83,6 +100,7 @@ export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string
     }
     // on and after S the real snapshot wins
     for (; i < snaps.length && snaps[i]!.date <= day; i += 1) latest.set(snaps[i]!.accountId, signed(snaps[i]!));
+    for (const [accountId, est] of estimates) if (day < anchors.get(accountId)!) latest.set(accountId, est.valueOn(day).totalCents);
     if (day < start) continue;
     points.push({ date: day, netWorthCents: [...latest.values()].reduce((a, b) => a + b, 0) });
     if (day < lastAnchor) estimatedThrough = day;

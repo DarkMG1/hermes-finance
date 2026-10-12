@@ -24,6 +24,7 @@ test('fixtures satisfy the shared contract', async () => {
   Investments.parse(f['investments.json']);
   NetWorthHistory.parse(f['investments-history.json']);
   NetWorthHistory.parse(f['holding-history.json']);
+  NetWorthHistory.parse(f['holding-history-estimated.json']);
   Bank.array().parse(f['banks.json']);
   SyncStatus.parse(f['sync-status.json']);
   LinkSession.parse(f['link-session.json']);

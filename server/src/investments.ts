@@ -1,8 +1,10 @@
 import type { Holding, HoldingAccount, Investments, NetWorthHistory, NetWorthQuery } from '@hermes/shared';
 import type { Db } from './db.ts';
 import type { Deps } from './deps.ts';
+import { holdingKey, loadAccountEstimate } from './backfill.ts';
+import { addDays } from './days.ts';
 import { localDay, MONTHS, minusMonths, nextDay } from './networth.ts';
-import { PlaidError, type PlaidHoldings } from './plaid/port.ts';
+import { PlaidError, type PlaidHoldings, type PlaidSecurity } from './plaid/port.ts';
 
 const CONSENT = new Set(['ADDITIONAL_CONSENT_REQUIRED', 'ACCESS_NOT_GRANTED']);
 const UNSUPPORTED = new Set(['PRODUCTS_NOT_SUPPORTED', 'NO_INVESTMENT_ACCOUNTS']);
@@ -12,10 +14,46 @@ const cents = (dollars: number): number => {
   return c === 0 ? 0 : c; // avoid -0
 };
 
-/** Holdings of one ticker combine across accounts; every cash position is one "Cash" holding, keyed `_cash` (no ticker has an underscore). */
-export function holdingKey(s: { securityId: string; ticker: string | null; type: string | null; isCash: number | boolean }): string {
-  if (s.isCash === true || s.isCash === 1 || s.type === 'cash') return '_cash';
-  return s.ticker ? s.ticker.toUpperCase() : s.securityId;
+export { holdingKey } from './backfill.ts';
+
+function upsertSecurities(db: Db, securities: PlaidSecurity[], nowIso: string): void {
+  const upsertSecurity = db.prepare(`
+    INSERT INTO securities (id, name, ticker, type, is_cash, close_price_cents, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (id) DO UPDATE SET name = excluded.name, ticker = excluded.ticker, type = excluded.type, is_cash = excluded.is_cash,
+      close_price_cents = excluded.close_price_cents, updated_at = excluded.updated_at`);
+  for (const s of securities) {
+    upsertSecurity.run(s.securityId, s.name, s.ticker, s.type, s.isCash ? 1 : 0, s.closePrice === null ? null : cents(s.closePrice), nowIso);
+  }
+}
+
+/** Stores the item's investment transactions: 730 days while any of its accounts has none stored, else the last 30 (Plaid corrects recent ones). Never throws. */
+export async function syncInvestmentTransactions(deps: Deps, itemId: string, token: string, accountIds: Map<string, string>): Promise<void> {
+  const { db } = deps;
+  try {
+    // an account with nothing stored yet (new, or added to the item later) needs the full 730 days
+    const hasRows = db.prepare('SELECT 1 FROM investment_transactions WHERE account_id = ? LIMIT 1');
+    const full = [...accountIds.values()].some((id) => hasRows.get(id) === undefined);
+    const today = localDay(deps.now());
+    const data = await deps.plaid.investmentsTransactionsGet(token, addDays(today, full ? -730 : -30), today);
+    const nowIso = deps.now().toISOString();
+    db.transaction(() => {
+      upsertSecurities(db, data.securities, nowIso);
+      const upsert = db.prepare(`
+        INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, price_cents, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (id) DO UPDATE SET account_id = excluded.account_id, security_id = excluded.security_id, date = excluded.date, type = excluded.type,
+          subtype = excluded.subtype, quantity = excluded.quantity, amount_cents = excluded.amount_cents, price_cents = excluded.price_cents,
+          updated_at = excluded.updated_at`);
+      for (const t of data.transactions) {
+        const accountId = accountIds.get(t.accountId);
+        if (!accountId) continue;
+        upsert.run(t.id, accountId, t.securityId, t.date, t.type, t.subtype, t.quantity, cents(t.amount), t.price === null ? null : cents(t.price), nowIso);
+      }
+    })();
+  } catch (e) {
+    const code = e instanceof PlaidError ? e.code : e instanceof Error ? e.message : String(e);
+    console.error(`[hermes] investment transactions failed item=${itemId} ${code}`);
+  }
 }
 
 /** Fetches the item's holdings and stores them with today's snapshot. Never throws: a failure must not fail the bank sync. */
@@ -40,13 +78,7 @@ export async function syncHoldings(deps: Deps, itemId: string, token: string): P
     const nowIso = deps.now().toISOString();
     const day = localDay(deps.now());
     db.transaction(() => {
-      const upsertSecurity = db.prepare(`
-        INSERT INTO securities (id, name, ticker, type, is_cash, close_price_cents, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (id) DO UPDATE SET name = excluded.name, ticker = excluded.ticker, type = excluded.type, is_cash = excluded.is_cash,
-          close_price_cents = excluded.close_price_cents, updated_at = excluded.updated_at`);
-      for (const s of data.securities) {
-        upsertSecurity.run(s.securityId, s.name, s.ticker, s.type, s.isCash ? 1 : 0, s.closePrice === null ? null : cents(s.closePrice), nowIso);
-      }
+      upsertSecurities(db, data.securities, nowIso);
       // replace, so a position sold since the last sync disappears, from today's snapshot too
       for (const a of accounts) {
         db.prepare('DELETE FROM holdings WHERE account_id = ?').run(a.id);
@@ -82,6 +114,7 @@ export async function syncHoldings(deps: Deps, itemId: string, token: string): P
       for (const a of accounts) synced.run(a.id, day);
       db.prepare("UPDATE items SET investments_status = 'ok' WHERE id = ?").run(itemId);
     })();
+    await syncInvestmentTransactions(deps, itemId, token, accountIds);
   } catch (e) {
     console.error(`[hermes] holdings store failed item=${itemId} ${e instanceof Error ? e.message : String(e)}`);
   }
@@ -96,13 +129,13 @@ type HoldingRow = {
 const sumKnown = (xs: (number | null)[]): number | null =>
   xs.some((x) => x === null) ? null : xs.reduce<number>((a, b) => a + (b as number), 0);
 
-export function getInvestments(db: Db): Investments {
+export function getInvestments(db: Db, accountIds?: string[]): Investments {
   const rows = db.prepare(`
     SELECT h.account_id AS accountId, COALESCE(a.display_name, a.name) AS accountName, h.security_id AS securityId, h.quantity,
       h.value_cents AS valueCents, h.cost_basis_cents AS costBasisCents, h.updated_at AS updatedAt,
       s.name, s.ticker, s.type, s.is_cash AS isCash
     FROM holdings h JOIN accounts a ON a.id = h.account_id JOIN securities s ON s.id = h.security_id
-    WHERE a.hidden = 0`).all() as HoldingRow[];
+    WHERE a.hidden = 0 ${inAccounts(accountIds)}`).all(...(accountIds ?? [])) as HoldingRow[];
   const groups = new Map<string, HoldingRow[]>();
   for (const r of rows) {
     const key = holdingKey(r);
@@ -136,33 +169,62 @@ export function getInvestments(db: Db): Investments {
   return { totalCents, costBasisCents, gainCents: costBasisCents === null ? null : totalCents - costBasisCents, asOf, holdings, reconnect };
 }
 
+const inAccounts = (ids: string[] | undefined) => (ids ? `AND a.id IN (${ids.map(() => '?').join(', ')})` : '');
+
 /**
  * One holding's value per day, summed over accounts. A day an account synced holdings (holding_syncs) without this holding
- * counts it 0 (sold); a day it didn't sync carries its last value forward. Null when the holding has no snapshots.
+ * counts it 0 (sold); a day it didn't sync carries its last value forward. Before an account's first sync (anchor) its value
+ * comes from the backfill estimate. Null when the holding has no snapshots.
  */
-export function getHoldingHistory(db: Db, key: string, range: NetWorthQuery['range'], today: string): NetWorthHistory | null {
+export function getHoldingHistory(db: Db, key: string, range: NetWorthQuery['range'], today: string, accountIds?: string[]): NetWorthHistory | null {
+  const ids = accountIds ?? [];
   const all = db.prepare(`
     SELECT hs.account_id AS accountId, hs.security_id AS securityId, hs.date, hs.value_cents AS cents, s.ticker, s.type, s.is_cash AS isCash
     FROM holding_snapshots hs JOIN accounts a ON a.id = hs.account_id JOIN securities s ON s.id = hs.security_id
-    WHERE a.hidden = 0 AND hs.date <= ? ORDER BY hs.date`).all(today) as
+    WHERE a.hidden = 0 AND hs.date <= ? ${inAccounts(accountIds)} ORDER BY hs.date`).all(today, ...ids) as
     { accountId: string; securityId: string; date: string; cents: number; ticker: string | null; type: string | null; isCash: number }[];
   const mine = all.filter((r) => holdingKey(r) === key);
   const first = mine[0];
   if (!first) return null;
   const synced = new Set((db.prepare(`
-    SELECT hs.account_id AS accountId, hs.date FROM holding_syncs hs JOIN accounts a ON a.id = hs.account_id WHERE a.hidden = 0 AND hs.date <= ?`)
-    .all(today) as { accountId: string; date: string }[]).map((r) => `${r.accountId}|${r.date}`));
-  const accounts = [...new Set(mine.map((r) => r.accountId))];
+    SELECT hs.account_id AS accountId, hs.date FROM holding_syncs hs JOIN accounts a ON a.id = hs.account_id
+    WHERE a.hidden = 0 AND hs.date <= ? ${inAccounts(accountIds)}`)
+    .all(today, ...ids) as { accountId: string; date: string }[]).map((r) => `${r.accountId}|${r.date}`));
+  const group = (db.prepare('SELECT id AS securityId, ticker, type, is_cash AS isCash FROM securities').all() as
+    { securityId: string; ticker: string | null; type: string | null; isCash: number }[]).filter((s) => holdingKey(s) === key).map((s) => s.securityId);
+  // accounts that traded the group before their anchor count too, even with no snapshot of it (sold out before the first sync)
+  const traded = (db.prepare(`
+    SELECT DISTINCT t.account_id AS accountId FROM investment_transactions t JOIN accounts a ON a.id = t.account_id
+    WHERE a.hidden = 0 AND a.type = 'investment' AND t.security_id IN (${group.map(() => '?').join(', ')}) ${inAccounts(accountIds)}`)
+    .all(...group, ...ids) as { accountId: string }[]).map((r) => r.accountId);
+  const accounts = [...new Set([...mine.map((r) => r.accountId), ...traded])];
   const values = new Map<string, number>();
   for (const r of mine) values.set(`${r.accountId}|${r.date}`, (values.get(`${r.accountId}|${r.date}`) ?? 0) + r.cents);
-  const wanted = range === 'all' ? first.date : minusMonths(today, MONTHS[range]);
-  const start = wanted > first.date ? wanted : first.date;
+  const estimates = new Map(accounts.flatMap((a) => {
+    const est = loadAccountEstimate(db, a);
+    return est ? [[a, est] as const] : [];
+  }));
+  const firstDay = [...estimates.values()].reduce((d, e) => (e.earliest < d ? e.earliest : d), first.date);
+  const wanted = range === 'all' ? firstDay : minusMonths(today, MONTHS[range]);
+  const start = wanted > firstDay ? wanted : firstDay;
   const latest = new Map<string, number>();
   const points: NetWorthHistory['points'] = [];
-  for (let day = first.date; day <= today; day = nextDay(day)) {
-    for (const a of accounts) if (synced.has(`${a}|${day}`)) latest.set(a, values.get(`${a}|${day}`) ?? 0);
-    if (day >= start) points.push({ date: day, netWorthCents: [...latest.values()].reduce((x, y) => x + y, 0) });
+  let estimatedThrough: string | null = null;
+  for (let day = firstDay; day <= today; day = nextDay(day)) {
+    let estimated = false;
+    for (const a of accounts) {
+      const est = estimates.get(a);
+      if (est && day < est.anchor) {
+        const v = est.valueOn(day);
+        latest.set(a, key === '_cash' ? v.cashCents : group.reduce((x, id) => x + (v.bySecurity.get(id) ?? 0), 0));
+        estimated = true;
+      } else if (synced.has(`${a}|${day}`)) latest.set(a, values.get(`${a}|${day}`) ?? 0);
+    }
+    if (day >= start) {
+      points.push({ date: day, netWorthCents: [...latest.values()].reduce((x, y) => x + y, 0) });
+      if (estimated) estimatedThrough = day;
+    }
   }
   const last = points[points.length - 1]!;
-  return { points, currentCents: last.netWorthCents, changeCents: last.netWorthCents - points[0]!.netWorthCents, estimatedThrough: null };
+  return { points, currentCents: last.netWorthCents, changeCents: last.netWorthCents - points[0]!.netWorthCents, estimatedThrough };
 }

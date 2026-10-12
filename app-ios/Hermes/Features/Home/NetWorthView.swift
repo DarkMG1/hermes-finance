@@ -3,7 +3,7 @@ import SwiftUI
 
 struct NetWorthView: View {
     @Environment(AppModel.self) private var model
-    @AppStorage("hideBalances") private var hideBalances = false
+    @AppStorage("hideBalances") private var hideBalances = true
     @State private var range = NetWorthRange.month
     @State private var state: LoadState<NetWorthHistory> = .loading
     @State private var scrubbed: Date?
@@ -25,8 +25,7 @@ struct NetWorthView: View {
                 } else {
                     Card { HistoryChart(points: history.points, scrubbed: $scrubbed) }
                     if let through = history.estimatedThrough {
-                        Text("Through \(DayText.date(through)?.formatted(.dateTime.month(.abbreviated).day().year()) ?? through): estimated from transactions.")
-                            .textStyle(.caption, color: Palette.secondaryText)
+                        EstimatedFootnote(through: through)
                     }
                 }
             }

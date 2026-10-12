@@ -3,15 +3,20 @@ import SwiftUI
 
 struct InvestmentsView: View {
     @Environment(AppModel.self) private var model
-    @AppStorage("hideBalances") private var hideBalances = false
+    @AppStorage("hideBalances") private var hideBalances = true
     @State private var range = NetWorthRange.month
     @State private var holdings: LoadState<Investments> = .loading
     @State private var history: LoadState<NetWorthHistory> = .loading
     @State private var scrubbed: Date?
-    @State private var loadedRange: NetWorthRange?
+    /// The range and selection the shown history was read for; a spinner shows only when either changes.
+    @State private var loadedKey: String?
+    /// Empty = all accounts. Per visit, not remembered.
+    @State private var selected: Set<String> = []
 
     var body: some View {
         Screen(title: "Investments") {
+            // outside the holdings state, so the chips stay usable while loading or offline
+            if investmentAccounts.count > 1 { accountChips }
             // swiftlint:disable:next multiple_closures_with_trailing_closure
             LoadingContent(state: holdings, retry: { Task { await loadHoldings() } }) { loaded in
                 LastUpdated(loaded: loaded)
@@ -27,13 +32,14 @@ struct InvestmentsView: View {
                         Text("History starts today. Check back tomorrow.").textStyle(.subhead, color: Palette.secondaryText)
                     } else {
                         Card { HistoryChart(points: loadedHistory.value.points, scrubbed: $scrubbed) }
+                        if let through = loadedHistory.value.estimatedThrough { EstimatedFootnote(through: through) }
                     }
                 }
                 if !investments.holdings.isEmpty {
                     Card {
                         Text("Holdings").textStyle(.headline)
                         ForEach(investments.holdings) { holding in
-                            NavigationLink { HoldingView(holding: holding) } label: { row(holding) }
+                            NavigationLink { HoldingView(holding: holding, accountIds: selected) } label: { row(holding) }
                                 .buttonStyle(.plain)
                             if holding.id != investments.holdings.last?.id { Divider().overlay(Palette.separator) }
                         }
@@ -41,9 +47,9 @@ struct InvestmentsView: View {
                 }
             }
         }
-        .task { await loadHoldings() }
-        .task(id: range) {
-            if loadedRange != range { history = .loading }
+        .task(id: selected) { await loadHoldings() }
+        .task(id: historyKey) {
+            if loadedKey != historyKey { history = .loading }
             scrubbed = nil
             await loadHistory()
         }
@@ -51,6 +57,32 @@ struct InvestmentsView: View {
             await loadHoldings()
             await loadHistory()
         }
+    }
+
+    private var investmentAccounts: [Account] { model.accounts.filter { $0.type == "investment" && !$0.hidden } }
+
+    private var historyKey: String { "\(range.rawValue)|\(selected.sorted())" }
+
+    private var accountChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Space.s) {
+                ForEach(investmentAccounts) { account in
+                    Button { toggle(account.id) } label: {
+                        FilterChip(title: account.name, active: selected.contains(account.id))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(selected.contains(account.id) ? .isSelected : [])
+                    .accessibilityHint("Shows only this account")
+                }
+            }
+            .padding(.vertical, Space.xs)
+        }
+    }
+
+    private func toggle(_ id: String) {
+        if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
+        // the old rows would open with the new filter: spinner until the new selection loads
+        holdings = .loading
     }
 
     /// While dragging, the header shows the chosen day's total instead of today's.
@@ -77,33 +109,36 @@ struct InvestmentsView: View {
                     .redacted(reason: hideBalances ? .placeholder : [])
                 GainText(gainCents: holding.isCash ? nil : holding.gainCents, percent: nil)
             }
+            Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText)
         }
     }
 
     private func loadHoldings() async {
         guard let reader = model.reader else { return }
+        let requested = selected
         do {
-            let loaded = try await reader.read("/v1/investments", as: Investments.self)
-            guard !Task.isCancelled else { return }
+            let loaded = try await reader.read("/v1/investments", query: InvestmentFilter.queryItems(requested), as: Investments.self)
+            guard !Task.isCancelled, requested == selected else { return }
             holdings = .loaded(loaded)
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, requested == selected else { return }
             holdings = .failed(errorMessage(error))
         }
     }
 
     private func loadHistory() async {
         guard let reader = model.reader else { return }
-        let requested = range
+        let requested = historyKey
         do {
-            let loaded = try await reader.read("/v1/investments/history", query: requested.queryItems, as: NetWorthHistory.self)
-            guard !Task.isCancelled, requested == range else { return }
+            let loaded = try await reader.read("/v1/investments/history", query: range.queryItems + InvestmentFilter.queryItems(selected),
+                                         as: NetWorthHistory.self)
+            guard !Task.isCancelled, requested == historyKey else { return }
             history = .loaded(loaded)
-            loadedRange = requested
+            loadedKey = requested
         } catch {
-            guard !Task.isCancelled, requested == range else { return }
+            guard !Task.isCancelled, requested == historyKey else { return }
             history = .failed(errorMessage(error))
-            loadedRange = requested
+            loadedKey = requested
         }
     }
 }
@@ -121,7 +156,7 @@ func gainColor(_ cents: Int) -> Color {
 struct GainText: View {
     let gainCents: Int?
     let percent: Double?
-    @AppStorage("hideBalances") private var hideBalances = false
+    @AppStorage("hideBalances") private var hideBalances = true
 
     var body: some View {
         if let gainCents {

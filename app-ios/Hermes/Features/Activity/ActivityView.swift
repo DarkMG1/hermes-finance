@@ -93,10 +93,10 @@ struct ActivityView: View {
                         ForEach(filterAccounts) { account in Text(account.name).tag(Optional(account.id)) }
                     }
                 } label: {
-                    chip(filterAccounts.first { $0.id == accountId }?.name ?? "Account", active: accountId != nil)
+                    FilterChip(title: filterAccounts.first { $0.id == accountId }?.name ?? "Account", active: accountId != nil, showsMenu: true)
                 }
                 Button { choosingCategory = true } label: {
-                    chip(categoryId == nil ? "Category" : model.categoryName(categoryId), active: categoryId != nil)
+                    FilterChip(title: categoryId == nil ? "Category" : model.categoryName(categoryId), active: categoryId != nil, showsMenu: true)
                 }
                 .buttonStyle(.plain)
                 Menu {
@@ -105,21 +105,11 @@ struct ActivityView: View {
                         ForEach(model.people.filter { !$0.archived || $0.id == personId }) { person in Text(person.name).tag(Optional(person.id)) }
                     }
                 } label: {
-                    chip(personId.map(model.personName) ?? "Person", active: personId != nil)
+                    FilterChip(title: personId.map(model.personName) ?? "Person", active: personId != nil, showsMenu: true)
                 }
             }
             .padding(.vertical, Space.xs)
         }
-    }
-
-    private func chip(_ title: String, active: Bool) -> some View {
-        HStack(spacing: Space.xs) {
-            Text(title).textStyle(.subhead, color: active ? Palette.background : Palette.text).lineLimit(1)
-            Image(systemName: "chevron.down").textStyle(.caption, color: active ? Palette.background : Palette.secondaryText)
-        }
-        .padding(.horizontal, Space.m)
-        .padding(.vertical, Space.s)
-        .background(active ? Palette.accent : Palette.surface, in: Capsule())
     }
 
     /// Re-reads one edited row in place: reloading from the first page drops the later pages and jumps the list.

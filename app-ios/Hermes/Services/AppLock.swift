@@ -81,8 +81,9 @@ final class AppLock {
     func confirmOwnerInApp(reason: String) async -> OwnerCheck {
         let started = generation
         let result = await Self.confirmOwner(reason: reason, allowNewBaseline: false)
-        // backgrounded or locked since the prompt: phaseChanged owns the cover
-        if generation == started && !locked { cover.hide() }
+        // backgrounded or locked since the prompt: phaseChanged owns the cover, and a late success must not show balances again
+        guard generation == started else { return .failed(nil) }
+        if !locked { cover.hide() }
         return result
     }
 
