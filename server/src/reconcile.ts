@@ -1,3 +1,8 @@
+import type { Reconcile, ReconcileMonths, Transaction } from '@hermes/shared';
+import type { Db } from './db.ts';
+import { ApiError } from './errors.ts';
+import { getTransaction, periodRange, rowToTransaction, TXN_COLS, type TxnRow } from './ledger.ts';
+
 // Money out the owner should look at once a month. Over alias `t` (transactions). Migration 016's backlog step repeats this
 // WHERE; reconcile.test.ts checks the two agree.
 export const NEEDS_RECONCILE = `(
@@ -17,3 +22,31 @@ export const NEEDS_RECONCILE = `(
 
 // marked, and the bank hasn't changed the amount since
 export const OPEN = '(t.reconciled_at IS NULL OR t.reconciled_cents != t.amount_cents)';
+
+export function getReconcile(db: Db, month: string): Reconcile {
+  const { from, toExclusive } = periodRange({ period: 'month', date: month });
+  const { n } = db.prepare(`SELECT COUNT(*) AS n FROM transactions t WHERE t.date >= ? AND t.date < ? AND ${NEEDS_RECONCILE}`)
+    .get(from, toExclusive) as { n: number };
+  const rows = db.prepare(`SELECT ${TXN_COLS} FROM transactions t WHERE t.date >= ? AND t.date < ? AND ${NEEDS_RECONCILE} AND ${OPEN}
+    ORDER BY t.date, t.created_at, t.rowid`).all(from, toExclusive) as TxnRow[];
+  return { month, total: n, open: rows.length, transactions: rows.map((r) => rowToTransaction(db, r)) };
+}
+
+export function reconcileMonths(db: Db): ReconcileMonths {
+  const months = db.prepare(`SELECT substr(t.date, 1, 7) AS month, COUNT(*) AS open FROM transactions t WHERE ${NEEDS_RECONCILE} AND ${OPEN}
+    GROUP BY month ORDER BY month`).all() as { month: string; open: number }[];
+  return { months };
+}
+
+/** The oldest finished month (before `month`) with open rows: what Home's card shows. The current month never nags. */
+export function oldestOpenBefore(db: Db, month: string): { month: string; open: number } | null {
+  return reconcileMonths(db).months.find((m) => m.month < month) ?? null;
+}
+
+export function setReconciled(db: Db, id: string, reconciled: boolean, nowIso: string): Transaction {
+  const changes = reconciled
+    ? db.prepare('UPDATE transactions SET reconciled_at = ?, reconciled_cents = amount_cents WHERE id = ? AND removed_at IS NULL').run(nowIso, id).changes
+    : db.prepare('UPDATE transactions SET reconciled_at = NULL, reconciled_cents = NULL WHERE id = ? AND removed_at IS NULL').run(id).changes;
+  if (changes === 0) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+  return getTransaction(db, id)!;
+}

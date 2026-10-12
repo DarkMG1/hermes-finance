@@ -141,5 +141,6 @@
   ],
   "owedToYouCents": 200,
   "youOweCents": 0,
-  "repaymentSuggestions": 1
+  "repaymentSuggestions": 1,
+  "toReconcile": null
 }

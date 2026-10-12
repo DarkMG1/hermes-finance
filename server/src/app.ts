@@ -9,6 +9,7 @@ import { syncRoutes } from './routes/sync.ts';
 import { bankRoutes } from './routes/banks.ts';
 import { importRoutes } from './routes/imports.ts';
 import { investmentRoutes } from './routes/investments.ts';
+import { reconcileRoutes } from './routes/reconcile.ts';
 
 function tokenMatches(header: string | undefined, token: string): boolean {
   if (!header?.startsWith('Bearer ')) return false;
@@ -60,6 +61,7 @@ export function buildApp(deps: Deps): FastifyInstance {
   bankRoutes(app, deps);
   importRoutes(app, deps);
   investmentRoutes(app, deps);
+  reconcileRoutes(app, deps);
 
   return app;
 }

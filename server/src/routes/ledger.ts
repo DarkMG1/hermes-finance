@@ -9,6 +9,7 @@ import { idempotentWrite } from '../idempotency.ts';
 import { assertPersonTaggable, owedToYouCents, suggestions, youOweCents } from '../people.ts';
 import { getExpenses, getSpending } from '../cashflow.ts';
 import { getNetWorth, localDay } from '../networth.ts';
+import { oldestOpenBefore } from '../reconcile.ts';
 import { assertCategoryExists, getHome, getTransaction, learnCategory, listAccounts, listCategories, listTransactions } from '../ledger.ts';
 
 /** Checks split lines against a transaction's amount and makes them its split; the row's own category and person move onto the lines. */
@@ -51,6 +52,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   // people.ts reads through ledger.ts, so Home's Who Owes Me fields are added here rather than inside getHome
   app.get('/v1/home', async () => ({
     ...getHome(db), owedToYouCents: owedToYouCents(db), youOweCents: youOweCents(db), repaymentSuggestions: suggestions(db, deps.now()).length,
+    toReconcile: oldestOpenBefore(db, localDay(deps.now()).slice(0, 7)),
   }));
   app.get('/v1/expenses', async (req) => getExpenses(db, parseBody(ExpensesQuery, req.query)));
   app.get('/v1/spending', async (req) => getSpending(db, parseBody(SpendingQuery, req.query)));

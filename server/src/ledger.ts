@@ -189,7 +189,7 @@ export function liveNetWorthCents(db: Db): number {
   return accounts.reduce((sum, a) => sum + (NEGATIVE_TYPES.has(a.type) ? -a.b : a.b), 0);
 }
 
-export function getHome(db: Db): Omit<Home, 'owedToYouCents' | 'youOweCents' | 'repaymentSuggestions'> {
+export function getHome(db: Db): Omit<Home, 'owedToYouCents' | 'youOweCents' | 'repaymentSuggestions' | 'toReconcile'> {
   const netWorthCents = liveNetWorthCents(db);
   const recent = listTransactions(db, { limit: 10 }).transactions;
   const reconnect = (db.prepare("SELECT id, institution_name FROM items WHERE status = 'login_required' ORDER BY institution_name").all() as { id: string; institution_name: string }[])

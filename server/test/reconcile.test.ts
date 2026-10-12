@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { migrate, openDb, type Db } from '../src/db.ts';
 import { NEEDS_RECONCILE } from '../src/reconcile.ts';
 import { getTransaction } from '../src/ledger.ts';
-import { makeTestDeps, seedAccount, seedCategory, seedPerson, seedSplit, seedTxn } from './helpers.ts';
+import { buildApp } from '../src/app.ts';
+import { AUTH, makeTestDeps, seedAccount, seedCategory, seedPerson, seedSplit, seedTxn } from './helpers.ts';
 
 function seedAll(db: Db): void {
   seedAccount(db, { id: 'chk', type: 'depository' });
@@ -91,4 +92,59 @@ test('Transaction reports reconciled only while the amount matches, and hasRecei
   assert.equal(getTransaction(deps.db, 't1')?.reconciled, false);
   deps.db.prepare("INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES ('t1', x'FFD8FF00', 4, 'x')").run();
   assert.equal(getTransaction(deps.db, 't1')?.hasReceipt, true);
+});
+
+function api() {
+  const { deps } = makeTestDeps(); // clock: 2026-03-15
+  seedAccount(deps.db, { id: 'chk' });
+  seedCategory(deps.db, { id: 'food', name: 'Synthetic Food' });
+  seedTxn(deps.db, { id: 'jan', accountId: 'chk', date: '2026-01-31', amountCents: -100, categoryId: 'food' });
+  seedTxn(deps.db, { id: 'feb-a', accountId: 'chk', date: '2026-02-01', amountCents: -200, categoryId: 'food' });
+  seedTxn(deps.db, { id: 'feb-b', accountId: 'chk', date: '2026-02-28', amountCents: -300, categoryId: 'food' });
+  seedTxn(deps.db, { id: 'mar', accountId: 'chk', date: '2026-03-01', amountCents: -400, categoryId: 'food' });
+  const app = buildApp(deps);
+  const get = async (url: string) => (await app.inject({ method: 'GET', url, headers: AUTH })).json();
+  const mark = async (id: string, reconciled: boolean, key = `k-${id}-${reconciled}`) =>
+    app.inject({ method: 'POST', url: `/v1/transactions/${id}/reconcile`, headers: { ...AUTH, 'idempotency-key': key }, payload: { reconciled } });
+  return { deps, get, mark };
+}
+
+test('a month lists its open rows oldest first, with month boundaries', async () => {
+  const { get } = api();
+  const feb = await get('/v1/reconcile?month=2026-02');
+  assert.equal(feb.total, 2);
+  assert.equal(feb.open, 2);
+  assert.deepEqual(feb.transactions.map((t: { id: string }) => t.id), ['feb-a', 'feb-b']);
+});
+
+test('marking closes a row, unmarking re-opens it, and a bank amount change re-opens it', async () => {
+  const { deps, get, mark } = api();
+  const res = await mark('feb-a', true);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().reconciled, true);
+  assert.equal((await get('/v1/reconcile?month=2026-02')).open, 1);
+  deps.db.prepare("UPDATE transactions SET amount_cents = -250 WHERE id = 'feb-a'").run();
+  assert.equal((await get('/v1/reconcile?month=2026-02')).open, 2);
+  await mark('feb-a', true, 'k2');
+  deps.db.prepare("UPDATE transactions SET notes = 'edited', category_id = NULL WHERE id = 'feb-a'").run();
+  assert.equal((await get('/v1/reconcile?month=2026-02')).open, 1, 'owner edits never re-open');
+  await mark('feb-a', false);
+  assert.equal((await get('/v1/reconcile?month=2026-02')).open, 2);
+});
+
+test('months lists every month with open rows; Home shows the oldest finished one only', async () => {
+  const { get, mark } = api();
+  assert.deepEqual((await get('/v1/reconcile/months')).months,
+    [{ month: '2026-01', open: 1 }, { month: '2026-02', open: 2 }, { month: '2026-03', open: 1 }]);
+  assert.deepEqual((await get('/v1/home')).toReconcile, { month: '2026-01', open: 1 });
+  await mark('jan', true);
+  await mark('feb-a', true);
+  await mark('feb-b', true);
+  assert.equal((await get('/v1/home')).toReconcile, null, 'the current month never nags');
+});
+
+test('reconcile rejects bad input and unknown rows', async () => {
+  const { get, mark } = api();
+  assert.equal((await get('/v1/reconcile?month=2026-13')).code, 'INVALID_REQUEST');
+  assert.equal((await mark('missing', true)).statusCode, 404);
 });
