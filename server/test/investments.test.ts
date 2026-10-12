@@ -213,14 +213,14 @@ test('holding history sums accounts and carries forward', () => {
   hsnap(deps, 'bh', 'sa1', '2026-03-13', 99999);
   const h = getHoldingHistory(deps.db, 'SYNA', 'all', '2026-03-15')!;
   assert.deepEqual(h.points, [
-    { date: '2026-03-12', netWorthCents: 1000 },
+    { date: '2026-03-12', netWorthCents: 1500 }, // b2 first synced 03-13: its 03-12 value is estimated
     { date: '2026-03-13', netWorthCents: 1500 },
     { date: '2026-03-14', netWorthCents: 1700 },
     { date: '2026-03-15', netWorthCents: 1700 },
   ]);
   assert.equal(h.currentCents, 1700);
-  assert.equal(h.changeCents, 700);
-  assert.equal(h.estimatedThrough, null);
+  assert.equal(h.changeCents, 200);
+  assert.equal(h.estimatedThrough, '2026-03-12');
   assert.equal(getHoldingHistory(deps.db, 'SYNA', '1m', '2026-03-15')!.points.length, 4);
   assert.equal(getHoldingHistory(deps.db, 'NOPE', 'all', '2026-03-15'), null);
 });
@@ -297,4 +297,40 @@ test('investment routes', async () => {
   const slash = await get(`/v1/investments/holding-history?key=${encodeURIComponent('SYN/D')}&range=all`);
   assert.equal(slash.statusCode, 200);
   assert.equal(slash.json().currentCents, 700);
+});
+
+test('holding history reaches back through the estimate', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'inv', type: 'investment', balanceCents: 115000 });
+  db.prepare("INSERT INTO securities (id, name, ticker, type, is_cash, updated_at) VALUES ('sa', 'Synthetic A Fund', 'SYNA', 'etf', 0, 's'), ('cash', 'Synthetic Dollar', NULL, 'cash', 1, 's')").run();
+  db.prepare("INSERT INTO holding_syncs (account_id, date) VALUES ('inv', '2026-03-15')").run();
+  db.prepare("INSERT INTO holding_snapshots (account_id, security_id, date, quantity, value_cents) VALUES ('inv', 'sa', '2026-03-15', 10, 110000), ('inv', 'cash', '2026-03-15', 5000, 5000)").run();
+  db.prepare("INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, price_cents, updated_at) VALUES ('b1', 'inv', 'sa', '2026-03-12', 'buy', 'buy', 4, 40000, 10000, 's'), ('d1', 'inv', NULL, '2026-03-10', 'cash', 'deposit', 0, -30000, NULL, 's')").run();
+  const p = db.prepare('INSERT INTO security_prices (ticker, date, close_cents) VALUES (?, ?, ?)');
+  for (const [d, c] of [['2026-03-09', 9500], ['2026-03-10', 9600], ['2026-03-12', 10000], ['2026-03-13', 10500], ['2026-03-14', 10800]] as const) p.run('SYNA', d, c);
+  const h = getHoldingHistory(db, 'SYNA', 'all', '2026-03-15')!;
+  assert.deepEqual(h.points.map((x) => x.netWorthCents), [57600, 57600, 100000, 105000, 108000, 110000]);
+  assert.equal(h.points[0]!.date, '2026-03-10');
+  assert.equal(h.estimatedThrough, '2026-03-14');
+  const cash = getHoldingHistory(db, '_cash', 'all', '2026-03-15')!;
+  assert.deepEqual(cash.points.map((x) => x.netWorthCents), [45000, 45000, 5000, 5000, 5000, 5000]);
+});
+
+test('account filter', async () => {
+  const { deps } = makeTestDeps();
+  seedHoldings(deps);
+  assert.deepEqual(getInvestments(deps.db, ['b1']).holdings.map((h) => [h.key, h.valueCents]), [['SYNA', 20000], ['SYNC', 4000], ['_cash', 500]]);
+  assert.deepEqual(getInvestments(deps.db, ['bh']).holdings, [], 'a hidden account stays hidden');
+  assert.deepEqual(getInvestments(deps.db, ['nope']).holdings, []);
+  hsnap(deps, 'b1', 'sa1', '2026-03-15', 1000);
+  hsnap(deps, 'b2', 'sa2', '2026-03-15', 500);
+  assert.equal(getHoldingHistory(deps.db, 'SYNA', 'all', '2026-03-15', ['b2'])!.currentCents, 500);
+  const app = buildApp(deps);
+  const get = (url: string) => app.inject({ method: 'GET', url, headers: AUTH });
+  assert.equal((await get('/v1/investments?accountIds=b1,b2')).json().holdings.length, 4);
+  assert.equal((await get('/v1/investments?accountIds=b2')).json().totalCents, 17300);
+  assert.equal((await get('/v1/investments/history?range=all&accountIds=b2')).statusCode, 200);
+  assert.equal((await get('/v1/investments/holding-history?key=SYNA&range=all&accountIds=b2')).json().currentCents, 500);
+  assert.equal((await get('/v1/investments?other=1')).statusCode, 400);
 });

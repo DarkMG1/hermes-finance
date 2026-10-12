@@ -1,7 +1,7 @@
 import type { Holding, HoldingAccount, Investments, NetWorthHistory, NetWorthQuery } from '@hermes/shared';
 import type { Db } from './db.ts';
 import type { Deps } from './deps.ts';
-import { holdingKey } from './backfill.ts';
+import { holdingKey, loadAccountEstimate } from './backfill.ts';
 import { addDays } from './days.ts';
 import { localDay, MONTHS, minusMonths, nextDay } from './networth.ts';
 import { PlaidError, type PlaidHoldings, type PlaidSecurity } from './plaid/port.ts';
@@ -129,13 +129,13 @@ type HoldingRow = {
 const sumKnown = (xs: (number | null)[]): number | null =>
   xs.some((x) => x === null) ? null : xs.reduce<number>((a, b) => a + (b as number), 0);
 
-export function getInvestments(db: Db): Investments {
+export function getInvestments(db: Db, accountIds?: string[]): Investments {
   const rows = db.prepare(`
     SELECT h.account_id AS accountId, COALESCE(a.display_name, a.name) AS accountName, h.security_id AS securityId, h.quantity,
       h.value_cents AS valueCents, h.cost_basis_cents AS costBasisCents, h.updated_at AS updatedAt,
       s.name, s.ticker, s.type, s.is_cash AS isCash
     FROM holdings h JOIN accounts a ON a.id = h.account_id JOIN securities s ON s.id = h.security_id
-    WHERE a.hidden = 0`).all() as HoldingRow[];
+    WHERE a.hidden = 0 ${inAccounts(accountIds)}`).all(...(accountIds ?? [])) as HoldingRow[];
   const groups = new Map<string, HoldingRow[]>();
   for (const r of rows) {
     const key = holdingKey(r);
@@ -169,33 +169,57 @@ export function getInvestments(db: Db): Investments {
   return { totalCents, costBasisCents, gainCents: costBasisCents === null ? null : totalCents - costBasisCents, asOf, holdings, reconnect };
 }
 
+const inAccounts = (ids: string[] | undefined) => (ids ? `AND a.id IN (${ids.map(() => '?').join(', ')})` : '');
+
 /**
  * One holding's value per day, summed over accounts. A day an account synced holdings (holding_syncs) without this holding
- * counts it 0 (sold); a day it didn't sync carries its last value forward. Null when the holding has no snapshots.
+ * counts it 0 (sold); a day it didn't sync carries its last value forward. Before an account's first sync (anchor) its value
+ * comes from the backfill estimate. Null when the holding has no snapshots.
  */
-export function getHoldingHistory(db: Db, key: string, range: NetWorthQuery['range'], today: string): NetWorthHistory | null {
+export function getHoldingHistory(db: Db, key: string, range: NetWorthQuery['range'], today: string, accountIds?: string[]): NetWorthHistory | null {
+  const ids = accountIds ?? [];
   const all = db.prepare(`
     SELECT hs.account_id AS accountId, hs.security_id AS securityId, hs.date, hs.value_cents AS cents, s.ticker, s.type, s.is_cash AS isCash
     FROM holding_snapshots hs JOIN accounts a ON a.id = hs.account_id JOIN securities s ON s.id = hs.security_id
-    WHERE a.hidden = 0 AND hs.date <= ? ORDER BY hs.date`).all(today) as
+    WHERE a.hidden = 0 AND hs.date <= ? ${inAccounts(accountIds)} ORDER BY hs.date`).all(today, ...ids) as
     { accountId: string; securityId: string; date: string; cents: number; ticker: string | null; type: string | null; isCash: number }[];
   const mine = all.filter((r) => holdingKey(r) === key);
   const first = mine[0];
   if (!first) return null;
   const synced = new Set((db.prepare(`
-    SELECT hs.account_id AS accountId, hs.date FROM holding_syncs hs JOIN accounts a ON a.id = hs.account_id WHERE a.hidden = 0 AND hs.date <= ?`)
-    .all(today) as { accountId: string; date: string }[]).map((r) => `${r.accountId}|${r.date}`));
+    SELECT hs.account_id AS accountId, hs.date FROM holding_syncs hs JOIN accounts a ON a.id = hs.account_id
+    WHERE a.hidden = 0 AND hs.date <= ? ${inAccounts(accountIds)}`)
+    .all(today, ...ids) as { accountId: string; date: string }[]).map((r) => `${r.accountId}|${r.date}`));
   const accounts = [...new Set(mine.map((r) => r.accountId))];
   const values = new Map<string, number>();
   for (const r of mine) values.set(`${r.accountId}|${r.date}`, (values.get(`${r.accountId}|${r.date}`) ?? 0) + r.cents);
-  const wanted = range === 'all' ? first.date : minusMonths(today, MONTHS[range]);
-  const start = wanted > first.date ? wanted : first.date;
+  const estimates = new Map(accounts.flatMap((a) => {
+    const est = loadAccountEstimate(db, a);
+    return est ? [[a, est] as const] : [];
+  }));
+  const group = (db.prepare('SELECT id AS securityId, ticker, type, is_cash AS isCash FROM securities').all() as
+    { securityId: string; ticker: string | null; type: string | null; isCash: number }[]).filter((s) => holdingKey(s) === key).map((s) => s.securityId);
+  const firstDay = [...estimates.values()].reduce((d, e) => (e.earliest < d ? e.earliest : d), first.date);
+  const wanted = range === 'all' ? firstDay : minusMonths(today, MONTHS[range]);
+  const start = wanted > firstDay ? wanted : firstDay;
   const latest = new Map<string, number>();
   const points: NetWorthHistory['points'] = [];
-  for (let day = first.date; day <= today; day = nextDay(day)) {
-    for (const a of accounts) if (synced.has(`${a}|${day}`)) latest.set(a, values.get(`${a}|${day}`) ?? 0);
-    if (day >= start) points.push({ date: day, netWorthCents: [...latest.values()].reduce((x, y) => x + y, 0) });
+  let estimatedThrough: string | null = null;
+  for (let day = firstDay; day <= today; day = nextDay(day)) {
+    let estimated = false;
+    for (const a of accounts) {
+      const est = estimates.get(a);
+      if (est && day < est.anchor) {
+        const v = est.valueOn(day);
+        latest.set(a, key === '_cash' ? v.cashCents : group.reduce((x, id) => x + (v.bySecurity.get(id) ?? 0), 0));
+        estimated = true;
+      } else if (synced.has(`${a}|${day}`)) latest.set(a, values.get(`${a}|${day}`) ?? 0);
+    }
+    if (day >= start) {
+      points.push({ date: day, netWorthCents: [...latest.values()].reduce((x, y) => x + y, 0) });
+      if (estimated) estimatedThrough = day;
+    }
   }
   const last = points[points.length - 1]!;
-  return { points, currentCents: last.netWorthCents, changeCents: last.netWorthCents - points[0]!.netWorthCents, estimatedThrough: null };
+  return { points, currentCents: last.netWorthCents, changeCents: last.netWorthCents - points[0]!.netWorthCents, estimatedThrough };
 }
