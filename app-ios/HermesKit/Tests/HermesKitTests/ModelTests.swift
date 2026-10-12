@@ -215,10 +215,10 @@ func json(_ value: some Encodable) throws -> String {
 
 @Test func reconcileFixturesDecode() throws {
     let list = try decode(ReconcileList.self, "reconcile")
-    #expect(list.month == "2026-03" && list.total == 1 && list.open == 1 && list.transactions.map(\.id) == ["txn-1"])
+    #expect(list.month == "2026-03" && list.total == 2 && list.open == 2 && list.transactions.map(\.id) == ["txn-6", "txn-1"])
     #expect(list.transactions.first?.reconciled == false && list.transactions.first?.hasReceipt == false)
     let months = try decode(ReconcileMonths.self, "reconcile-months")
-    #expect(months.months == [ReconcileSummary(month: "2026-03", open: 1)])
+    #expect(months.months == [ReconcileSummary(month: "2026-03", open: 2)])
     #expect(try decode(Home.self, "home").toReconcile == nil)
 }
 
