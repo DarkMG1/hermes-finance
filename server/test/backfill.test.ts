@@ -124,3 +124,88 @@ test('net worth and investments history reach back through the estimate', () => 
   assert.equal(all.points[0]!.netWorthCents, 102600 + 1000, 'checking held flat, investments estimated');
   assert.deepEqual(getNetWorth(deps.db, 'all', '2026-03-15', { type: 'investment', accountIds: ['nope'] }).points, []);
 });
+
+test('a cash distribution moves cash only and never prices the position at 0', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'inv', type: 'investment', balanceCents: 23000 });
+  securities(db);
+  anchor(db, 'inv', [['sc', 3, 18000], ['cash', 5000, 5000]]);
+  txn(db, 'b1', 'inv', 'sc', '2026-03-11', 1, 5000, 5000);
+  txn(db, 'dv', 'inv', 'sc', '2026-03-13', 0, -300, 0, 'distribution');
+  const est = loadAccountEstimate(db, 'inv')!;
+  // H: 3 sh, cash 5000; no closes, so the last real trade (5000 on 03-11) prices sc, not the distribution's 0
+  // 03-14, 03-13: 3×5000 + 5000 = 20000. 03-12, 03-11: undo distribution → cash 4700 → 15000 + 4700 = 19700.
+  // 03-10 (< earliest 03-11): undo buy → 2 sh, cash 9700; no trade ≤ 03-10 → anchor price 6000 → 12000 + 9700 = 21700
+  assert.deepEqual(['2026-03-10', '2026-03-11', '2026-03-12', '2026-03-13', '2026-03-14'].map((d) => est.valueOn(d).totalCents),
+    [21700, 19700, 19700, 20000, 20000]);
+  assert.equal(est.valueOn('2026-03-12').cashCents, 4700);
+  assert.equal(est.valueOn('2026-03-14').bySecurity.get('sc'), 15000);
+});
+
+test('a transaction on a cash security changes neither shares nor cash', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'inv', type: 'investment', balanceCents: 115000 });
+  securities(db);
+  anchor(db, 'inv', [['sa', 10, 110000], ['cash', 5000, 5000]]);
+  txn(db, 'sw', 'inv', 'cash', '2026-03-13', 1000, 1000, 100);
+  price(db, 'SYNA', '2026-03-12', 10000);
+  const est = loadAccountEstimate(db, 'inv')!;
+  // the sweep is ignored: earliest stays H; 03-12 and 03-14: 10×10000 + 5000 = 105000 (counted, 03-12 would be 106000)
+  assert.equal(est.earliest, '2026-03-15');
+  assert.deepEqual(['2026-03-12', '2026-03-14'].map((d) => est.valueOn(d).totalCents), [105000, 105000]);
+});
+
+test('holdings anchored before the first balance snapshot: the anchor value holds until it', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'inv', type: 'investment', balanceCents: 116000 });
+  securities(db);
+  db.prepare("INSERT INTO holding_syncs (account_id, date) VALUES ('inv', '2026-03-13')").run();
+  const hs = db.prepare("INSERT INTO holding_snapshots (account_id, security_id, date, quantity, value_cents) VALUES ('inv', ?, '2026-03-13', ?, ?)");
+  hs.run('sa', 10, 100000);
+  hs.run('cash', 5000, 5000);
+  txn(db, 'b1', 'inv', 'sa', '2026-03-12', 4, 40000, 10000);
+  for (const [d, c] of [['2026-03-11', 9500], ['2026-03-13', 10200], ['2026-03-14', 10400]] as const) price(db, 'SYNA', d, c);
+  db.prepare("INSERT INTO balance_snapshots (account_id, date, balance_cents) VALUES ('inv', '2026-03-15', 116000)").run();
+  // H = 03-13, S = 03-15. anchor value = 10 × (100000/10) + 5000 = 105000 on 03-13 and 03-14
+  // (walked-back state would give 6×10200 + 45000 = 106200 and 6×10400 + 45000 = 107400).
+  // 03-12 (= earliest, buy not undone): 10 × 9500 (close 03-11) + 5000 = 100000. 03-15: snapshot 116000.
+  const h = getNetWorth(db, 'all', '2026-03-15', { type: 'investment' });
+  assert.deepEqual(h.points.map((p) => [p.date, p.netWorthCents]),
+    [['2026-03-12', 100000], ['2026-03-13', 105000], ['2026-03-14', 105000], ['2026-03-15', 116000]]);
+  assert.equal(h.estimatedThrough, '2026-03-14');
+});
+
+test('an account filter sums only the chosen accounts', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  buyAndDeposit(db);
+  seedAccount(db, { id: 'inv2', type: 'investment', balanceCents: 50000 });
+  anchor(db, 'inv2', [['sb', 5, 50000]]);
+  txn(db, 'b2', 'inv2', 'sb', '2026-03-12', 1, 8000, 8000);
+  db.prepare("INSERT INTO balance_snapshots (account_id, date, balance_cents) VALUES ('inv', '2026-03-15', 115000), ('inv2', '2026-03-15', 50000)").run();
+  const pts = (ids: string[]) => getNetWorth(db, 'all', '2026-03-15', { type: 'investment', accountIds: ids }).points.map((p) => [p.date, p.netWorthCents]);
+  // inv alone: as in buyAndDeposit
+  assert.deepEqual(pts(['inv']), [
+    ['2026-03-10', 102600], ['2026-03-11', 102600], ['2026-03-12', 105000], ['2026-03-13', 110000], ['2026-03-14', 113000], ['2026-03-15', 115000],
+  ]);
+  // inv2 alone: H 5 sh (anchor price 10000), no closes. 03-12..03-14: last trade 8000 → 40000. 03-15: snapshot 50000
+  assert.deepEqual(pts(['inv2']), [['2026-03-12', 40000], ['2026-03-13', 40000], ['2026-03-14', 40000], ['2026-03-15', 50000]]);
+  // both, 03-10: inv 102600 + inv2 fully undone (4 sh × anchor 10000 + cash 8000 = 48000) = 150600
+  assert.equal(pts(['inv', 'inv2'])[0]![1], 150600);
+});
+
+test('a range window that starts inside the estimate', () => {
+  const { deps } = makeTestDeps();
+  buyAndDeposit(deps.db);
+  deps.db.prepare("INSERT INTO balance_snapshots (account_id, date, balance_cents) VALUES ('inv', '2026-03-15', 115000)").run();
+  // today 04-12, 1m → window starts 03-12: first point 105000 (buyAndDeposit 03-12), last 115000 carried from 03-15
+  const h = getNetWorth(deps.db, '1m', '2026-04-12', { type: 'investment' });
+  assert.deepEqual(h.points[0], { date: '2026-03-12', netWorthCents: 105000 });
+  assert.deepEqual(h.points.at(-1), { date: '2026-04-12', netWorthCents: 115000 });
+  assert.equal(h.points.length, 32);
+  assert.equal(h.changeCents, 10000);
+  assert.equal(h.estimatedThrough, '2026-03-14');
+});

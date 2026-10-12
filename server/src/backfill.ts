@@ -65,17 +65,24 @@ export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate 
   /** Π split factors for split dates in (day, anchor]: converts a day's units into today's. */
   const splitsAfter = (ticker: string | null, day: string) =>
     (ticker ? closes.get(ticker)?.splits ?? [] : []).reduce((f, [d, s]) => (d > day ? f * s : f), 1);
-  const trades = new Map<string, Txn[]>();
-  for (const t of txns) if (t.securityId && t.priceCents !== null && !isSplit(t)) trades.set(t.securityId, [...(trades.get(t.securityId) ?? []), t]);
+  // real trades only: distributions and fees carry price 0 and quantity 0
+  const trades = new Map<string, { dates: string[]; txns: Txn[] }>();
+  for (const t of txns) {
+    if (!t.securityId || t.priceCents === null || t.priceCents <= 0 || t.quantity === 0 || isSplit(t)) continue;
+    const tr = trades.get(t.securityId) ?? { dates: [], txns: [] };
+    tr.dates.push(t.date);
+    tr.txns.push(t);
+    trades.set(t.securityId, tr);
+  }
 
   const priceOn = (id: string, day: string): number => {
     const ticker = tickerOf(id);
     const c = ticker ? closes.get(ticker) : undefined;
     const i = c ? atOrBefore(c.dates, day) : -1;
     if (c && i >= 0) return c.cents[i]! / splitsAfter(ticker, day);
-    const tr = trades.get(id) ?? [];
-    const j = atOrBefore(tr.map((t) => t.date), day);
-    if (j >= 0) return tr[j]!.priceCents! / splitsAfter(ticker, tr[j]!.date);
+    const tr = trades.get(id);
+    const j = tr ? atOrBefore(tr.dates, day) : -1;
+    if (tr && j >= 0) return tr.txns[j]!.priceCents! / splitsAfter(ticker, tr.txns[j]!.date);
     return anchorPrice.get(id) ?? 0;
   };
   const value = (day: string): DayValue => {
@@ -90,10 +97,22 @@ export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate 
     return { totalCents: total, cashCents: cash, bySecurity };
   };
   const undo = (t: Txn) => {
+    if (isSplit(t)) return;
     cash += t.amountCents;
-    if (!t.securityId || isSplit(t)) return;
+    if (!t.securityId) return;
     shares.set(t.securityId, (shares.get(t.securityId) ?? 0) - t.quantity * splitsAfter(tickerOf(t.securityId), t.date));
   };
+
+  // on and after the anchor: the anchor holdings at their anchor prices
+  const anchorBySecurity = new Map<string, number>();
+  let anchorTotal = cash;
+  for (const [id, q] of shares) {
+    if (q === 0) continue;
+    const v = Math.round(q * (anchorPrice.get(id) ?? 0));
+    anchorBySecurity.set(id, v);
+    anchorTotal += v;
+  }
+  const anchorValue: DayValue = { totalCents: anchorTotal, cashCents: cash, bySecurity: anchorBySecurity };
 
   // walk back day by day; before computing day d, undo every transaction dated after d
   const byDay = new Map<string, DayValue>();
@@ -104,5 +123,5 @@ export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate 
   }
   // before the earliest transaction: everything recorded is undone, shares and cash hold, prices still move
   for (; i >= 0; i -= 1) undo(txns[i]!);
-  return { accountId, anchor, earliest, valueOn: (day) => byDay.get(day) ?? value(day) };
+  return { accountId, anchor, earliest, valueOn: (day) => (day >= anchor ? anchorValue : byDay.get(day) ?? value(day)) };
 }
