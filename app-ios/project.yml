@@ -7,8 +7,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "1.4.4"
-    CURRENT_PROJECT_VERSION: "144"
+    MARKETING_VERSION: "1.5.0"
+    CURRENT_PROJECT_VERSION: "150"
 packages:
   HermesKit:
     path: HermesKit
@@ -29,6 +29,7 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSFaceIDUsageDescription: Unlock Hermes with Face ID
+        NSCameraUsageDescription: Take a photo of a receipt.
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
