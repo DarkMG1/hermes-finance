@@ -40,6 +40,19 @@ extension APIClient {
         try await send("DELETE", "/v1/transactions/\(transactionId)/receipt", body: nil, idempotencyKey: nil, timeout: 30)
     }
 
+    /// Claude reads the stored photo; reading again replaces the items, so no idempotency key.
+    public func readReceipt(transactionId: String) async throws -> Itemization {
+        try decode(try await send("POST", "/v1/transactions/\(transactionId)/receipt/read", body: nil, idempotencyKey: nil, timeout: 90).body)
+    }
+
+    public func receiptItems(transactionId: String) async throws -> Itemization {
+        try decode(try await getData("/v1/transactions/\(transactionId)/receipt/items"))
+    }
+
+    public func saveReceiptItems(transactionId: String, body: SaveItemsBody, idempotencyKey: String) async throws -> LedgerTransaction {
+        try await write("PUT", "/v1/transactions/\(transactionId)/receipt/items", body: body, key: idempotencyKey)
+    }
+
     public func createTransaction(_ body: CreateTransactionBody, idempotencyKey: String) async throws -> LedgerTransaction {
         try await write("POST", "/v1/transactions", body: body, key: idempotencyKey)
     }
