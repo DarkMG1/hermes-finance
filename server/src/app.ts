@@ -10,6 +10,7 @@ import { bankRoutes } from './routes/banks.ts';
 import { importRoutes } from './routes/imports.ts';
 import { investmentRoutes } from './routes/investments.ts';
 import { reconcileRoutes } from './routes/reconcile.ts';
+import { receiptRoutes } from './routes/receipts.ts';
 
 function tokenMatches(header: string | undefined, token: string): boolean {
   if (!header?.startsWith('Bearer ')) return false;
@@ -62,6 +63,7 @@ export function buildApp(deps: Deps): FastifyInstance {
   importRoutes(app, deps);
   investmentRoutes(app, deps);
   reconcileRoutes(app, deps);
+  receiptRoutes(app, deps);
 
   return app;
 }

@@ -59,6 +59,8 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
   };
   const isInvestment = db.prepare("SELECT 1 FROM accounts WHERE plaid_account_id = ? AND type = 'investment'");
   const moveSplit = db.prepare('UPDATE split_lines SET transaction_id = ? WHERE transaction_id = ?');
+  // a receipt added while pending moves to the posted row (unless that row already has one)
+  const moveReceipt = db.prepare('UPDATE receipts SET transaction_id = ? WHERE transaction_id = ? AND NOT EXISTS (SELECT 1 FROM receipts WHERE transaction_id = ?)');
   const mappedCategory = db.prepare('SELECT category_id FROM plaid_category_map WHERE plaid_category = ?');
   const checkSuperseded = db.prepare("SELECT id FROM transactions WHERE source = 'plaid' AND pending_source_id = ?");
   const getRow = db.prepare("SELECT id, date, date_owner_set, category_id, category_owner_set, payee, notes, person_id, repayment_dismissed FROM transactions WHERE source = 'plaid' AND source_id = ?");
@@ -129,6 +131,7 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
     const id = (getRow.get(t.transactionId) as { id: string }).id;
     // a split made while pending moves to the posted row
     if (pendingId) moveSplit.run(id, pendingId);
+    if (pendingId) moveReceipt.run(id, pendingId, id);
     fitSplitToAmount(db, id, opts.nowIso);
     return true;
   };
