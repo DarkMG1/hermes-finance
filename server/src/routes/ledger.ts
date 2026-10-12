@@ -13,7 +13,7 @@ import { oldestOpenBefore } from '../reconcile.ts';
 import { assertCategoryExists, getHome, getTransaction, learnCategory, listAccounts, listCategories, listTransactions } from '../ledger.ts';
 
 /** Checks split lines against a transaction's amount and makes them its split; the row's own category and person move onto the lines. */
-function writeSplit(db: Db, txnId: string, amountCents: number, lines: PutSplitsBody['lines'], field: string, nowIso: string): void {
+export function writeSplit(db: Db, txnId: string, amountCents: number, lines: PutSplitsBody['lines'], field: string, nowIso: string): void {
   lines.forEach((l, i) => assertCategoryExists(db, l.categoryId, `${field}.${i}.categoryId`));
   lines.forEach((l, i) => assertPersonTaggable(db, l.personId, `${field}.${i}.personId`, txnId));
   // lines share the transaction's sign: the app enters them as positive amounts, so it couldn't show anything else

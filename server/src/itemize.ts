@@ -1,3 +1,6 @@
+import type { Itemization } from '@hermes/shared';
+import type { Db } from './db.ts';
+
 /** The owner, in item people lists and share results. */
 export const ME = 'me';
 
@@ -49,5 +52,32 @@ export function computeShares(input: ShareInput): ShareResult {
   return {
     shares: people.map((p) => ({ person: p, cents: cents.get(p) ?? 0 })),
     gapCents: targetCents - (itemsTotal + input.taxCents + input.tipCents + input.feesCents),
+  };
+}
+
+export type AppliedLine = { personId: string | null; amountCents: number };
+
+/** What an items save leaves behind, in a form that later changes can be compared against. */
+export function currentLines(db: Db, txnId: string): AppliedLine[] {
+  const t = db.prepare('SELECT amount_cents, person_id, paid_by_person_id FROM transactions WHERE id = ?').get(txnId) as
+    { amount_cents: number; person_id: string | null; paid_by_person_id: string | null };
+  if (t.paid_by_person_id) return [{ personId: null, amountCents: t.amount_cents }];
+  const lines = db.prepare('SELECT person_id, amount_cents FROM split_lines WHERE transaction_id = ? ORDER BY id').all(txnId) as
+    { person_id: string | null; amount_cents: number }[];
+  if (lines.length) return lines.map((l) => ({ personId: l.person_id, amountCents: l.amount_cents }));
+  return [{ personId: t.person_id, amountCents: t.amount_cents }];
+}
+
+/** The caller has checked that the receipt exists. */
+export function getItemization(db: Db, txnId: string): Itemization {
+  const r = db.prepare('SELECT tax_cents, tip_cents, fees_cents, total_cents, read_at, applied_lines FROM receipts WHERE transaction_id = ?').get(txnId) as {
+    tax_cents: number | null; tip_cents: number | null; fees_cents: number | null; total_cents: number | null; read_at: string | null; applied_lines: string | null;
+  };
+  const items = (db.prepare('SELECT id, name, amount_cents, people FROM receipt_items WHERE transaction_id = ? ORDER BY position').all(txnId) as
+    { id: string; name: string; amount_cents: number; people: string }[])
+    .map((i) => ({ id: i.id, name: i.name, amountCents: i.amount_cents, people: JSON.parse(i.people) as string[] }));
+  return {
+    items, taxCents: r.tax_cents, tipCents: r.tip_cents, feesCents: r.fees_cents, totalCents: r.total_cents, readAt: r.read_at,
+    handEdited: r.applied_lines !== null && r.applied_lines !== JSON.stringify(currentLines(db, txnId)),
   };
 }

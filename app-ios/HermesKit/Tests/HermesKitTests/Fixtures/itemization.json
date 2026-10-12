@@ -1,0 +1,27 @@
+{
+  "items": [
+    {
+      "id": "ritem-1",
+      "name": "Synthetic Bagel",
+      "amountCents": 700,
+      "people": [
+        "me"
+      ]
+    },
+    {
+      "id": "ritem-2",
+      "name": "Synthetic Coffee",
+      "amountCents": 500,
+      "people": [
+        "me",
+        "person-1"
+      ]
+    }
+  ],
+  "taxCents": 50,
+  "tipCents": 0,
+  "feesCents": 0,
+  "totalCents": 1250,
+  "readAt": "2026-03-15T11:00:00.000Z",
+  "handEdited": false
+}

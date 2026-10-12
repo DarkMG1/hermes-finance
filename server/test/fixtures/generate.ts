@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { buildApp } from '../../src/app.ts';
 import { AUTH, makeTestDeps, seedAccount, seedCategory, seedItem, seedPerson, seedSplit, seedTxn } from '../helpers.ts';
 
@@ -65,6 +67,14 @@ export async function buildFixtures(): Promise<Record<string, string>> {
     'error-not-found': await get('/v1/transactions/missing'),
   };
   out['link-complete'] = await post(`/v1/plaid/link-sessions/${sessionId}/complete`);
+  // itemization goes in after the fixtures above so those stay as they are
+  db.prepare("INSERT INTO receipts (transaction_id, jpeg, bytes, created_at, tax_cents, tip_cents, fees_cents, total_cents, read_at, model) VALUES ('txn-1', ?, 3, '2026-03-15T11:00:00.000Z', 50, 0, 0, 1250, '2026-03-15T11:00:00.000Z', 'fixture-model')")
+    .run(Buffer.from([0xff, 0xd8, 0xff]));
+  const ri = db.prepare('INSERT INTO receipt_items (id, transaction_id, position, name, amount_cents, people) VALUES (?, ?, ?, ?, ?, ?)');
+  ri.run('ritem-1', 'txn-1', 0, 'Synthetic Bagel', 700, '["me"]');
+  ri.run('ritem-2', 'txn-1', 1, 'Synthetic Coffee', 500, '["me","person-1"]');
+  out.itemization = await get('/v1/transactions/txn-1/receipt/items');
+  out['item-shares'] = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', '..', 'shared', 'test-vectors', 'item-shares.json'), 'utf8'));
   // investments use their own database so the accounts, home and net worth fixtures stay as they are
   const inv = makeTestDeps().deps;
   seedAccount(inv.db, { id: 'acct-brokerage', type: 'investment', subtype: 'brokerage', balanceCents: 150000 });

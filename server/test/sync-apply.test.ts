@@ -405,8 +405,10 @@ test('a receipt on a pending row moves to the posted row', () => {
   apply([page({ added: [txn({ transactionId: 'pend1', pending: true, amount: 20 })] })]);
   const pendingId = row('pend1')?.id as string;
   deps.db.prepare("INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES (?, x'FFD8FF', 3, 'x')").run(pendingId);
+  deps.db.prepare("INSERT INTO receipt_items (id, transaction_id, position, name, amount_cents, people) VALUES ('ri-1', ?, 0, 'Synthetic Item', 500, '[\"me\"]')").run(pendingId);
   apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', amount: 21 })], removed: [{ transactionId: 'pend1' }] })]);
   const postedId = row('post1')?.id as string;
   const r = deps.db.prepare('SELECT transaction_id FROM receipts').all() as { transaction_id: string }[];
   assert.deepEqual(r, [{ transaction_id: postedId }]);
+  assert.equal((deps.db.prepare('SELECT transaction_id FROM receipt_items WHERE id = ?').get('ri-1') as { transaction_id: string }).transaction_id, postedId);
 });
