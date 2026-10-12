@@ -74,7 +74,7 @@ struct TransactionDetailSheet: View {
                         }
                     }
                 }
-                Field(label: "Notes", error: error) { TextField("Notes", text: $notes, axis: .vertical).lineLimit(1...6) }
+                NotesField(text: $notes, error: error)
             }
             .disabled(writes.unresolved || deleteWrites.unresolved)
             Section(transaction.splitLines.isEmpty ? "" : "Split") {
