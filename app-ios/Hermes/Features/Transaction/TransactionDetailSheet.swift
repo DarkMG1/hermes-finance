@@ -24,15 +24,17 @@ struct TransactionDetailSheet: View {
     @State private var savedForSplit = false
     @State private var reconciled = false
     @State private var reconciling = false
+    @State private var reconcileError: String?
+    @State private var receiptBusy = false
     /// A reconcile or receipt change saved straight away: closing must still refresh the list behind.
     @State private var savedOutside = false
 
     var body: some View {
         Sheet(
-            title: "Transaction", canSave: !patch.isEmpty && !payeeInvalid && !deleteWrites.unresolved, busy: busy,
+            title: "Transaction", canSave: !patch.isEmpty && !payeeInvalid && !deleteWrites.unresolved, busy: busy || reconciling || receiptBusy,
             unresolved: writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved,
             onCancel: {
-                if writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved || savedOutside { Task { await onChange() } }
+                if writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved { Task { await onChange() } }
                 dismiss()
             },
             onSave: { Task { await save() } }
@@ -48,6 +50,7 @@ struct TransactionDetailSheet: View {
             Section {
                 Toggle("Reconciled", isOn: Binding(get: { reconciled }, set: { on in Task { await setReconciled(on) } }))
                     .disabled(busy || reconciling || deleteWrites.unresolved)
+                InlineError(message: reconcileError)
             }
             Section {
                 Field(label: "Payee", error: payeeInvalid ? "Payee can't be empty" : nil) { TextField("Payee", text: $payee) }
@@ -89,7 +92,7 @@ struct TransactionDetailSheet: View {
                 }
             }
             Section("Receipt") {
-                ReceiptSection(transactionId: transaction.id, hadReceipt: transaction.hasReceipt ?? false) { savedOutside = true }
+                ReceiptSection(transactionId: transaction.id, hadReceipt: transaction.hasReceipt ?? false, busy: $receiptBusy) { savedOutside = true }
             }
             .disabled(deleteWrites.unresolved)
             if transaction.repaymentDismissed == true {
@@ -119,6 +122,8 @@ struct TransactionDetailSheet: View {
             loadedDate = DayText.ymd(date)
             reconciled = transaction.reconciled ?? false
         }
+        // a swipe-down skips onCancel, so the reconcile or receipt change refreshes the list here
+        .onDisappear { if savedOutside { Task { await onChange() } } }
         .sheet(item: $splitting, onDismiss: {
             // the edits were saved but the split was cancelled: this sheet's copy is stale, so close it
             if savedForSplit {
@@ -194,13 +199,14 @@ struct TransactionDetailSheet: View {
         let before = reconciled
         reconciled = on
         reconciling = true
+        reconcileError = nil
         defer { reconciling = false }
         do {
             _ = try await client.setReconciled(id: transaction.id, reconciled: on, idempotencyKey: UUID().uuidString)
             savedOutside = true
         } catch {
             reconciled = before
-            self.error = errorMessage(error)
+            reconcileError = errorMessage(error)
         }
     }
 

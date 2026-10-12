@@ -8,11 +8,12 @@ struct ReceiptSection: View {
     @Environment(AppModel.self) private var model
     let transactionId: String
     let hadReceipt: Bool
+    /// Owned by the sheet, so it can't close mid-upload or mid-delete.
+    @Binding var busy: Bool
     let onChange: () -> Void
 
     @State private var image: UIImage?
     @State private var loading = false
-    @State private var busy = false
     @State private var error: String?
     @State private var pickerItem: PhotosPickerItem?
     @State private var choosingPhoto = false
@@ -42,6 +43,30 @@ struct ReceiptSection: View {
                 if busy { ProgressView() } else { Text(image == nil ? "Add receipt" : "Replace receipt") }
             }
             .disabled(busy || loading)
+            // on the Menu, not the Group: in a Form each Group child is its own row and would get its own copy
+            .photosPicker(isPresented: $choosingPhoto, selection: $pickerItem, matching: .images)
+            .onChange(of: pickerItem) { _, item in
+                guard let item else { return }
+                pickerItem = nil
+                Task {
+                    guard let data = try? await item.loadTransferable(type: Data.self), let picked = UIImage(data: data) else {
+                        error = "Couldn't read that photo."
+                        return
+                    }
+                    await upload(picked)
+                }
+            }
+            .fullScreenCover(isPresented: $takingPhoto) {
+                CameraPicker { photo in
+                    takingPhoto = false
+                    if let photo { Task { await upload(photo) } }
+                }
+                .ignoresSafeArea()
+            }
+            .fullScreenCover(isPresented: $viewing) {
+                if let image { ReceiptViewer(image: image) }
+            }
+            .task { await load() }
             if image != nil {
                 Button("Delete receipt", role: .destructive) { confirmDelete = true }
                     .disabled(busy)
@@ -51,29 +76,6 @@ struct ReceiptSection: View {
             }
             InlineError(message: error)
         }
-        .photosPicker(isPresented: $choosingPhoto, selection: $pickerItem, matching: .images)
-        .onChange(of: pickerItem) { _, item in
-            guard let item else { return }
-            pickerItem = nil
-            Task {
-                guard let data = try? await item.loadTransferable(type: Data.self), let picked = UIImage(data: data) else {
-                    error = "Couldn't read that photo."
-                    return
-                }
-                await upload(picked)
-            }
-        }
-        .fullScreenCover(isPresented: $takingPhoto) {
-            CameraPicker { photo in
-                takingPhoto = false
-                if let photo { Task { await upload(photo) } }
-            }
-            .ignoresSafeArea()
-        }
-        .fullScreenCover(isPresented: $viewing) {
-            if let image { ReceiptViewer(image: image) }
-        }
-        .task { await load() }
     }
 
     private func load() async {
