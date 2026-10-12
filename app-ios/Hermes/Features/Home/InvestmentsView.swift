@@ -70,6 +70,7 @@ struct InvestmentsView: View {
                         FilterChip(title: account.name, active: selected.contains(account.id))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityAddTraits(selected.contains(account.id) ? .isSelected : [])
                 }
             }
             .padding(.vertical, Space.xs)
