@@ -1,6 +1,6 @@
 import { Configuration, CountryCode, PlaidApi, PlaidEnvironments, Products, type LinkTokenCreateRequest, type LinkTokenGetSessionsResponse } from 'plaid';
 import type { Config } from '../config.ts';
-import { PlaidError, type LinkResult, type LinkTokenOpts, type PlaidAccount, type PlaidHoldings, type PlaidPort, type PlaidTxn, type SyncPage } from './port.ts';
+import { PlaidError, type LinkResult, type LinkTokenOpts, type PlaidAccount, type PlaidHoldings, type PlaidInvestmentTxn, type PlaidPort, type PlaidSecurity, type PlaidTxn, type SyncPage } from './port.ts';
 
 const REDIRECT = 'hermesfinance://plaid-done';
 
@@ -8,6 +8,12 @@ function rethrow(e: unknown): never {
   const data = (e as { response?: { data?: { error_code?: string } } }).response?.data;
   throw new PlaidError(data?.error_code ?? 'PLAID_REQUEST_FAILED');
 }
+
+type RawSecurity = { security_id: string; name: string | null; ticker_symbol: string | null; type: string | null; is_cash_equivalent: boolean | null; close_price: number | null };
+const mapSecurity = (s: RawSecurity): PlaidSecurity => ({
+  securityId: s.security_id, name: s.name ?? null, ticker: s.ticker_symbol ?? null, type: s.type ?? null,
+  isCash: s.is_cash_equivalent === true, closePrice: s.close_price ?? null,
+});
 
 type RawTxn = {
   transaction_id: string; account_id: string; amount: number; date: string; authorized_date?: string | null; name: string;
@@ -81,11 +87,27 @@ export function createPlaidClient(config: Config): PlaidPort {
             accountId: h.account_id, securityId: h.security_id, quantity: h.quantity,
             price: h.institution_price, value: h.institution_value, costBasis: h.cost_basis ?? null,
           })),
-          securities: data.securities.map((s) => ({
-            securityId: s.security_id, name: s.name ?? null, ticker: s.ticker_symbol ?? null, type: s.type ?? null,
-            isCash: s.is_cash_equivalent === true, closePrice: s.close_price ?? null,
-          })),
+          securities: data.securities.map(mapSecurity),
         };
+      } catch (e) { return rethrow(e); }
+    },
+
+    async investmentsTransactionsGet(accessToken, startDate, endDate) {
+      try {
+        const transactions: PlaidInvestmentTxn[] = [];
+        const securities: PlaidSecurity[] = [];
+        for (let offset = 0; ;) {
+          const { data } = await api.investmentsTransactionsGet({ access_token: accessToken, start_date: startDate, end_date: endDate, options: { count: 500, offset } });
+          for (const t of data.investment_transactions) {
+            transactions.push({
+              id: t.investment_transaction_id, accountId: t.account_id, securityId: t.security_id ?? null, date: t.date,
+              type: String(t.type), subtype: t.subtype ? String(t.subtype) : null, quantity: t.quantity, amount: t.amount, price: t.price ?? null,
+            });
+          }
+          securities.push(...data.securities.map(mapSecurity));
+          offset += data.investment_transactions.length;
+          if (data.investment_transactions.length === 0 || offset >= data.total_investment_transactions) return { transactions, securities };
+        }
       } catch (e) { return rethrow(e); }
     },
 

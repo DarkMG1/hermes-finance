@@ -1,8 +1,9 @@
 import type { Holding, HoldingAccount, Investments, NetWorthHistory, NetWorthQuery } from '@hermes/shared';
 import type { Db } from './db.ts';
 import type { Deps } from './deps.ts';
+import { addDays } from './days.ts';
 import { localDay, MONTHS, minusMonths, nextDay } from './networth.ts';
-import { PlaidError, type PlaidHoldings } from './plaid/port.ts';
+import { PlaidError, type PlaidHoldings, type PlaidSecurity } from './plaid/port.ts';
 
 const CONSENT = new Set(['ADDITIONAL_CONSENT_REQUIRED', 'ACCESS_NOT_GRANTED']);
 const UNSUPPORTED = new Set(['PRODUCTS_NOT_SUPPORTED', 'NO_INVESTMENT_ACCOUNTS']);
@@ -16,6 +17,46 @@ const cents = (dollars: number): number => {
 export function holdingKey(s: { securityId: string; ticker: string | null; type: string | null; isCash: number | boolean }): string {
   if (s.isCash === true || s.isCash === 1 || s.type === 'cash') return '_cash';
   return s.ticker ? s.ticker.toUpperCase() : s.securityId;
+}
+
+function upsertSecurities(db: Db, securities: PlaidSecurity[], nowIso: string): void {
+  const upsertSecurity = db.prepare(`
+    INSERT INTO securities (id, name, ticker, type, is_cash, close_price_cents, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (id) DO UPDATE SET name = excluded.name, ticker = excluded.ticker, type = excluded.type, is_cash = excluded.is_cash,
+      close_price_cents = excluded.close_price_cents, updated_at = excluded.updated_at`);
+  for (const s of securities) {
+    upsertSecurity.run(s.securityId, s.name, s.ticker, s.type, s.isCash ? 1 : 0, s.closePrice === null ? null : cents(s.closePrice), nowIso);
+  }
+}
+
+/** Stores the item's investment transactions: 730 days the first time, then the last 30 (Plaid corrects recent ones). Never throws. */
+export async function syncInvestmentTransactions(deps: Deps, itemId: string, token: string, accountIds: Map<string, string>): Promise<void> {
+  const { db } = deps;
+  try {
+    const ids = [...accountIds.values()];
+    const stored = (db.prepare(`SELECT COUNT(*) AS n FROM investment_transactions WHERE account_id IN (${ids.map(() => '?').join(', ')})`)
+      .get(...ids) as { n: number }).n;
+    const today = localDay(deps.now());
+    const data = await deps.plaid.investmentsTransactionsGet(token, addDays(today, stored > 0 ? -30 : -730), today);
+    const nowIso = deps.now().toISOString();
+    db.transaction(() => {
+      upsertSecurities(db, data.securities, nowIso);
+      const upsert = db.prepare(`
+        INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, price_cents, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (id) DO UPDATE SET account_id = excluded.account_id, security_id = excluded.security_id, date = excluded.date, type = excluded.type,
+          subtype = excluded.subtype, quantity = excluded.quantity, amount_cents = excluded.amount_cents, price_cents = excluded.price_cents,
+          updated_at = excluded.updated_at`);
+      for (const t of data.transactions) {
+        const accountId = accountIds.get(t.accountId);
+        if (!accountId) continue;
+        upsert.run(t.id, accountId, t.securityId, t.date, t.type, t.subtype, t.quantity, cents(t.amount), t.price === null ? null : cents(t.price), nowIso);
+      }
+    })();
+  } catch (e) {
+    const code = e instanceof PlaidError ? e.code : e instanceof Error ? e.message : String(e);
+    console.error(`[hermes] investment transactions failed item=${itemId} ${code}`);
+  }
 }
 
 /** Fetches the item's holdings and stores them with today's snapshot. Never throws: a failure must not fail the bank sync. */
@@ -40,13 +81,7 @@ export async function syncHoldings(deps: Deps, itemId: string, token: string): P
     const nowIso = deps.now().toISOString();
     const day = localDay(deps.now());
     db.transaction(() => {
-      const upsertSecurity = db.prepare(`
-        INSERT INTO securities (id, name, ticker, type, is_cash, close_price_cents, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (id) DO UPDATE SET name = excluded.name, ticker = excluded.ticker, type = excluded.type, is_cash = excluded.is_cash,
-          close_price_cents = excluded.close_price_cents, updated_at = excluded.updated_at`);
-      for (const s of data.securities) {
-        upsertSecurity.run(s.securityId, s.name, s.ticker, s.type, s.isCash ? 1 : 0, s.closePrice === null ? null : cents(s.closePrice), nowIso);
-      }
+      upsertSecurities(db, data.securities, nowIso);
       // replace, so a position sold since the last sync disappears, from today's snapshot too
       for (const a of accounts) {
         db.prepare('DELETE FROM holdings WHERE account_id = ?').run(a.id);
@@ -82,6 +117,7 @@ export async function syncHoldings(deps: Deps, itemId: string, token: string): P
       for (const a of accounts) synced.run(a.id, day);
       db.prepare("UPDATE items SET investments_status = 'ok' WHERE id = ?").run(itemId);
     })();
+    await syncInvestmentTransactions(deps, itemId, token, accountIds);
   } catch (e) {
     console.error(`[hermes] holdings store failed item=${itemId} ${e instanceof Error ? e.message : String(e)}`);
   }
