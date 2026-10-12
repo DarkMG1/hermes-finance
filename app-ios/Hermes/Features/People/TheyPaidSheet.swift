@@ -33,7 +33,7 @@ struct TheyPaidSheet: View {
                 NavigationLink { CategoryPicker(selection: $categoryId) } label: {
                     LabeledContent("Category", value: model.categoryName(categoryId))
                 }
-                Field(label: "Notes", error: error) { TextField("Notes", text: $notes, axis: .vertical).lineLimit(1...6) }
+                NotesField(text: $notes, error: error)
             } footer: {
                 if let share, let total = Money.parse(totalText) {
                     Text("Your share: \(Money.format(share)) (\(Money.format(justMine ?? 0)) + half of \(Money.format(total - (justMine ?? 0))))")

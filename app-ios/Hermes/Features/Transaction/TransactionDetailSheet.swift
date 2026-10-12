@@ -74,23 +74,27 @@ struct TransactionDetailSheet: View {
                         }
                     }
                 }
-                Field(label: "Notes", error: error) { TextField("Notes", text: $notes, axis: .vertical).lineLimit(1...6) }
+                NotesField(text: $notes, error: error)
             }
             .disabled(writes.unresolved || deleteWrites.unresolved)
-            Section(transaction.splitLines.isEmpty ? "" : "Split") {
-                ForEach(transaction.splitLines) { line in
-                    ListRow(title: model.tagLabel(personId: line.personId, categoryId: line.categoryId, amountCents: line.amountCents), subtitle: line.notes) {
-                        MoneyText(cents: line.amountCents)
+            if !transaction.splitLines.isEmpty || canSplit {
+                Section(transaction.splitLines.isEmpty ? "" : "Split") {
+                    ForEach(transaction.splitLines) { line in
+                        ListRow(
+                            title: model.tagLabel(personId: line.personId, categoryId: line.categoryId, amountCents: line.amountCents), subtitle: line.notes
+                        ) {
+                            MoneyText(cents: line.amountCents)
+                        }
                     }
-                }
-                if splitDrifted {
-                    Text("The bank changed this amount, so the split no longer adds up. Edit the split to fix it.")
-                        .textStyle(.caption, color: Palette.loss)
-                }
-                // unsaved edits would be lost when the split saves and this sheet closes, so the button saves them first
-                if transaction.paidByPersonId == nil && paidById == nil {
-                    Button(transaction.splitLines.isEmpty ? "Split transaction" : "Edit split") { Task { await split() } }
-                        .disabled(busy || payeeInvalid || deleteWrites.unresolved)
+                    if splitDrifted {
+                        Text("The bank changed this amount, so the split no longer adds up. Edit the split to fix it.")
+                            .textStyle(.caption, color: Palette.loss)
+                    }
+                    // unsaved edits would be lost when the split saves and this sheet closes, so the button saves them first
+                    if canSplit {
+                        Button(transaction.splitLines.isEmpty ? "Split transaction" : "Edit split") { Task { await split() } }
+                            .disabled(busy || payeeInvalid || deleteWrites.unresolved)
+                    }
                 }
             }
             Section("Receipt") {
@@ -147,6 +151,7 @@ struct TransactionDetailSheet: View {
         !transaction.splitLines.isEmpty && transaction.splitLines.reduce(0) { $0 + $1.amountCents } != transaction.amountCents
     }
 
+    private var canSplit: Bool { transaction.paidByPersonId == nil && paidById == nil }
     private var trimmedPayee: String { payee.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     private var payeeInvalid: Bool { transaction.source == "manual" && trimmedPayee.isEmpty }

@@ -33,7 +33,7 @@ struct AddTransactionSheet: View {
                 NavigationLink { CategoryPicker(selection: $categoryId) } label: {
                     LabeledContent("Category", value: model.categoryName(categoryId))
                 }
-                Field(label: "Notes", error: error) { TextField("Notes", text: $notes, axis: .vertical).lineLimit(1...6) }
+                NotesField(text: $notes, error: error)
             }
             .disabled(writes.unresolved)
         }
