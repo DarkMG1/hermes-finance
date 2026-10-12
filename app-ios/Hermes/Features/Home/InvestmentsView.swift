@@ -8,7 +8,10 @@ struct InvestmentsView: View {
     @State private var holdings: LoadState<Investments> = .loading
     @State private var history: LoadState<NetWorthHistory> = .loading
     @State private var scrubbed: Date?
-    @State private var loadedRange: NetWorthRange?
+    /// The range and selection the shown history was read for; a spinner shows only when either changes.
+    @State private var loadedKey: String?
+    /// Empty = all accounts. Per visit, not remembered.
+    @State private var selected: Set<String> = []
 
     var body: some View {
         Screen(title: "Investments") {
@@ -17,6 +20,7 @@ struct InvestmentsView: View {
                 LastUpdated(loaded: loaded)
                 let investments = loaded.value
                 Card { header(investments) }
+                if investmentAccounts.count > 1 { accountChips }
                 Picker("Range", selection: $range) {
                     ForEach(NetWorthRange.allCases, id: \.self) { Text($0.title).tag($0) }
                 }
@@ -27,13 +31,14 @@ struct InvestmentsView: View {
                         Text("History starts today. Check back tomorrow.").textStyle(.subhead, color: Palette.secondaryText)
                     } else {
                         Card { HistoryChart(points: loadedHistory.value.points, scrubbed: $scrubbed) }
+                        if let through = loadedHistory.value.estimatedThrough { EstimatedFootnote(through: through) }
                     }
                 }
                 if !investments.holdings.isEmpty {
                     Card {
                         Text("Holdings").textStyle(.headline)
                         ForEach(investments.holdings) { holding in
-                            NavigationLink { HoldingView(holding: holding) } label: { row(holding) }
+                            NavigationLink { HoldingView(holding: holding, accountIds: selected) } label: { row(holding) }
                                 .buttonStyle(.plain)
                             if holding.id != investments.holdings.last?.id { Divider().overlay(Palette.separator) }
                         }
@@ -41,9 +46,9 @@ struct InvestmentsView: View {
                 }
             }
         }
-        .task { await loadHoldings() }
-        .task(id: range) {
-            if loadedRange != range { history = .loading }
+        .task(id: selected) { await loadHoldings() }
+        .task(id: historyKey) {
+            if loadedKey != historyKey { history = .loading }
             scrubbed = nil
             await loadHistory()
         }
@@ -51,6 +56,28 @@ struct InvestmentsView: View {
             await loadHoldings()
             await loadHistory()
         }
+    }
+
+    private var investmentAccounts: [Account] { model.accounts.filter { $0.type == "investment" && !$0.hidden } }
+
+    private var historyKey: String { "\(range.rawValue)|\(selected.sorted())" }
+
+    private var accountChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: Space.s) {
+                ForEach(investmentAccounts) { account in
+                    Button { toggle(account.id) } label: {
+                        FilterChip(title: account.name, active: selected.contains(account.id))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.vertical, Space.xs)
+        }
+    }
+
+    private func toggle(_ id: String) {
+        if selected.contains(id) { selected.remove(id) } else { selected.insert(id) }
     }
 
     /// While dragging, the header shows the chosen day's total instead of today's.
@@ -77,13 +104,14 @@ struct InvestmentsView: View {
                     .redacted(reason: hideBalances ? .placeholder : [])
                 GainText(gainCents: holding.isCash ? nil : holding.gainCents, percent: nil)
             }
+            Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText)
         }
     }
 
     private func loadHoldings() async {
         guard let reader = model.reader else { return }
         do {
-            let loaded = try await reader.read("/v1/investments", as: Investments.self)
+            let loaded = try await reader.read("/v1/investments", query: InvestmentFilter.queryItems(selected), as: Investments.self)
             guard !Task.isCancelled else { return }
             holdings = .loaded(loaded)
         } catch {
@@ -94,16 +122,17 @@ struct InvestmentsView: View {
 
     private func loadHistory() async {
         guard let reader = model.reader else { return }
-        let requested = range
+        let requested = historyKey
         do {
-            let loaded = try await reader.read("/v1/investments/history", query: requested.queryItems, as: NetWorthHistory.self)
-            guard !Task.isCancelled, requested == range else { return }
+            let loaded = try await reader.read("/v1/investments/history", query: range.queryItems + InvestmentFilter.queryItems(selected),
+                                         as: NetWorthHistory.self)
+            guard !Task.isCancelled, requested == historyKey else { return }
             history = .loaded(loaded)
-            loadedRange = requested
+            loadedKey = requested
         } catch {
-            guard !Task.isCancelled, requested == range else { return }
+            guard !Task.isCancelled, requested == historyKey else { return }
             history = .failed(errorMessage(error))
-            loadedRange = requested
+            loadedKey = requested
         }
     }
 }

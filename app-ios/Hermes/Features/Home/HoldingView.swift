@@ -11,7 +11,13 @@ struct HoldingView: View {
     @State private var scrubbed: Date?
     @State private var loadedRange: NetWorthRange?
 
-    init(holding: Holding) { _holding = State(initialValue: holding) }
+    /// The Investments chips' selection; empty = all accounts.
+    let accountIds: Set<String>
+
+    init(holding: Holding, accountIds: Set<String> = []) {
+        _holding = State(initialValue: holding)
+        self.accountIds = accountIds
+    }
 
     var body: some View {
         Screen(title: holding.ticker ?? holding.name) {
@@ -27,6 +33,7 @@ struct HoldingView: View {
                     Text("History starts today. Check back tomorrow.").textStyle(.subhead, color: Palette.secondaryText)
                 } else {
                     Card { HistoryChart(points: loaded.value.points, scrubbed: $scrubbed) }
+                    if let through = loaded.value.estimatedThrough { EstimatedFootnote(through: through) }
                 }
             }
             Card {
@@ -54,7 +61,7 @@ struct HoldingView: View {
     /// Keeps the last holding shown when it is no longer held.
     private func loadHolding() async {
         guard let reader = model.reader,
-              let loaded = try? await reader.read("/v1/investments", as: Investments.self),
+              let loaded = try? await reader.read("/v1/investments", query: InvestmentFilter.queryItems(accountIds), as: Investments.self),
               !Task.isCancelled,
               let latest = loaded.value.holdings.first(where: { $0.key == holding.key }) else { return }
         holding = latest
@@ -87,8 +94,8 @@ struct HoldingView: View {
         guard let reader = model.reader else { return }
         let requested = range
         do {
-            let loaded = try await reader.read("/v1/investments/holding-history", query: holding.historyQuery + requested.queryItems,
-                                         as: NetWorthHistory.self)
+            let query = holding.historyQuery + requested.queryItems + InvestmentFilter.queryItems(accountIds)
+            let loaded = try await reader.read("/v1/investments/holding-history", query: query, as: NetWorthHistory.self)
             guard !Task.isCancelled, requested == range else { return }
             history = .loaded(loaded)
             loadedRange = requested

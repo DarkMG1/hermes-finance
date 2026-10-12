@@ -41,3 +41,13 @@ struct HistoryChart: View {
         return points.min { abs((DayText.date($0.date) ?? .now).timeIntervalSince(date)) < abs((DayText.date($1.date) ?? .now).timeIntervalSince(date)) }
     }
 }
+
+/// "Through Oct 10, 2026: estimated from transactions." under a chart whose range includes estimated days.
+struct EstimatedFootnote: View {
+    let through: String
+
+    var body: some View {
+        Text("Through \(DayText.date(through)?.formatted(.dateTime.month(.abbreviated).day().year()) ?? through): estimated from transactions.")
+            .textStyle(.caption, color: Palette.secondaryText)
+    }
+}

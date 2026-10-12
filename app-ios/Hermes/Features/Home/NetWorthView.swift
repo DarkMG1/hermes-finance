@@ -25,8 +25,7 @@ struct NetWorthView: View {
                 } else {
                     Card { HistoryChart(points: history.points, scrubbed: $scrubbed) }
                     if let through = history.estimatedThrough {
-                        Text("Through \(DayText.date(through)?.formatted(.dateTime.month(.abbreviated).day().year()) ?? through): estimated from transactions.")
-                            .textStyle(.caption, color: Palette.secondaryText)
+                        EstimatedFootnote(through: through)
                     }
                 }
             }
