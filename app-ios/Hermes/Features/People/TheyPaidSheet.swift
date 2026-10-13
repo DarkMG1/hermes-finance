@@ -8,6 +8,9 @@ struct TheyPaidSheet: View {
     @Environment(\.dismiss) private var dismiss
     let person: Person
     var mePaid = false
+    struct Prefill { let payee: String; let date: Date; let totalCents: Int? }
+    var prefill: Prefill?
+    var onCreated: ((LedgerTransaction) async -> Void)?
     let onDone: () async -> Void
 
     @State private var payee = ""
@@ -46,6 +49,13 @@ struct TheyPaidSheet: View {
             }
             .disabled(writes.unresolved)
         }
+        .onAppear {
+            if let prefill, payee.isEmpty {
+                payee = prefill.payee
+                date = prefill.date
+                totalText = prefill.totalCents.map { Money.format($0).replacingOccurrences(of: "$", with: "") } ?? ""
+            }
+        }
     }
 
     private var justMine: Int? { justMineText.isEmpty ? 0 : Money.parse(justMineText) }
@@ -82,8 +92,9 @@ struct TheyPaidSheet: View {
         busy = true
         defer { busy = false }
         do {
-            _ = try await client.createTransaction(request, idempotencyKey: writes.key)
+            let created = try await client.createTransaction(request, idempotencyKey: writes.key)
             writes.didSucceed()
+            await onCreated?(created)
             await onDone()
             dismiss()
         } catch {
