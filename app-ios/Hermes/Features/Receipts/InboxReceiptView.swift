@@ -20,6 +20,8 @@ struct InboxReceiptView: View {
     @State private var confirmReread = false
     @State private var viewing = false
     @State private var picked: LedgerTransaction?
+    /// Picked from the Link sheet; confirmed at its button.
+    @State private var pickedToConfirm: LedgerTransaction?
     @State private var linked: LedgerTransaction?
     @State private var linkWrites = WriteGuard()
     @State private var linkTarget: String?
@@ -49,16 +51,27 @@ struct InboxReceiptView: View {
                 Section("Suggested charges") {
                     ForEach(receipt.suggestions) { t in
                         Button { confirming = t } label: { TransactionRow(transaction: t).contentShape(Rectangle()) }.buttonStyle(.plain)
+                            .confirmationDialog(confirmTitle(t), isPresented: Binding(get: { confirming?.id == t.id }, set: { if !$0 { confirming = nil } }),
+                                                titleVisibility: .visible) {
+                                Button("Link") { Task { await link(t) } }
+                            }
                     }
                 }
                 .disabled(busy)
             }
             Section {
                 Button("Link to transaction…") { picking = true }
+                    .confirmationDialog(pickedToConfirm.map(confirmTitle) ?? "", isPresented: Binding(get: { pickedToConfirm != nil }, set: { if !$0 { pickedToConfirm = nil } }),
+                                        titleVisibility: .visible) {
+                        Button("Link") { if let t = pickedToConfirm { Task { await link(t) } } }
+                    }
                 if let unlinked {
                     Button("Retry link to \(unlinked.payee)") { Task { await link(unlinked, thenItemize: true) } }
                 } else {
                     Button("Paid by…") { choosingPayer = true }
+                        .confirmationDialog("Who paid?", isPresented: $choosingPayer) {
+                            ForEach(model.people.filter { !$0.archived }) { person in Button(person.name) { payer = person } }
+                        }
                 }
                 Button("Itemize") { itemizing = .inbox(receipt.id) }
                 // dialogs on their buttons: on the List they float mid-screen over the photo
@@ -78,13 +91,7 @@ struct InboxReceiptView: View {
         .navigationTitle(receipt.merchant ?? "Receipt")
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadPhoto() }
-        .confirmationDialog(confirmTitle, isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }), titleVisibility: .visible) {
-            Button("Link") { if let t = confirming { Task { await link(t) } } }
-        }
-        .confirmationDialog("Who paid?", isPresented: $choosingPayer) {
-            ForEach(model.people.filter { !$0.archived }) { person in Button(person.name) { payer = person } }
-        }
-        .sheet(isPresented: $picking, onDismiss: { confirming = picked; picked = nil }, content: {
+        .sheet(isPresented: $picking, onDismiss: { pickedToConfirm = picked; picked = nil }, content: {
             ExpensePicker(title: "Link to transaction", suggestions: receipt.suggestions,
                           allows: { $0.amountCents < 0 && $0.hasReceipt != true }, onPick: { t in picked = t })
         })
@@ -99,8 +106,7 @@ struct InboxReceiptView: View {
         })
     }
 
-    private var confirmTitle: String {
-        guard let t = confirming else { return "" }
+    private func confirmTitle(_ t: LedgerTransaction) -> String {
         return "Link to \(t.payee) \(Money.format(-t.amountCents)) on \(DayText.display(t.date))?"
     }
 
