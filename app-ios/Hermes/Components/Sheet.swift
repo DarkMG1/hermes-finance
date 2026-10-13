@@ -7,6 +7,10 @@ struct Sheet<Content: View>: View {
     var busy = false
     /// A write's outcome is unknown and a retry is pending.
     var unresolved = false
+    /// Unsaved edits; without them the way out reads Close, since nothing would be thrown away.
+    var dirty = true
+    /// Stays above the form while it scrolls (the receipt photo on Itemize).
+    var pinned: AnyView?
     let onCancel: () -> Void
     let onSave: (() -> Void)?
     @ViewBuilder var content: Content
@@ -18,6 +22,7 @@ struct Sheet<Content: View>: View {
             ScrollViewReader { scroller in
                 Form { content.environment(\.sheetScroller, scroller) }
                     .themedForm()
+                    .safeAreaInset(edge: .top) { pinned }
                     // no keyboard bar: on iOS 26 it is see-through but still takes taps meant for the field behind it
                     .scrollDismissesKeyboard(.interactively)
                     .navigationTitle(title)
@@ -31,7 +36,9 @@ struct Sheet<Content: View>: View {
                                 }
                             }
                         }
-                        ToolbarItem(placement: .cancellationAction) { Button("Cancel") { unresolved ? confirmingClose = true : onCancel() }.disabled(busy) }
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button(dirty ? "Cancel" : "Close") { unresolved ? confirmingClose = true : onCancel() }.disabled(busy)
+                        }
                         if let onSave {
                             ToolbarItem(placement: .confirmationAction) {
                                 if busy { ProgressView() } else { Button(saveTitle, action: onSave).disabled(!canSave) }

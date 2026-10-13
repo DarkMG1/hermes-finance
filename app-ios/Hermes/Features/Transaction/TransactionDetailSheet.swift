@@ -36,7 +36,7 @@ struct TransactionDetailSheet: View {
     var body: some View {
         Sheet(
             title: "Transaction", canSave: !patch.isEmpty && !payeeInvalid && !deleteWrites.unresolved, busy: busy || reconciling || receiptBusy,
-            unresolved: writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved,
+            unresolved: writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved, dirty: !patch.isEmpty,
             onCancel: {
                 if writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved { Task { await onChange() } }
                 dismiss()

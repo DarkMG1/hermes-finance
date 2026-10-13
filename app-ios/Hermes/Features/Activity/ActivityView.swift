@@ -37,8 +37,9 @@ struct ActivityView: View {
                             if transaction.id == items.last?.id, cursor != nil { Task { await load(reset: false) } }
                         }
                 }
-                if loading { ProgressView().frame(maxWidth: .infinity) }
-                if !loading && items.isEmpty && error == nil {
+                // before the first answer an empty list means nothing yet, not no transactions
+                if loading || (lastLoad == nil && error == nil) { ProgressView().frame(maxWidth: .infinity) }
+                if !loading && items.isEmpty && error == nil && lastLoad != nil {
                     Text("No transactions").textStyle(.subhead, color: Palette.secondaryText)
                 }
             }
@@ -57,7 +58,8 @@ struct ActivityView: View {
             }
         }
         .task(id: filterKey) {
-            try? await Task.sleep(for: .milliseconds(300))
+            // typing waits for a pause; the first load doesn't
+            if lastLoad != nil { try? await Task.sleep(for: .milliseconds(300)) }
             guard !Task.isCancelled else { return }
             await load(reset: true)
         }

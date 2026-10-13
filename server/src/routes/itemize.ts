@@ -27,7 +27,8 @@ export function itemizeRoutes(app: FastifyInstance, deps: Deps): void {
   app.post<{ Params: { id: string } }>('/v1/transactions/:id/receipt/read', async (req) => {
     const id = req.params.id;
     assertReceipt(id);
-    if (getTransaction(db, id)!.amountCents >= 0) throw new ApiError(409, 'NOT_MONEY_OUT', 'only money out can be itemized');
+    const txn = getTransaction(db, id)!;
+    if (txn.amountCents >= 0) throw new ApiError(409, 'NOT_MONEY_OUT', 'only money out can be itemized');
     const reader = deps.receiptReader;
     if (!reader) throw new ApiError(503, 'READER_NOT_CONFIGURED', 'receipt reading is not set up');
     const { jpeg, created_at: photoAt } = db.prepare('SELECT jpeg, created_at FROM receipts WHERE transaction_id = ?').get(id) as { jpeg: Buffer; created_at: string };
@@ -44,7 +45,9 @@ export function itemizeRoutes(app: FastifyInstance, deps: Deps): void {
       const stored = db.prepare('UPDATE receipts SET tax_cents = ?, tip_cents = ?, fees_cents = ?, total_cents = ?, read_at = ?, model = ?, applied_lines = NULL WHERE transaction_id = ? AND created_at = ?')
         .run(result.taxCents, result.tipCents, result.feesCents, result.totalCents, deps.now().toISOString(), result.model, id, photoAt);
       if (stored.changes === 0) throw new ApiError(409, 'RECEIPT_CHANGED', 'the receipt photo changed while it was being read');
-      replaceItems(db, id, result.items.map((i) => ({ ...i, people: [ME] })));
+      // on a "they paid" row most items are shared, so they start as me + the payer
+      const people = txn.paidByPersonId ? [ME, txn.paidByPersonId] : [ME];
+      replaceItems(db, id, result.items.map((i) => ({ ...i, people })));
     })();
     return getItemization(db, id);
   });

@@ -196,40 +196,50 @@ struct CameraPicker: UIViewControllerRepresentable {
 struct ReceiptViewer: View {
     let image: UIImage
     @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZoomableImage(image: image)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+                .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+}
+
+/// A photo on black: pinch to zoom, drag to pan once zoomed, double tap to zoom in or back out.
+struct ZoomableImage: View {
+    let image: UIImage
     @State private var zoom: CGFloat = 1
     @State private var offset: CGSize = .zero
     @GestureState private var pinch: CGFloat = 1
     @GestureState private var drag: CGSize = .zero
 
     var body: some View {
-        NavigationStack {
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFit()
-                .scaleEffect(zoom * pinch)
-                .offset(x: offset.width + drag.width, y: offset.height + drag.height)
-                .gesture(MagnifyGesture()
-                    .updating($pinch) { value, state, _ in state = value.magnification }
-                    .onEnded { value in
-                        zoom = min(max(zoom * value.magnification, 1), 5)
-                        if zoom == 1 { offset = .zero }
-                    })
-                .simultaneousGesture(DragGesture()
-                    .updating($drag) { value, state, _ in if zoom > 1 { state = value.translation } }
-                    .onEnded { value in
-                        guard zoom > 1 else { return }
-                        offset.width += value.translation.width
-                        offset.height += value.translation.height
-                    })
-                .onTapGesture(count: 2) {
-                    zoom = zoom > 1 ? 1 : 2.5
+        Image(uiImage: image)
+            .resizable()
+            .scaledToFit()
+            .scaleEffect(zoom * pinch)
+            .offset(x: offset.width + drag.width, y: offset.height + drag.height)
+            .gesture(MagnifyGesture()
+                .updating($pinch) { value, state, _ in state = value.magnification }
+                .onEnded { value in
+                    zoom = min(max(zoom * value.magnification, 1), 5)
                     if zoom == 1 { offset = .zero }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.black)
-                .accessibilityLabel("Receipt photo")
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
-                .navigationBarTitleDisplayMode(.inline)
-        }
+                })
+            .simultaneousGesture(DragGesture()
+                .updating($drag) { value, state, _ in if zoom > 1 { state = value.translation } }
+                .onEnded { value in
+                    guard zoom > 1 else { return }
+                    offset.width += value.translation.width
+                    offset.height += value.translation.height
+                })
+            .onTapGesture(count: 2) {
+                zoom = zoom > 1 ? 1 : 2.5
+                if zoom == 1 { offset = .zero }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            .background(Color.black)
+            .accessibilityLabel("Receipt photo")
     }
 }
