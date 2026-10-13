@@ -86,7 +86,7 @@ export type Person = z.infer<typeof Person>;
 
 export const HistoryEntry = z.object({
   transactionId: Id, lineId: Id.nullable(), date: DateStr, payee: z.string(), kind: z.enum(['forThem', 'fromThem', 'paidByThem']),
-  effectCents: Cents, balanceAfterCents: Cents, settled: z.boolean(),
+  effectCents: Cents, balanceAfterCents: Cents, settled: z.boolean(), hasReceipt: z.boolean(),
 });
 export type HistoryEntry = z.infer<typeof HistoryEntry>;
 

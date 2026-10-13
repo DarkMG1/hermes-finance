@@ -45,6 +45,7 @@ export function getPerson(db: Db, id: string): PersonDetail | null {
   if (!row) return null;
   // same-day entries in the order they were recorded (rowid when one sync gave them the same created_at); ids are random
   const items = db.prepare(`SELECT * FROM (${TAGGED}) WHERE person_id = ? ORDER BY date, created_at, row_order, line_id`).all(id) as Tagged[];
+  const withReceipt = new Set((db.prepare('SELECT transaction_id AS id FROM receipts').all() as { id: string }[]).map((r) => r.id));
   let balance = 0;
   // computed on every read, so bank edits and removals rewrite the feed
   const history: HistoryEntry[] = items.map((t) => {
@@ -52,6 +53,7 @@ export function getPerson(db: Db, id: string): PersonDetail | null {
     return {
       transactionId: t.transaction_id, lineId: t.line_id, date: t.date, payee: t.payee,
       kind: t.paid_by ? 'paidByThem' : t.amount < 0 ? 'forThem' : 'fromThem', effectCents: -t.amount, balanceAfterCents: balance, settled: balance === 0,
+      hasReceipt: withReceipt.has(t.transaction_id),
     };
   });
   return { person: toPerson(row, balance), history: history.reverse() };
