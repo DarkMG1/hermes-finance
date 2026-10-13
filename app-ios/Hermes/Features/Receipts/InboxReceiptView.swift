@@ -69,9 +69,6 @@ struct InboxReceiptView: View {
                     Button("Retry link to \(unlinked.payee)") { Task { await link(unlinked, thenItemize: true) } }
                 } else {
                     Button("Paid by…") { choosingPayer = true }
-                        .confirmationDialog("Who paid?", isPresented: $choosingPayer) {
-                            ForEach(model.people.filter { !$0.archived }) { person in Button(person.name) { payer = person } }
-                        }
                 }
                 Button("Itemize") { itemizing = .inbox(receipt.id) }
                 // dialogs on their buttons: on the List they float mid-screen over the photo
@@ -91,6 +88,10 @@ struct InboxReceiptView: View {
         .navigationTitle(receipt.merchant ?? "Receipt")
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadPhoto() }
+        // on the screen, not the button: a sheet opened from a button-anchored dialog gets dropped mid-dismiss
+        .confirmationDialog("Who paid?", isPresented: $choosingPayer) {
+            ForEach(model.people.filter { !$0.archived }) { person in Button(person.name) { payer = person } }
+        }
         .sheet(isPresented: $picking, onDismiss: { pickedToConfirm = picked; picked = nil }, content: {
             ExpensePicker(title: "Link to transaction", suggestions: receipt.suggestions,
                           allows: { $0.amountCents < 0 && $0.hasReceipt != true }, onPick: { t in picked = t })
