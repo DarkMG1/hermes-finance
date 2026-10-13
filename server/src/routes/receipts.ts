@@ -21,6 +21,9 @@ export function receiptRoutes(app: FastifyInstance, deps: Deps): void {
       throw new ApiError(400, 'INVALID_IMAGE', 'the receipt must be a JPEG');
     }
     assertLive(req.params.id);
+    if (db.prepare('SELECT forgiven FROM transactions WHERE id = ?').pluck().get(req.params.id) === 1) {
+      throw new ApiError(409, 'FORGIVENESS_LOCKED', 'delete the forgiveness to change it');
+    }
     db.transaction(() => {
       db.prepare(`INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES (?, ?, ?, ?)
         ON CONFLICT (transaction_id) DO UPDATE SET jpeg = excluded.jpeg, bytes = excluded.bytes, created_at = excluded.created_at,

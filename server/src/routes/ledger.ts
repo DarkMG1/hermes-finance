@@ -70,6 +70,9 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
     const r = idempotentWrite(deps, req, () => {
       const current = getTransaction(db, req.params.id);
       if (!current) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      if (current.forgiven && (body.categoryId !== undefined || body.personId !== undefined || body.paidByPersonId !== undefined)) {
+        throw new ApiError(409, 'FORGIVENESS_LOCKED', 'delete the forgiveness to change it');
+      }
       // a split transaction's categories and people live on its lines (e.g. a stale client that loaded it before the split)
       if ((body.categoryId !== undefined || body.personId !== undefined) && current.splitLines.length) {
         throw new ApiError(409, 'SPLIT_TRANSACTION', 'tag a split transaction through its lines', body.categoryId !== undefined ? 'categoryId' : 'personId');
@@ -121,6 +124,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
     const r = idempotentWrite(deps, req, () => {
       const txn = getTransaction(db, req.params.id);
       if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      if (txn.forgiven) throw new ApiError(409, 'FORGIVENESS_LOCKED', 'delete the forgiveness to change it');
       if (txn.paidByPersonId) throw new ApiError(409, 'PAID_BY_PERSON', 'a transaction someone else paid cannot be split', 'lines');
       if (!body.lines.length && !txn.splitLines.length) return { status: 200, body: txn };
       writeSplit(db, txn.id, txn.amountCents, body.lines, 'lines', deps.now().toISOString());
@@ -134,6 +138,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
     const r = idempotentWrite(deps, req, () => {
       const txn = getTransaction(db, req.params.id);
       if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      if (txn.forgiven) throw new ApiError(409, 'FORGIVENESS_LOCKED', 'delete the forgiveness to change it');
       if (!txn.splitLines.some((l) => l.id === req.params.lineId)) throw new ApiError(404, 'NOT_FOUND', 'split line not found');
       assertCategoryExists(db, body.categoryId, 'categoryId');
       assertPersonTaggable(db, body.personId, 'personId', txn.id);

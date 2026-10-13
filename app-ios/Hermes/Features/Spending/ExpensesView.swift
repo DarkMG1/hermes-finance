@@ -95,7 +95,7 @@ struct ExpensesView: View {
                 await load(reset: true)
             } else if row.isSplitDifference {
                 opened = .split(transaction)
-            } else if let lineId = row.lineId {
+            } else if let lineId = row.lineId, transaction.forgiven != true {
                 opened = .line(transaction, lineId)
             } else {
                 opened = .transaction(transaction)

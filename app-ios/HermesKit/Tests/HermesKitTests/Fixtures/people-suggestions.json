@@ -17,6 +17,7 @@
       "repaymentDismissed": false,
       "splitLines": [],
       "reconciled": false,
+      "forgiven": false,
       "hasReceipt": false
     },
     "personId": "person-1"

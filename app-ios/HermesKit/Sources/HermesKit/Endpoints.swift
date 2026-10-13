@@ -65,6 +65,10 @@ extension APIClient {
         try await write("PATCH", "/v1/people/\(id)", body: body, key: idempotencyKey)
     }
 
+    public func forgive(personId: String, body: ForgiveBody, idempotencyKey: String) async throws -> LedgerTransaction {
+        try await write("POST", "/v1/people/\(personId)/forgive", body: body, key: idempotencyKey)
+    }
+
     public func putPeopleSettings(_ body: PeopleSettings, idempotencyKey: String) async throws -> PeopleSettings {
         try await write("PUT", "/v1/people/settings", body: body, key: idempotencyKey)
     }

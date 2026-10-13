@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
-import { CreatePersonBody, ListPeopleQuery, PatchPersonBody, PeopleSettings } from '@hermes/shared';
+import { CreatePersonBody, ForgiveBody, ListPeopleQuery, PatchPersonBody, PeopleSettings } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
+import { assertCategoryExists, getTransaction } from '../ledger.ts';
 import { getPerson, listPeople, peopleSettings, suggestions } from '../people.ts';
 
 export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
@@ -20,6 +21,35 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
         .run(deps.now().toISOString(), req.params.id);
       if (!res.changes) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
       return { status: 200, body: { ok: true } };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+
+  app.post<{ Params: { id: string } }>('/v1/people/:id/forgive', async (req, reply) => {
+    const body = parseBody(ForgiveBody, req.body);
+    const r = idempotentWrite(deps, req, () => {
+      const detail = getPerson(db, req.params.id);
+      if (!detail) throw new ApiError(404, 'NOT_FOUND', 'person not found');
+      const owed = detail.person.balanceCents;
+      if (owed <= 0) throw new ApiError(409, 'NOTHING_OWED', "they don't owe you anything");
+      if (body.amountCents > owed) throw new ApiError(400, 'INVALID_REQUEST', 'amountCents: more than they owe', 'amountCents');
+      let categoryId = body.categoryId ?? null;
+      if (categoryId) assertCategoryExists(db, categoryId, 'categoryId');
+      else {
+        categoryId = (db.prepare("SELECT id FROM categories WHERE lower(name) = 'gifts'").pluck().get() as string | undefined) ?? randomUUID();
+        db.prepare("INSERT OR IGNORE INTO categories (id, name, group_name) VALUES (?, 'Gifts', 'Gifts')").run(categoryId);
+      }
+      const c = db.prepare('SELECT is_income, is_transfer FROM categories WHERE id = ?').get(categoryId) as { is_income: number; is_transfer: number };
+      if (c.is_income || c.is_transfer) throw new ApiError(400, 'INVALID_REQUEST', 'categoryId: pick a spending category', 'categoryId');
+      const id = randomUUID();
+      const now = deps.now().toISOString();
+      db.prepare(`INSERT INTO transactions (id, account_id, source, date, amount_cents, bank_description, payee, notes, forgiven, created_at, updated_at)
+        VALUES (?, 'manual', 'manual', ?, 0, '', ?, ?, 1, ?, ?)`).run(id, body.date, `Forgave ${detail.person.name}`, body.notes ?? null, now, now);
+      // opposite-sign lines on a $0 row: writeSplit's same-sign check would refuse them
+      const line = db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id, person_id) VALUES (?, ?, ?, ?, ?)');
+      line.run(`00-${randomUUID()}`, id, body.amountCents, null, req.params.id);
+      line.run(`01-${randomUUID()}`, id, -body.amountCents, categoryId, null);
+      return { status: 201, body: getTransaction(db, id) };
     });
     return reply.code(r.status).send(r.body);
   });

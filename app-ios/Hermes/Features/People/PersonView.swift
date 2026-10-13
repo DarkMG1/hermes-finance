@@ -11,6 +11,8 @@ struct PersonView: View {
     @State private var adding: Adding?
     @State private var picked: LedgerTransaction?
     @State private var splitting: LedgerTransaction?
+    @State private var forgiving: Person?
+    @State private var deletingForgiveness: HistoryEntry?
 
     /// One + choice: log a cost they or you paid, or share an expense already in the ledger.
     private enum Adding: Identifiable {
@@ -33,7 +35,15 @@ struct PersonView: View {
                 let detail = loaded.value
                 LastUpdated(loaded: loaded)
                 InlineError(message: error)
-                Card { Text(Balance.phrase(detail.person.balanceCents)).textStyle(.headline) }
+                Card {
+                    Text(Balance.phrase(detail.person.balanceCents)).textStyle(.headline)
+                    if let spent = detail.spentOnThemCents {
+                        let forgiven = detail.forgivenCents ?? 0
+                        Text("Spent on them \(Money.format(spent))" + (forgiven > 0 ? " · Forgiven \(Money.format(forgiven))" : ""))
+                            .textStyle(.caption, color: Palette.secondaryText)
+                    }
+                    if detail.person.balanceCents > 0, detail.forgivenCents != nil { Button("Forgive…") { forgiving = detail.person } }
+                }
                 // entries up to and including the latest settle-up are the current period; older ones fold away
                 let cut = (detail.history.firstIndex(where: \.settled) ?? detail.history.count - 1) + 1
                 Card {
@@ -88,6 +98,16 @@ struct PersonView: View {
             case .existing: ExpensePicker { picked = $0 }
             }
         })
+        .sheet(item: $forgiving) { person in
+            ForgiveSheet(person: person) { await load() }
+        }
+        .confirmationDialog("Delete this forgiveness?", isPresented: Binding(get: { deletingForgiveness != nil },
+                                                                              set: { if !$0 { deletingForgiveness = nil } }),
+                            titleVisibility: .visible, presenting: deletingForgiveness) { entry in
+            Button("Delete forgiveness", role: .destructive) { Task { await deleteForgiveness(entry) } }
+        } message: { entry in
+            Text("Their balance goes back up by \(Money.format(-entry.effectCents)).")
+        }
         .sheet(item: $splitting) { transaction in
             SplitSheet(transaction: transaction, sharingWith: personId) { await load() }
         }
@@ -109,8 +129,8 @@ struct PersonView: View {
         }
     }
 
-    private func row(_ entry: HistoryEntry) -> some View {
-        Button { Task { await open(entry.transactionId) } } label: {
+    @ViewBuilder private func row(_ entry: HistoryEntry) -> some View {
+        let button = Button { Task { await open(entry.transactionId) } } label: {
             ListRow(title: entry.payee, subtitle: subtitle(entry)) {
                 if entry.hasReceipt == true {
                     Image(systemName: "doc.text")
@@ -124,12 +144,30 @@ struct PersonView: View {
             }
         }
         .buttonStyle(.plain)
+        if entry.kind == "forgiven" {
+            button.contextMenu { Button("Delete forgiveness", role: .destructive) { deletingForgiveness = entry } }
+        } else {
+            button
+        }
+    }
+
+    private func deleteForgiveness(_ entry: HistoryEntry) async {
+        guard let client = model.client else { return }
+        do {
+            try await client.deleteTransaction(id: entry.transactionId, idempotencyKey: UUID().uuidString)
+            await load()
+        } catch ClientError.api(status: 404, _) {
+            await load()
+        } catch {
+            self.error = errorMessage(error)
+        }
     }
 
     private func subtitle(_ entry: HistoryEntry) -> String {
         let kind = switch entry.kind {
         case "forThem": "For them"
         case "fromThem": "From them"
+        case "forgiven": "Forgiven"
         default: "Paid by them"
         }
         return [DayText.display(entry.date), kind].joined(separator: " · ")

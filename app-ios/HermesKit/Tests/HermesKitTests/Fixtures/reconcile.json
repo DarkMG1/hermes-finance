@@ -20,6 +20,7 @@
       "repaymentDismissed": false,
       "splitLines": [],
       "reconciled": false,
+      "forgiven": false,
       "hasReceipt": false
     },
     {
@@ -39,6 +40,7 @@
       "repaymentDismissed": false,
       "splitLines": [],
       "reconciled": false,
+      "forgiven": false,
       "hasReceipt": false
     }
   ]

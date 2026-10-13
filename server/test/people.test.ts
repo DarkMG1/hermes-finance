@@ -328,3 +328,20 @@ test('same-day feed entries from one sync share created_at and still follow inse
   assert.deepEqual(detail.history.map((h: { transactionId: string }) => h.transactionId), ['a-dep', 'z-lunch']);
   assert.equal(detail.history[0].settled, true);
 });
+
+test('a forgiven row reads as forgiven in the feed, and the person totals split spent and forgiven', async () => {
+  const { deps, get } = setup();
+  seedTxn(deps.db, { id: 'lunch', accountId: 'a1', date: '2026-03-01', amountCents: -3000, personId: 'p1', source: 'plaid', sourceId: 'l1' });
+  seedTxn(deps.db, { id: 'paid', accountId: 'manual', date: '2026-03-02', amountCents: -1000, categoryId: 'c-food', paidByPersonId: 'p1' });
+  seedTxn(deps.db, { id: 'forgive', accountId: 'manual', date: '2026-03-05', amountCents: 0 });
+  deps.db.prepare("UPDATE transactions SET forgiven = 1 WHERE id = 'forgive'").run();
+  seedSplit(deps.db, { id: '00-a', transactionId: 'forgive', amountCents: 1500, categoryId: null, personId: 'p1' });
+  seedSplit(deps.db, { id: '01-b', transactionId: 'forgive', amountCents: -1500, categoryId: 'c-food' });
+  const d = await get('/v1/people/p1');
+  assert.equal(d.history[0].kind, 'forgiven');
+  assert.equal(d.history[0].effectCents, -1500);
+  assert.equal(d.person.balanceCents, 3000 - 1000 - 1500);
+  assert.deepEqual([d.spentOnThemCents, d.forgivenCents], [3000, 1500]);
+  assert.equal((await get('/v1/transactions/forgive')).forgiven, true);
+  assert.equal((await get('/v1/transactions/lunch')).forgiven, false);
+});

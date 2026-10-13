@@ -61,6 +61,8 @@ public struct LedgerTransaction: Codable, Sendable, Identifiable, Hashable {
     /// nil from servers before v1.5 and from cached responses saved by older builds
     public let reconciled: Bool?
     public let hasReceipt: Bool?
+    /// nil from servers before v1.7.5
+    public let forgiven: Bool?
 }
 
 public struct TransactionPage: Codable, Sendable {
@@ -124,6 +126,9 @@ public struct PersonDetail: Codable, Sendable {
     public let person: Person
     /// Newest first.
     public let history: [HistoryEntry]
+    /// nil from servers before v1.7.5
+    public let spentOnThemCents: Int?
+    public let forgivenCents: Int?
 }
 
 /// Where repayments land; nil means every checking account.

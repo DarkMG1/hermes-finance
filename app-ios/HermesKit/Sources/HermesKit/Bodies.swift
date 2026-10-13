@@ -216,3 +216,17 @@ public struct ReconcileBody: Encodable, Sendable, Equatable {
     public let amountCents: Int?
     public init(reconciled: Bool, amountCents: Int? = nil) { self.reconciled = reconciled; self.amountCents = amountCents }
 }
+
+public struct ForgiveBody: Encodable, Sendable, Equatable {
+    public var amountCents: Int
+    public var date: String
+    public var categoryId: String?
+    public var notes: String?
+
+    public init(amountCents: Int, date: String, categoryId: String?, notes: String?) {
+        self.amountCents = amountCents
+        self.date = date
+        self.categoryId = categoryId
+        self.notes = notes
+    }
+}
