@@ -94,4 +94,35 @@ extension APIClient {
     public func importAppleCard(csv: String, idempotencyKey: String) async throws -> AppleCardImportResult {
         try await write("POST", "/v1/imports/apple-card", body: AppleCardImportBody(csv: csv), key: idempotencyKey, timeout: 60)
     }
+
+    public func inbox() async throws -> InboxList { try decode(try await getData("/v1/receipts/inbox")) }
+
+    /// The id comes from the phone, so a retry after a lost reply can't add the receipt twice.
+    public func uploadInboxReceipt(id: String, jpeg: Data) async throws {
+        try await send("PUT", "/v1/receipts/inbox/\(id)", body: jpeg, contentType: "image/jpeg", idempotencyKey: nil, timeout: 60)
+    }
+
+    public func inboxPhoto(id: String) async throws -> Data { try await getData("/v1/receipts/inbox/\(id)/photo") }
+
+    public func readInboxReceipt(id: String) async throws -> InboxReceipt {
+        try decode(try await send("POST", "/v1/receipts/inbox/\(id)/read", body: nil, idempotencyKey: nil, timeout: 90).body)
+    }
+
+    public func inboxItems(id: String) async throws -> Itemization { try decode(try await getData("/v1/receipts/inbox/\(id)/items")) }
+
+    public func saveInboxItems(id: String, body: SaveItemsBody, idempotencyKey: String) async throws -> Itemization {
+        try await write("PUT", "/v1/receipts/inbox/\(id)/items", body: body, key: idempotencyKey)
+    }
+
+    public func linkInboxReceipt(id: String, transactionId: String, idempotencyKey: String) async throws -> LinkedReceipt {
+        try await write("POST", "/v1/receipts/inbox/\(id)/link", body: LinkInboxBody(transactionId: transactionId), key: idempotencyKey)
+    }
+
+    public func dismissInboxReceipt(id: String) async throws {
+        try await send("POST", "/v1/receipts/inbox/\(id)/dismiss", body: nil, idempotencyKey: nil, timeout: 20)
+    }
+
+    public func deleteInboxReceipt(id: String) async throws {
+        try await send("DELETE", "/v1/receipts/inbox/\(id)", body: nil, idempotencyKey: nil, timeout: 20)
+    }
 }
