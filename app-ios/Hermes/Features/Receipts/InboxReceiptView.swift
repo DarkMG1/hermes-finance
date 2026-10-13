@@ -18,6 +18,7 @@ struct InboxReceiptView: View {
     @State private var itemizing: ItemizeSource?
     @State private var confirmDelete = false
     @State private var confirmReread = false
+    @State private var viewing = false
     @State private var picked: LedgerTransaction?
     @State private var linked: LedgerTransaction?
     @State private var linkWrites = WriteGuard()
@@ -28,7 +29,18 @@ struct InboxReceiptView: View {
     var body: some View {
         List {
             Section {
-                if let photo { ZoomableImage(image: photo).frame(height: Space.xxl * 9) } else { ProgressView().frame(maxWidth: .infinity) }
+                if let photo {
+                    Button { viewing = true } label: {
+                        Image(uiImage: photo).resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: Space.xxl * 9)
+                            .clipShape(RoundedRectangle(cornerRadius: Space.s))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Receipt photo")
+                    .accessibilityHint("Opens it full screen")
+                    .fullScreenCover(isPresented: $viewing) { ReceiptViewer(image: photo) }
+                } else {
+                    ProgressView().frame(maxWidth: .infinity)
+                }
                 LabeledContent("Store", value: receipt.merchant ?? "Not read")
                 if let total = receipt.totalCents { LabeledContent("Total") { MoneyText(cents: total, colored: false) } }
                 if let day = receipt.purchaseDate { LabeledContent("Date", value: DayText.display(day)) }
@@ -49,8 +61,15 @@ struct InboxReceiptView: View {
                     Button("Paid by…") { choosingPayer = true }
                 }
                 Button("Itemize") { itemizing = .inbox(receipt.id) }
+                // dialogs on their buttons: on the List they float mid-screen over the photo
                 Button("Read again") { if receipt.tagged { confirmReread = true } else { Task { await readAgain() } } }
+                    .confirmationDialog("Read the receipt again?", isPresented: $confirmReread, titleVisibility: .visible) {
+                        Button("Read again", role: .destructive) { Task { await readAgain() } }
+                    } message: { Text("Replaces the items and who had them.") }
                 Button("Delete", role: .destructive) { confirmDelete = true }
+                    .confirmationDialog("Delete this receipt?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                        Button("Delete", role: .destructive) { Task { await delete() } }
+                    }
             }
             .disabled(busy)
             InlineError(message: error)
@@ -64,12 +83,6 @@ struct InboxReceiptView: View {
         }
         .confirmationDialog("Who paid?", isPresented: $choosingPayer) {
             ForEach(model.people.filter { !$0.archived }) { person in Button(person.name) { payer = person } }
-        }
-        .confirmationDialog("Read the receipt again?", isPresented: $confirmReread, titleVisibility: .visible) {
-            Button("Read again", role: .destructive) { Task { await readAgain() } }
-        } message: { Text("Replaces the items and who had them.") }
-        .confirmationDialog("Delete this receipt?", isPresented: $confirmDelete, titleVisibility: .visible) {
-            Button("Delete", role: .destructive) { Task { await delete() } }
         }
         .sheet(isPresented: $picking, onDismiss: { confirming = picked; picked = nil }, content: {
             ExpensePicker(title: "Link to transaction", suggestions: receipt.suggestions,
