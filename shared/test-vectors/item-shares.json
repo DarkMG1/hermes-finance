@@ -24,6 +24,10 @@
     { "name": "itemsNotPositive", "input": { "items": [{ "amountCents": -100, "people": ["me"] }], "taxCents": 0, "tipCents": 0, "feesCents": 0, "targetCents": 100 }, "error": true },
     { "name": "noItems", "input": { "items": [], "taxCents": 0, "tipCents": 0, "feesCents": 0, "targetCents": 100 }, "error": true },
     { "name": "targetNotPositive", "input": { "items": [{ "amountCents": 100, "people": ["me"] }], "taxCents": 0, "tipCents": 0, "feesCents": 0, "targetCents": 0 }, "error": true },
-    { "name": "shareRoundsToZero", "input": { "items": [{ "amountCents": 1000, "people": ["me"] }, { "amountCents": 100, "people": ["p1"] }], "taxCents": 0, "tipCents": 0, "feesCents": 0, "targetCents": 5 }, "error": true }
+    { "name": "shareRoundsToZero", "input": { "items": [{ "amountCents": 1000, "people": ["me"] }, { "amountCents": 100, "people": ["p1"] }], "taxCents": 0, "tipCents": 0, "feesCents": 0, "targetCents": 5 }, "error": true },
+    { "name": "oddCentsSpread", "input": { "items": [{ "amountCents": 100, "people": ["me", "p1"] }, { "amountCents": 100, "people": ["me", "p1"] }, { "amountCents": 100, "people": ["me", "p1"] }, { "amountCents": 100, "people": ["me", "p1"] }, { "amountCents": 111, "people": ["me", "p1"] }, { "amountCents": 225, "people": ["me", "p1"] }, { "amountCents": 74, "people": ["me", "p1"] }], "taxCents": 0, "tipCents": 0, "feesCents": 0, "targetCents": 810 },
+      "expected": { "shares": [{ "person": "me", "cents": 405 }, { "person": "p1", "cents": 405 }], "gapCents": 0 } },
+    { "name": "oddDiscountTakesBack", "input": { "items": [{ "amountCents": 301, "people": ["me", "p1"] }, { "amountCents": -101, "people": ["me", "p1"] }], "taxCents": 0, "tipCents": 0, "feesCents": 0, "targetCents": 200 },
+      "expected": { "shares": [{ "person": "me", "cents": 100 }, { "person": "p1", "cents": 100 }], "gapCents": 0 } }
   ]
 }

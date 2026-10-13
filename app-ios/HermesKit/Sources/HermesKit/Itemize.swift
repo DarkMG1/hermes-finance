@@ -91,20 +91,28 @@ public enum ItemShares {
         return Result(shares: people.map { Share(person: $0, cents: cents[$0] ?? 0) }, gapCents: gap)
     }
 
-    /// Each person's item total (items split evenly, odd cents to "me" first) and the order people first appear.
+    /// Each person's item total and the order people first appear. Items split evenly; an item's odd cents go to whoever
+    /// has had the fewest so far (a discount's come back from whoever has had the most), ties to "me" first, then list order.
     private static func itemTotals(_ items: [Item]) -> ([String], [String: Int])? {
         var order: [String] = []
         var base: [String: Int] = [:]
+        var odd: [String: Int] = [:]
         for item in items {
             guard !item.people.isEmpty, Set(item.people).count == item.people.count else { return nil }
             for p in item.people where !order.contains(p) { order.append(p) }
             let people = item.people.contains(me) ? [me] + item.people.filter { $0 != me } : item.people
             let each = item.amountCents / people.count
             let rem = item.amountCents - each * people.count
-            for (i, p) in people.enumerated() {
-                guard let b = sum([base[p] ?? 0, each, i < abs(rem) ? rem.signum() : 0]) else { return nil }
+            let sign = rem.signum()
+            let takers = people.enumerated().sorted { a, b in
+                let oa = sign * (odd[a.element] ?? 0), ob = sign * (odd[b.element] ?? 0)
+                return oa != ob ? oa < ob : a.offset < b.offset
+            }.prefix(abs(rem)).map(\.element)
+            for p in people {
+                guard let b = sum([base[p] ?? 0, each, takers.contains(p) ? sign : 0]) else { return nil }
                 base[p] = b
             }
+            for p in takers { odd[p, default: 0] += sign }
         }
         return (order, base)
     }
