@@ -45,7 +45,9 @@ struct ExpensePicker: View {
         }
     }
 
-    private var shareableItems: [LedgerTransaction] { items.filter { (allows ?? shareable)($0) && !suggestions.contains($0) } }
+    private var shareableItems: [LedgerTransaction] {
+        items.filter { t in (allows ?? shareable)(t) && !(query.isEmpty && suggestions.contains { $0.id == t.id }) }
+    }
 
     private func pickRow(_ transaction: LedgerTransaction) -> some View {
         Button { onPick(transaction); dismiss() } label: { TransactionRow(transaction: transaction) }

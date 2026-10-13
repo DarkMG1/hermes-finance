@@ -121,13 +121,13 @@ struct ItemizeView: View {
                     }
                     InlineError(message: error)
                 } header: { Text(inboxId != nil ? "Shares · before the bank charge arrives" : "Shares") }
-                Section {
+                if !(inboxId != nil && unread) { Section {
                     Button("Read receipt again") { confirmReread = true }
                         .disabled(locked)
                         .confirmationDialog("Read the receipt again?", isPresented: $confirmReread, titleVisibility: .visible) {
                             Button("Read again", role: .destructive) { Task { await read() } }
                         } message: { Text("Replaces the items and who had them.") }
-                }
+                } }
             }
         }
         .sheet(item: $editing) { item in

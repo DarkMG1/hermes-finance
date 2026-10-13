@@ -17,6 +17,9 @@ struct InboxReceiptView: View {
     @State private var payer: Person?
     @State private var itemizing: ItemizeSource?
     @State private var confirmDelete = false
+    @State private var confirmReread = false
+    @State private var picked: LedgerTransaction?
+    @State private var linked: LedgerTransaction?
     @State private var linkWrites = WriteGuard()
 
     var body: some View {
@@ -38,7 +41,7 @@ struct InboxReceiptView: View {
                 Button("Link to transaction…") { picking = true }
                 Button("Paid by…") { choosingPayer = true }
                 Button("Itemize") { itemizing = .inbox(receipt.id) }
-                Button("Read again") { Task { await readAgain() } }
+                Button("Read again") { if receipt.tagged { confirmReread = true } else { Task { await readAgain() } } }
                 Button("Delete", role: .destructive) { confirmDelete = true }
             }
             .disabled(busy)
@@ -54,20 +57,25 @@ struct InboxReceiptView: View {
         .confirmationDialog("Who paid?", isPresented: $choosingPayer) {
             ForEach(model.people.filter { !$0.archived }) { person in Button(person.name) { payer = person } }
         }
+        .confirmationDialog("Read the receipt again?", isPresented: $confirmReread, titleVisibility: .visible) {
+            Button("Read again", role: .destructive) { Task { await readAgain() } }
+        } message: { Text("Replaces the items and who had them.") }
         .confirmationDialog("Delete this receipt?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) { Task { await delete() } }
         }
-        .sheet(isPresented: $picking) {
+        .sheet(isPresented: $picking, onDismiss: { confirming = picked; picked = nil }, content: {
             ExpensePicker(title: "Link to transaction", suggestions: receipt.suggestions,
-                          allows: { $0.amountCents < 0 && $0.hasReceipt != true }, onPick: { t in confirming = t })
-        }
-        .sheet(item: $payer) { person in
+                          allows: { $0.amountCents < 0 && $0.hasReceipt != true }, onPick: { t in picked = t })
+        })
+        // set after the sheet closes: SwiftUI drops a sheet presented while another is up
+        .sheet(item: $payer, onDismiss: { if let t = linked { itemizing = .transaction(t) } }, content: { person in
             TheyPaidSheet(person: person, prefill: .init(payee: receipt.merchant ?? "", date: day, totalCents: receipt.totalCents),
                           onCreated: { created in await link(created, thenItemize: true) }, onDone: {})
-        }
-        .sheet(item: $itemizing) { source in
+        })
+        // linked: this inbox receipt is gone, so close its stale screen too
+        .sheet(item: $itemizing, onDismiss: { if linked != nil { dismiss() } }, content: { source in
             ItemizeView(source: source) { await onChange() }
-        }
+        })
     }
 
     private var confirmTitle: String {
@@ -93,7 +101,7 @@ struct InboxReceiptView: View {
             linkWrites.didSucceed()
             await onChange()
             if thenItemize, let fresh = try? await model.reader?.read("/v1/transactions/\(t.id)", as: LedgerTransaction.self).value {
-                itemizing = .transaction(fresh)
+                linked = fresh
             } else {
                 dismiss()
             }
@@ -110,7 +118,7 @@ struct InboxReceiptView: View {
         do {
             _ = try await client.readInboxReceipt(id: receipt.id)
             await onChange()
-        } catch ClientError.api(409, _) {
+        } catch ClientError.api(409, let body) where body.code == "LINKED" {
             await onChange()
             dismiss()
         } catch {
