@@ -33,6 +33,7 @@ struct ConnectView: View {
             }
             .themedForm()
             .navigationTitle("Connect to Hermes")
+            .navigationBarTitleDisplayMode(.inline)
         }
         .onAppear { url = model.serverURL }
     }

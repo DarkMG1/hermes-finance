@@ -60,6 +60,7 @@ struct ExpensesView: View {
         }
         .themedForm()
         .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
         .task { await load(reset: true) }
         .refreshable { await changed() }
         .sheet(item: $opened) { opened in

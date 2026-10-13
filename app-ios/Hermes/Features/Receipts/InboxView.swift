@@ -64,6 +64,7 @@ struct InboxView: View {
         }
         .themedForm()
         .navigationTitle("Receipt inbox")
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { snapping = true } label: { Image(systemName: "camera") }

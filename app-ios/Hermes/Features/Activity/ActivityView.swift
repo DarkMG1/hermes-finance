@@ -50,6 +50,7 @@ struct ActivityView: View {
         .contentMargins(.top, Space.m, for: .scrollContent)
         .themedForm()
         .navigationTitle("Activity")
+        .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query)
         .sheet(isPresented: $choosingCategory) {
             NavigationStack {

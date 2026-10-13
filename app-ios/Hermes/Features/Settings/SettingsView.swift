@@ -131,6 +131,7 @@ struct SettingsView: View {
         // the version footer sits last, under the floating tab bar, unless the scroll can go a little further
         .contentMargins(.bottom, Space.xl, for: .scrollContent)
         .navigationTitle("Settings")
+        .navigationBarTitleDisplayMode(.inline)
         .task { serverSha = try? await model.reader?.read("/v1/health", as: Health.self).value.gitSha }
         .task { await loadBanks() }
         .refreshable { await loadBanks() }
