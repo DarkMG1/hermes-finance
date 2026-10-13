@@ -220,6 +220,11 @@ struct ZoomableImage: View {
             .scaledToFit()
             .scaleEffect(zoom * pinch)
             .offset(x: offset.width + drag.width, y: offset.height + drag.height)
+            // a zoomed image reaches past the frame and clipping only hides it, so touches belong to the frame
+            .allowsHitTesting(false)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            .contentShape(Rectangle())
             .gesture(MagnifyGesture()
                 .updating($pinch) { value, state, _ in state = value.magnification }
                 .onEnded { value in
@@ -237,8 +242,6 @@ struct ZoomableImage: View {
                 zoom = zoom > 1 ? 1 : 2.5
                 if zoom == 1 { offset = .zero }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .clipped()
             .background(Color.black)
             .accessibilityLabel("Receipt photo")
     }

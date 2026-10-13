@@ -65,6 +65,8 @@ struct ItemizeView: View {
                                 Spacer()
                                 MoneyText(cents: item.amountCents, colored: false)
                             }
+                            // a plain button only answers taps on what it draws; the gap between name and price counts too
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .deleteDisabled(locked)
