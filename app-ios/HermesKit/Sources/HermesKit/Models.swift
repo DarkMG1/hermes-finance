@@ -116,6 +116,7 @@ public struct HistoryEntry: Codable, Sendable, Identifiable, Hashable {
     public let effectCents: Int
     public let balanceAfterCents: Int
     public let settled: Bool
+    public let hasReceipt: Bool?
     public var id: String { "\(transactionId)|\(lineId ?? "")" }
 }
 

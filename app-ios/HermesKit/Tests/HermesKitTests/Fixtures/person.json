@@ -15,7 +15,8 @@
       "kind": "forThem",
       "effectCents": 1500,
       "balanceAfterCents": 200,
-      "settled": false
+      "settled": false,
+      "hasReceipt": false
     },
     {
       "transactionId": "txn-4",
@@ -25,7 +26,8 @@
       "kind": "fromThem",
       "effectCents": -1000,
       "balanceAfterCents": -1300,
-      "settled": false
+      "settled": false,
+      "hasReceipt": false
     },
     {
       "transactionId": "txn-6",
@@ -35,7 +37,8 @@
       "kind": "paidByThem",
       "effectCents": -300,
       "balanceAfterCents": -300,
-      "settled": false
+      "settled": false,
+      "hasReceipt": false
     }
   ]
 }

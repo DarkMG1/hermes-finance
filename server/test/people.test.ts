@@ -253,6 +253,9 @@ test('the feed: each entry with its effect and the balance after it, newest firs
     ['groceries', null, 'paidByThem', -6000, -4000, false],
     ['supplies', '01-b', 'forThem', 2000, 2000, false],
   ]);
+  assert.deepEqual(d.history.map((h: { hasReceipt: boolean }) => h.hasReceipt), [false, false, false, false]);
+  deps.db.prepare("INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES ('groceries', x'ffd8ff', 3, 'x')").run();
+  assert.deepEqual((await get('/v1/people/p1')).history.map((h: { hasReceipt: boolean }) => h.hasReceipt), [false, false, true, false]);
   assert.equal((await get('/v1/spending?period=month&date=2026-03')).totalCents, 8000, 'my half of supplies plus my share of groceries');
   const home = await get('/v1/home');
   assert.deepEqual([home.owedToYouCents, home.youOweCents], [0, 1500]);

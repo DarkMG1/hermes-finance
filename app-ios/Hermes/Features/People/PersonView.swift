@@ -112,6 +112,11 @@ struct PersonView: View {
     private func row(_ entry: HistoryEntry) -> some View {
         Button { Task { await open(entry.transactionId) } } label: {
             ListRow(title: entry.payee, subtitle: subtitle(entry)) {
+                if entry.hasReceipt == true {
+                    Image(systemName: "doc.text")
+                        .textStyle(.caption, color: Palette.secondaryText)
+                        .accessibilityLabel("Has receipt")
+                }
                 VStack(alignment: .trailing, spacing: Space.xs) {
                     Text(Money.format(entry.effectCents, showPlus: true)).textStyle(.body).monospacedDigit()
                     Text(Balance.phrase(entry.balanceAfterCents)).textStyle(.caption, color: Palette.secondaryText)
