@@ -251,8 +251,12 @@ struct DocumentScanner: UIViewControllerRepresentable {
 
         static func stitched(_ pages: [UIImage]) -> UIImage? {
             guard pages.count > 1 else { return pages.first }
-            let width = pages.map(\.size.width).max() ?? 0
-            let heights = pages.map { $0.size.width > 0 ? $0.size.height * width / $0.size.width : 0 }
+            let full = pages.map(\.size.width).max() ?? 0
+            let fullHeights = pages.map { $0.size.width > 0 ? $0.size.height * full / $0.size.width : 0 }
+            // Upload caps the long side at 4000 anyway; drawing smaller keeps memory down.
+            let k = min(1, 4000 / max(fullHeights.reduce(0, +), 1))
+            let width = full * k
+            let heights = fullHeights.map { $0 * k }
             let total = CGSize(width: width, height: heights.reduce(0, +))
             guard total.width > 0, total.height > 0 else { return nil }
             let format = UIGraphicsImageRendererFormat()

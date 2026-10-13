@@ -79,9 +79,9 @@ struct InboxView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { snapping = true } label: { Image(systemName: "camera") }
                     .accessibilityLabel("Snap receipt")
+                    .receiptCamera(isPresented: $snapping)
             }
         }
-        .receiptCamera(isPresented: $snapping)
         .sheet(item: $itemizing) { transaction in
             ItemizeView(transaction: transaction) { await load() }
         }
