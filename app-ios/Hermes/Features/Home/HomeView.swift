@@ -7,6 +7,7 @@ struct HomeView: View {
     @Environment(AppLock.self) private var lock
     @Environment(\.webAuthenticationSession) private var webAuth
     @State private var state: LoadState<Home> = .loading
+    @State private var refreshToken = 0
     @State private var investments: Investments?
     @State private var selected: LedgerTransaction?
     @State private var renaming: Account?
@@ -71,6 +72,7 @@ struct HomeView: View {
                     }
                     .buttonStyle(.plain)
                 }
+                ReceiptsCard(refreshToken: refreshToken)
                 if let investments, hasInvestments || !investments.reconnect.isEmpty {
                     investmentsCard(investments, signInAgain: loaded.value.reconnect)
                 }
@@ -128,7 +130,7 @@ struct HomeView: View {
                 }
             }
         }
-        .refreshable { await load() }
+        .refreshable { refreshToken += 1; await load() }
         .task { await load() }
         .sheet(item: $selected) { transaction in
             TransactionDetailSheet(transaction: transaction) { await load() }

@@ -18,6 +18,8 @@ struct HermesApp: App {
     @State private var model: AppModel
     @AppStorage("appearance") private var appearance = Appearance.system
     @AppStorage("requireFaceID") private var requireFaceID = true
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @State private var queue = ReceiptQueue()
     @Environment(\.scenePhase) private var scenePhase
     @State private var lock: AppLock
 
@@ -40,6 +42,7 @@ struct HermesApp: App {
             }
             .environment(model)
             .environment(lock)
+            .environment(queue)
             .tint(Palette.accent)
             .preferredColorScheme(appearance.colorScheme)
             .task {
@@ -52,6 +55,7 @@ struct HermesApp: App {
                 // balances hide whenever Hermes leaves the screen; showing them again needs Face ID
                 if phase == .background { UserDefaults.standard.set(true, forKey: "hideBalances") }
                 if phase == .active { model.loadStoredConnection() }
+                if phase == .active { Task { await queue.retryAll(client: model.client) } }
                 lock.phaseChanged(to: phase, enabled: requireFaceID, connected: model.reader != nil)
             }
         }
@@ -69,6 +73,7 @@ struct MainTabs: View {
             Tab("Settings", systemImage: "gearshape", value: 3) { NavigationStack { SettingsView() } }
         }
         .environment(\.selectedTab, tab)
+        .onChange(of: QuickActions.shared.snapRequested, initial: true) { _, requested in if requested { tab = 0 } }
     }
 }
 
