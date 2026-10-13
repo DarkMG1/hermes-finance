@@ -5,9 +5,9 @@ import SwiftUI
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     @Environment(AppLock.self) private var lock
+    @Environment(ReceiptQueue.self) private var queue
     @Environment(\.webAuthenticationSession) private var webAuth
     @State private var state: LoadState<Home> = .loading
-    @State private var refreshToken = 0
     @State private var investments: Investments?
     @State private var selected: LedgerTransaction?
     @State private var renaming: Account?
@@ -15,11 +15,12 @@ struct HomeView: View {
     @AppStorage("hideBalances") private var hideBalances = true
     @State private var showingBalances = false
     @State private var showBalancesError: String?
+    @State private var inboxCount = 0
+    @State private var snapping = false
+    @State private var handledSnaps = 0
 
     var body: some View {
         Screen(title: "Home") {
-            // outside the loaded state, so snapping works offline or when Home fails to load
-            ReceiptsCard(refreshToken: refreshToken)
             // swiftlint:disable:next multiple_closures_with_trailing_closure
             LoadingContent(state: state, retry: { Task { await load() } }) { loaded in
                 LastUpdated(loaded: loaded)
@@ -101,7 +102,7 @@ struct HomeView: View {
                 let home = loaded.value
                 NavigationLink { WhoOwesView() } label: {
                     Card {
-                        Text("Who Owes Me").textStyle(.subhead, color: Palette.secondaryText)
+                        Text("IOUs").textStyle(.subhead, color: Palette.secondaryText)
                         if home.owedToYouCents == 0 && home.youOweCents == 0 {
                             Text("Nobody owes you anything").textStyle(.body, color: Palette.secondaryText)
                         }
@@ -131,8 +132,24 @@ struct HomeView: View {
                 }
             }
         }
-        .refreshable { refreshToken += 1; await load() }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink { InboxView() } label: { Image(systemName: "tray") }
+                    .badge(inboxCount + queue.pending.count)
+                    .accessibilityLabel("Receipt inbox")
+            }
+        }
+        .refreshable { await load() }
         .task { await load() }
+        .task { await queue.retryAll(client: model.client) }
+        .onChange(of: queue.pending.count) { Task { await loadInbox() } }
+        // outside the loaded state, so snapping works offline or when Home fails to load
+        .onChange(of: QuickActions.shared.snapRequests, initial: true) { _, requests in
+            guard requests > handledSnaps, model.client != nil else { return }
+            handledSnaps = requests
+            snapping = true
+        }
+        .receiptCamera(isPresented: $snapping)
         .sheet(item: $selected) { transaction in
             TransactionDetailSheet(transaction: transaction) { await load() }
         }
@@ -182,7 +199,13 @@ struct HomeView: View {
         showBalancesError = check.error
     }
 
+    private func loadInbox() async {
+        guard let list = try? await model.client?.inbox() else { return }
+        inboxCount = list.waiting.count + list.recentlyLinked.count
+    }
+
     private func load() async {
+        async let _: Void = loadInbox()
         guard let reader = model.reader else { return }
         do {
             let loaded = try await reader.read("/v1/home", as: Home.self)

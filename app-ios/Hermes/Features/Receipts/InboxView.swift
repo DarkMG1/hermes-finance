@@ -9,6 +9,8 @@ struct InboxView: View {
     @State private var error: String?
     @State private var deleting: InboxReceipt?
     @State private var deletingUpload: String?
+    @State private var snapping = false
+    @State private var itemizing: LedgerTransaction?
 
     var body: some View {
         List {
@@ -28,6 +30,24 @@ struct InboxView: View {
                     }
                 }
             }
+            if let linked = list?.recentlyLinked.prefix(3), !linked.isEmpty {
+                Section("Recently linked") {
+                    ForEach(linked) { linked in
+                        HStack {
+                            Button { Task { await open(linked) } } label: {
+                                ListRow(title: linked.merchant ?? "Receipt", subtitle: linked.splitApplied ? "Linked · split applied" : "Linked · Itemize") {
+                                    if let total = linked.totalCents { MoneyText(cents: total, colored: false) }
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            Button("Dismiss", systemImage: "xmark") { Task { await dismiss(linked) } }
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.borderless)
+                        }
+                    }
+                }
+            }
             Section {
                 ForEach(list?.waiting ?? []) { receipt in
                     NavigationLink { InboxReceiptView(receipt: receipt) { await load() } } label: {
@@ -44,6 +64,16 @@ struct InboxView: View {
         }
         .themedForm()
         .navigationTitle("Receipt inbox")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { snapping = true } label: { Image(systemName: "camera") }
+                    .accessibilityLabel("Snap receipt")
+            }
+        }
+        .receiptCamera(isPresented: $snapping)
+        .sheet(item: $itemizing) { transaction in
+            ItemizeView(transaction: transaction) { await load() }
+        }
         .refreshable { await queue.retryAll(client: model.client); await load() }
         .task { await load() }
         // while anything is being read, look again every few seconds
@@ -81,6 +111,21 @@ struct InboxView: View {
         } catch {
             self.error = errorMessage(error)
         }
+    }
+
+    private func open(_ linked: LinkedReceipt) async {
+        guard let reader = model.reader else { return }
+        do {
+            itemizing = try await reader.read("/v1/transactions/\(linked.transactionId)", as: LedgerTransaction.self).value
+            await dismiss(linked)
+        } catch {
+            self.error = errorMessage(error)
+        }
+    }
+
+    private func dismiss(_ linked: LinkedReceipt) async {
+        try? await model.client?.dismissInboxReceipt(id: linked.id)
+        await load()
     }
 
     private func delete(_ r: InboxReceipt) async {
