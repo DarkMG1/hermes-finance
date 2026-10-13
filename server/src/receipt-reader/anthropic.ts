@@ -2,7 +2,7 @@ import { ReceiptReadOutput } from '@hermes/shared';
 import { ReaderError, type ReadResult, type ReceiptReader } from '../receipt-reader.ts';
 
 const INSTRUCTIONS = `Read this receipt and call record_receipt once.
-- items: every purchased line in printed order. name: the item as printed, tidied (no SKU or barcode numbers). amountCents: the line total in integer cents after quantity (2 x $3.50 is 700). A discount, coupon or member saving is its own item with a negative amountCents.
+- items: every purchased line in printed order. name: the item as printed, tidied (no SKU or barcode numbers). amountCents: the line total in integer cents after quantity (2 x $3.50 is 700). A discount, coupon or instant saving for one item (printed under it, often starting with / or \\, or naming it) is subtracted from that item's amountCents, not listed. Only a saving on the whole order is its own item with a negative amountCents.
 - taxCents, tipCents, feesCents (service charge, bag fee, delivery, card surcharge): integer cents, 0 when absent. Never list these as items.
 - totalCents: the printed total in integer cents, or null when none is printed.`;
 
