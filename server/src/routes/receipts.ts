@@ -3,7 +3,8 @@ import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 
 // production nginx caps bodies at 3 MB (client_max_body_size 3m)
-const MAX_BYTES = 3 * 1024 * 1024;
+export const MAX_BYTES = 3 * 1024 * 1024;
+export const isJpeg = (b: unknown): b is Buffer => Buffer.isBuffer(b) && b.length >= 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff;
 
 export function receiptRoutes(app: FastifyInstance, deps: Deps): void {
   const { db } = deps;
@@ -16,7 +17,7 @@ export function receiptRoutes(app: FastifyInstance, deps: Deps): void {
   app.put<{ Params: { id: string } }>('/v1/transactions/:id/receipt', { bodyLimit: MAX_BYTES }, async (req) => {
     if (req.headers['content-type'] !== 'image/jpeg') throw new ApiError(415, 'UNSUPPORTED_MEDIA_TYPE', 'send the receipt as image/jpeg');
     const jpeg = req.body;
-    if (!Buffer.isBuffer(jpeg) || jpeg.length < 3 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8 || jpeg[2] !== 0xff) {
+    if (!isJpeg(jpeg)) {
       throw new ApiError(400, 'INVALID_IMAGE', 'the receipt must be a JPEG');
     }
     assertLive(req.params.id);

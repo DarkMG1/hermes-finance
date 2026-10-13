@@ -63,6 +63,7 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
   // items follow their receipt; checked before the receipt moves, with the same condition
   const moveItems = db.prepare('UPDATE receipt_items SET transaction_id = ? WHERE transaction_id = ? AND NOT EXISTS (SELECT 1 FROM receipts WHERE transaction_id = ?)');
   const moveReceipt = db.prepare('UPDATE receipts SET transaction_id = ? WHERE transaction_id = ? AND NOT EXISTS (SELECT 1 FROM receipts WHERE transaction_id = ?)');
+  const moveInboxLink = db.prepare('UPDATE inbox_receipts SET linked_transaction_id = ? WHERE linked_transaction_id = ?');
   const mappedCategory = db.prepare('SELECT category_id FROM plaid_category_map WHERE plaid_category = ?');
   const checkSuperseded = db.prepare("SELECT id FROM transactions WHERE source = 'plaid' AND pending_source_id = ?");
   const getRow = db.prepare("SELECT id, date, date_owner_set, category_id, category_owner_set, payee, notes, person_id, repayment_dismissed FROM transactions WHERE source = 'plaid' AND source_id = ?");
@@ -135,6 +136,7 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
     if (pendingId) moveSplit.run(id, pendingId);
     if (pendingId) moveItems.run(id, pendingId, id);
     if (pendingId) moveReceipt.run(id, pendingId, id);
+    if (pendingId) moveInboxLink.run(id, pendingId);
     fitSplitToAmount(db, id, opts.nowIso);
     return true;
   };

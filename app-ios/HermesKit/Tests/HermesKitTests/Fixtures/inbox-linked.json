@@ -1,0 +1,8 @@
+{
+  "id": "inbox-2",
+  "transactionId": "txn-1",
+  "merchant": "Synthetic Cafe",
+  "totalCents": 1250,
+  "linkedAt": "2026-03-15T11:30:00.000Z",
+  "splitApplied": true
+}

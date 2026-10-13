@@ -1,0 +1,18 @@
+{
+  "items": [
+    {
+      "id": "inbox-1-0",
+      "name": "Synthetic Pear",
+      "amountCents": 600,
+      "people": [
+        "me"
+      ]
+    }
+  ],
+  "taxCents": 40,
+  "tipCents": 0,
+  "feesCents": 0,
+  "totalCents": 640,
+  "readAt": "2026-03-15T10:00:05.000Z",
+  "handEdited": false
+}
