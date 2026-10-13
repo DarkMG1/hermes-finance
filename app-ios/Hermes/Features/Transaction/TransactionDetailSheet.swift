@@ -87,7 +87,9 @@ struct TransactionDetailSheet: View {
                         ) {
                             MoneyText(cents: line.amountCents)
                         }
+                        .disabled(forgiven)
                     }
+                    if forgiven { Text("A forgiveness. Delete it to change the amount.").textStyle(.caption, color: Palette.secondaryText) }
                     if splitDrifted {
                         Text("The bank changed this amount, so the split no longer adds up. Edit the split to fix it.")
                             .textStyle(.caption, color: Palette.loss)
@@ -99,11 +101,13 @@ struct TransactionDetailSheet: View {
                     }
                 }
             }
-            Section("Receipt") {
-                ReceiptSection(transactionId: transaction.id, hadReceipt: transaction.hasReceipt ?? false, busy: $receiptBusy,
-                               onItemize: patch.isEmpty && transaction.amountCents < 0 ? { itemizing = true } : nil) { savedOutside = true }
+            if !forgiven {
+                Section("Receipt") {
+                    ReceiptSection(transactionId: transaction.id, hadReceipt: transaction.hasReceipt ?? false, busy: $receiptBusy,
+                                   onItemize: patch.isEmpty && transaction.amountCents < 0 ? { itemizing = true } : nil) { savedOutside = true }
+                }
+                .disabled(deleteWrites.unresolved)
             }
-            .disabled(deleteWrites.unresolved)
             if transaction.repaymentDismissed == true {
                 Section {
                     Text("Hidden from repayment suggestions").textStyle(.subhead, color: Palette.secondaryText)
@@ -163,7 +167,8 @@ struct TransactionDetailSheet: View {
         !transaction.splitLines.isEmpty && transaction.splitLines.reduce(0) { $0 + $1.amountCents } != transaction.amountCents
     }
 
-    private var canSplit: Bool { transaction.paidByPersonId == nil && paidById == nil }
+    private var forgiven: Bool { transaction.forgiven == true }
+    private var canSplit: Bool { transaction.paidByPersonId == nil && paidById == nil && !forgiven }
     private var trimmedPayee: String { payee.trimmingCharacters(in: .whitespacesAndNewlines) }
 
     private var payeeInvalid: Bool { transaction.source == "manual" && trimmedPayee.isEmpty }
