@@ -11,6 +11,7 @@ import { importRoutes } from './routes/imports.ts';
 import { investmentRoutes } from './routes/investments.ts';
 import { reconcileRoutes } from './routes/reconcile.ts';
 import { receiptRoutes } from './routes/receipts.ts';
+import { inboxRoutes } from './routes/inbox.ts';
 import { itemizeRoutes } from './routes/itemize.ts';
 
 function tokenMatches(header: string | undefined, token: string): boolean {
@@ -65,6 +66,7 @@ export function buildApp(deps: Deps): FastifyInstance {
   investmentRoutes(app, deps);
   reconcileRoutes(app, deps);
   receiptRoutes(app, deps);
+  inboxRoutes(app, deps);
   itemizeRoutes(app, deps);
 
   return app;

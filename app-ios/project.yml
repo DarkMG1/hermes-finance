@@ -7,8 +7,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "1.6.0"
-    CURRENT_PROJECT_VERSION: "160"
+    MARKETING_VERSION: "1.6.1"
+    CURRENT_PROJECT_VERSION: "161"
 packages:
   HermesKit:
     path: HermesKit
@@ -31,6 +31,10 @@ targets:
         NSFaceIDUsageDescription: Unlock Hermes with Face ID
         NSCameraUsageDescription: Take a photo of a receipt.
         UILaunchScreen: {}
+        UIApplicationShortcutItems:
+          - UIApplicationShortcutItemType: snapReceipt
+            UIApplicationShortcutItemTitle: Snap receipt
+            UIApplicationShortcutItemIconSymbolName: camera
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]

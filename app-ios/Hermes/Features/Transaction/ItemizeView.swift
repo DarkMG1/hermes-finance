@@ -1,12 +1,28 @@
 import HermesKit
 import SwiftUI
 
+/// What is being itemized: a ledger row, or an inbox receipt not linked to a charge yet.
+enum ItemizeSource: Identifiable {
+    case transaction(LedgerTransaction), inbox(String)
+    var id: String {
+        switch self {
+        case .transaction(let t): "t-\(t.id)"
+        case .inbox(let id): "i-\(id)"
+        }
+    }
+}
+
 /// Claude reads the receipt into items; the owner says who had each one; saving rewrites the split
 /// (own purchase) or sets the owner's share ("they paid" row).
 struct ItemizeView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    let transaction: LedgerTransaction
+    let source: ItemizeSource
+    init(source: ItemizeSource, onSaved: @escaping () async -> Void) { self.source = source; self.onSaved = onSaved }
+    init(transaction: LedgerTransaction, onSaved: @escaping () async -> Void) { self.init(source: .transaction(transaction), onSaved: onSaved) }
+
+    private var transaction: LedgerTransaction? { if case .transaction(let t) = source { t } else { nil } }
+    private var inboxId: String? { if case .inbox(let id) = source { id } else { nil } }
     let onSaved: () async -> Void
 
     @State private var items: [DraftItem] = []
@@ -26,6 +42,7 @@ struct ItemizeView: View {
     @State private var photo: UIImage?
     @State private var showingPhoto = false
     @State private var loadingPhoto = false
+    @State private var unread = false
 
     var body: some View {
         Sheet(title: "Itemize", canSave: canSave, busy: busy || reading || loading, unresolved: writes.unresolved,
@@ -48,6 +65,13 @@ struct ItemizeView: View {
                         if loadingPhoto { ProgressView() } else { Text(showingPhoto ? "Hide receipt" : "Show receipt") }
                     }
                     .disabled(loadingPhoto)
+                }
+                if inboxId != nil && unread {
+                    Section {
+                        Text("Not read yet").textStyle(.subhead, color: Palette.secondaryText)
+                        Button("Read receipt") { Task { await read() } }
+                            .disabled(locked)
+                    }
                 }
                 if handEdited {
                     Section {
@@ -80,14 +104,14 @@ struct ItemizeView: View {
                     Field(label: "Tax", error: extraError(taxText)) { TextField("0.00", text: $taxText).keyboardType(.decimalPad) }
                     Field(label: "Tip", error: extraError(tipText)) { TextField("0.00", text: $tipText).keyboardType(.decimalPad) }
                     Field(label: "Fees", error: extraError(feesText)) { TextField("0.00", text: $feesText).keyboardType(.decimalPad) }
-                    if !isTheyPaid, let result, result.gapCents != 0 {
+                    if transaction != nil, !isTheyPaid, let result, result.gapCents != 0 {
                         LabeledContent("Difference from bank") { MoneyText(cents: result.gapCents, colored: false) }
                     }
                 }
                 .disabled(locked)
                 Section {
                     // what Save replaces, so a change to the row is visible before it happens
-                    if isTheyPaid { LabeledContent("Your share now") { MoneyText(cents: -transaction.amountCents, colored: false) } }
+                    if isTheyPaid, let transaction { LabeledContent("Your share now") { MoneyText(cents: -transaction.amountCents, colored: false) } }
                     if let result {
                         ForEach(result.shares, id: \.person) { share in
                             LabeledContent(label(share.person)) { MoneyText(cents: share.cents, colored: false) }
@@ -97,14 +121,14 @@ struct ItemizeView: View {
                         Text(sharesProblem).textStyle(.caption, color: Palette.loss)
                     }
                     InlineError(message: error)
-                } header: { Text("Shares") }
-                Section {
+                } header: { Text(inboxId != nil ? "Shares · before the bank charge arrives" : "Shares") }
+                if !(inboxId != nil && unread) { Section {
                     Button("Read receipt again") { confirmReread = true }
                         .disabled(locked)
                         .confirmationDialog("Read the receipt again?", isPresented: $confirmReread, titleVisibility: .visible) {
                             Button("Read again", role: .destructive) { Task { await read() } }
                         } message: { Text("Replaces the items and who had them.") }
-                }
+                } }
             }
         }
         .sheet(item: $editing) { item in
@@ -116,11 +140,11 @@ struct ItemizeView: View {
         .task { await load() }
     }
 
-    private var isTheyPaid: Bool { transaction.paidByPersonId != nil }
+    private var isTheyPaid: Bool { transaction?.paidByPersonId != nil }
 
     /// Me first; on a "they paid" row only the payer, otherwise active people plus anyone already on an item.
     private var choices: [String] {
-        if let payer = transaction.paidByPersonId { return [ItemShares.me, payer] }
+        if let payer = transaction?.paidByPersonId { return [ItemShares.me, payer] }
         let active = model.people.filter { !$0.archived }.map(\.id)
         let onItems = items.flatMap(\.people).filter { $0 != ItemShares.me && !active.contains($0) }
         return [ItemShares.me] + active + Array(Set(onItems)).sorted()
@@ -147,7 +171,7 @@ struct ItemizeView: View {
 
     private var result: ItemShares.Result? {
         guard let tax = cents(taxText), let tip = cents(tipText), let fees = cents(feesText) else { return nil }
-        let target = isTheyPaid ? itemsTotal + tax + tip + fees : -transaction.amountCents
+        let target = isTheyPaid || inboxId != nil ? itemsTotal + tax + tip + fees : -(transaction?.amountCents ?? 0)
         return ItemShares.compute(items: shareItems, taxCents: tax, tipCents: tip, feesCents: fees, targetCents: target)
     }
 
@@ -183,7 +207,8 @@ struct ItemizeView: View {
         loadingPhoto = true
         defer { loadingPhoto = false }
         do {
-            photo = UIImage(data: try await client.receipt(transactionId: transaction.id))
+            let data = if let inboxId { try await client.inboxPhoto(id: inboxId) } else { try await client.receipt(transactionId: transaction?.id ?? "") }
+            photo = UIImage(data: data)
             showingPhoto = photo != nil
         } catch {
             self.error = errorMessage(error)
@@ -196,11 +221,12 @@ struct ItemizeView: View {
         loadError = nil
         defer { loading = false }
         do {
-            let it = try await client.receiptItems(transactionId: transaction.id)
+            let it = if let inboxId { try await client.inboxItems(id: inboxId) } else { try await client.receiptItems(transactionId: transaction?.id ?? "") }
             apply(it)
             loaded = true
-            // items saved by hand have no readAt: reading now would replace them
-            if it.readAt == nil && it.items.isEmpty { await read() }
+            unread = it.readAt == nil && it.items.isEmpty
+            // items saved by hand have no readAt: reading now would replace them; an inbox receipt waits for a tap
+            if transaction != nil && unread { await read() }
         } catch {
             // not an empty list: saving over items that were never loaded would replace them
             loadError = errorMessage(error)
@@ -213,8 +239,20 @@ struct ItemizeView: View {
         defer { reading = false }
         error = nil
         do {
-            apply(try await client.readReceipt(transactionId: transaction.id))
+            if let inboxId {
+                _ = try await client.readInboxReceipt(id: inboxId)
+                apply(try await client.inboxItems(id: inboxId))
+            } else {
+                apply(try await client.readReceipt(transactionId: transaction?.id ?? ""))
+            }
+            unread = false
         } catch {
+            // the re-read matched a charge and linked it: this inbox receipt is gone
+            if case .api(409, let body) = error as? ClientError, body.code == "LINKED" { await onSaved(); dismiss(); return }
+            if case .api(409, let body) = error as? ClientError, body.code == "CHANGED" {
+                self.error = "Items were saved while the receipt was being read, so nothing was replaced."
+                return
+            }
             // the list stays as it was (empty on a first read): items can be added by hand
             if case .api(503, let body) = error as? ClientError, body.code == "READER_NOT_CONFIGURED" {
                 self.error = "Receipt reading isn't set up on the server. You can add the items by hand."
@@ -232,13 +270,21 @@ struct ItemizeView: View {
         let body = SaveItemsBody(items: items.map { .init(name: $0.name, amountCents: $0.amountCents, people: $0.people) },
                                  taxCents: tax, tipCents: tip, feesCents: fees)
         do {
-            _ = try await client.saveReceiptItems(transactionId: transaction.id, body: body, idempotencyKey: writes.key)
+            if let inboxId {
+                _ = try await client.saveInboxItems(id: inboxId, body: body, idempotencyKey: writes.key)
+            } else {
+                _ = try await client.saveReceiptItems(transactionId: transaction?.id ?? "", body: body, idempotencyKey: writes.key)
+            }
             writes.didSucceed()
             await onSaved()
             dismiss()
         } catch {
             writes.didFail(error)
-            self.error = writes.unresolved ? "Couldn't confirm the save. Tap Save to retry; it won't be applied twice." : errorMessage(error)
+            if inboxId != nil, case .api(404, _) = error as? ClientError {
+                self.error = "This receipt was just linked to its charge. Itemize it from the transaction."
+            } else {
+                self.error = writes.unresolved ? "Couldn't confirm the save. Tap Save to retry; it won't be applied twice." : errorMessage(error)
+            }
         }
     }
 }

@@ -7,6 +7,7 @@ struct HomeView: View {
     @Environment(AppLock.self) private var lock
     @Environment(\.webAuthenticationSession) private var webAuth
     @State private var state: LoadState<Home> = .loading
+    @State private var refreshToken = 0
     @State private var investments: Investments?
     @State private var selected: LedgerTransaction?
     @State private var renaming: Account?
@@ -17,6 +18,8 @@ struct HomeView: View {
 
     var body: some View {
         Screen(title: "Home") {
+            // outside the loaded state, so snapping works offline or when Home fails to load
+            ReceiptsCard(refreshToken: refreshToken)
             // swiftlint:disable:next multiple_closures_with_trailing_closure
             LoadingContent(state: state, retry: { Task { await load() } }) { loaded in
                 LastUpdated(loaded: loaded)
@@ -128,7 +131,7 @@ struct HomeView: View {
                 }
             }
         }
-        .refreshable { await load() }
+        .refreshable { refreshToken += 1; await load() }
         .task { await load() }
         .sheet(item: $selected) { transaction in
             TransactionDetailSheet(transaction: transaction) { await load() }

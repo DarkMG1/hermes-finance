@@ -5,6 +5,11 @@ import SwiftUI
 struct ExpensePicker: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
+    var title = "Add existing expense"
+    /// Shown above the search results while the search box is empty.
+    var suggestions: [LedgerTransaction] = []
+    /// Which rows can be picked; the default is the existing "shareable" rule.
+    var allows: ((LedgerTransaction) -> Bool)?
     let onPick: (LedgerTransaction) -> Void
 
     @State private var query = ""
@@ -18,19 +23,17 @@ struct ExpensePicker: View {
         NavigationStack {
             List {
                 InlineError(message: error)
-                ForEach(shareableItems) { transaction in
-                    Button { onPick(transaction); dismiss() } label: { TransactionRow(transaction: transaction) }
-                        .buttonStyle(.plain)
-                }
+                if query.isEmpty && !suggestions.isEmpty { Section("Suggested") { ForEach(suggestions) { pickRow($0) } } }
+                ForEach(shareableItems) { pickRow($0) }
                 // a button, not load-on-scroll: a page can be entirely filtered out, leaving no row to trigger the next one
                 if cursor != nil && !loading { Button("Load more") { Task { await load(reset: false) } } }
                 if loading { ProgressView().frame(maxWidth: .infinity) }
                 if !loading && cursor == nil && shareableItems.isEmpty && error == nil {
-                    Text("No expenses to share").textStyle(.subhead, color: Palette.secondaryText)
+                    Text(allows == nil ? "No expenses to share" : "No matching transactions").textStyle(.subhead, color: Palette.secondaryText)
                 }
             }
             .themedForm()
-            .navigationTitle("Add existing expense")
+            .navigationTitle(title)
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
@@ -42,7 +45,14 @@ struct ExpensePicker: View {
         }
     }
 
-    private var shareableItems: [LedgerTransaction] { items.filter(shareable) }
+    private var shareableItems: [LedgerTransaction] {
+        items.filter { t in (allows ?? shareable)(t) && !(query.isEmpty && suggestions.contains { $0.id == t.id }) }
+    }
+
+    private func pickRow(_ transaction: LedgerTransaction) -> some View {
+        Button { onPick(transaction); dismiss() } label: { TransactionRow(transaction: transaction) }
+            .buttonStyle(.plain)
+    }
 
     private func shareable(_ transaction: LedgerTransaction) -> Bool {
         transaction.amountCents < 0 && transaction.splitLines.isEmpty && transaction.personId == nil && transaction.paidByPersonId == nil

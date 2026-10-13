@@ -75,6 +75,16 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   ri.run('ritem-2', 'txn-1', 1, 'Synthetic Coffee', 500, '["me","person-1"]');
   out.itemization = await get('/v1/transactions/txn-1/receipt/items');
   out['item-shares'] = JSON.parse(readFileSync(join(import.meta.dirname, '..', '..', '..', 'shared', 'test-vectors', 'item-shares.json'), 'utf8'));
+  // the inbox goes in last so the fixtures above stay as they are
+  const inboxPhoto = Buffer.from([0xff, 0xd8, 0xff]);
+  db.prepare(`INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at, read_at, model, merchant, purchase_date, total_cents, tax_cents, tip_cents, fees_cents, items)
+    VALUES ('inbox-1', ?, 3, '2026-03-15T10:00:00.000Z', '2026-03-15T10:00:05.000Z', 'fixture-model', 'Synthetic Grocer', '2026-03-15', 640, 40, 0, 0, ?)`)
+    .run(inboxPhoto, JSON.stringify([{ name: 'Synthetic Pear', amountCents: 600, people: ['me'] }]));
+  db.prepare(`INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at, read_at, model, merchant, total_cents, linked_transaction_id, linked_at, split_applied)
+    VALUES ('inbox-2', NULL, 3, '2026-03-14T10:00:00.000Z', '2026-03-14T10:00:05.000Z', 'fixture-model', 'Synthetic Cafe', 1250, 'txn-1', '2026-03-15T11:30:00.000Z', 1)`).run();
+  out.inbox = await get('/v1/receipts/inbox');
+  out['inbox-items'] = await get('/v1/receipts/inbox/inbox-1/items');
+  out['inbox-linked'] = (out.inbox as { recentlyLinked: unknown[] }).recentlyLinked[0];
   // investments use their own database so the accounts, home and net worth fixtures stay as they are
   const inv = makeTestDeps().deps;
   seedAccount(inv.db, { id: 'acct-brokerage', type: 'investment', subtype: 'brokerage', balanceCents: 150000 });
