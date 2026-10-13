@@ -34,7 +34,8 @@ const addDays = (ymd: string, n: number) => {
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
 };
-const words = (s: string | null) => new Set((s ?? '').toLowerCase().match(/[a-z]{3,}/g) ?? []);
+const STOP = new Set(['the', 'and', 'inc', 'llc', 'ltd', 'corp', 'company', 'store', 'shop', 'www', 'com']);
+const words = (s: string | null) => new Set((s ?? '').toLowerCase().match(/[a-z]{3,}/g)?.filter((w) => !STOP.has(w)) ?? []);
 const sharesWord = (t: Transaction, store: Set<string>) => [t.payee, t.merchantName, t.bankDescription].some((s) => [...words(s)].some((w) => store.has(w)));
 
 function candidates(db: Db, row: InboxRow): { exact: Transaction[]; near: Transaction[] } {

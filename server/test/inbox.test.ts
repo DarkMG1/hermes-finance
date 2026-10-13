@@ -186,3 +186,12 @@ test('a restart mid-read marks the read failed; tagged, read or linked rows are 
   markInterruptedReads(db);
   assert.deepEqual(['mid', 'tagged', 'done'].map((id) => getInboxRow(db, id)!.read_failed), [1, 0, 0]);
 });
+
+test('stop-words are not merchant evidence: The Corner Store vs THE HOME DEPOT only suggests', () => {
+  const { deps, db, snap, charge } = setup();
+  snap('r1');
+  storeRead(db, 'r1', { ...READ, merchant: 'The Corner Store' }, 'now');
+  charge('c1', '2026-03-11', -1050, { bankDescription: 'THE HOME DEPOT' });
+  assert.equal(matchInbox(deps), 0);
+  assert.equal(getInboxRow(db, 'r1')!.linked_transaction_id, null);
+});

@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.ts';
-import { getInboxRow, matchInbox } from '../src/inbox.ts';
+import { getInboxRow, matchInbox, storeRead } from '../src/inbox.ts';
 import { applyPages } from '../src/sync/apply.ts';
 import { txn } from './fake-plaid.ts';
 import { AUTH, makeTestDeps, seedAccount, seedCategory, seedPerson, seedTxn } from './helpers.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2]);
 const settle = () => new Promise((r) => setTimeout(r, 0)).then(() => new Promise((r) => setTimeout(r, 0)));
+const READ = { items: [], taxCents: 0, tipCents: 0, feesCents: 0, totalCents: 1050, merchant: 'Synthetic Grocer', purchaseDate: '2026-03-10', model: 'fake-model' };
 const ID = '0f8c5a7e-1111-4222-8333-944445555666';
 
 function setup() {
@@ -168,14 +169,35 @@ test('read again clears the tags; tags saved while it reads win with 409 CHANGED
   assert.deepEqual(JSON.parse(getInboxRow(db, ID)!.items!), items);
 });
 
-test('deleting a linked receipt from its transaction puts it back in the inbox with its photo', async () => {
-  const { put, post, get, app, db } = setup();
+test('deleting a linked receipt from its transaction is a real delete: the row stays linked and does not re-link', async () => {
+  const { put, post, get, app, db, deps } = setup();
   await put(ID);
   await settle();
-  seedTxn(db, { id: 'c1', accountId: 'card', date: '2026-03-15', amountCents: -2000, source: 'plaid', sourceId: 's-c1' });
+  seedTxn(db, { id: 'c1', accountId: 'card', date: '2026-03-15', amountCents: -1050, source: 'plaid', sourceId: 's-c1', bankDescription: 'SYNTHETIC GROCER 01' });
   assert.equal((await post(`/v1/receipts/inbox/${ID}/link`, { transactionId: 'c1' })).statusCode, 200);
   assert.equal((await app.inject({ method: 'DELETE', url: '/v1/transactions/c1/receipt', headers: AUTH })).statusCode, 204);
   const list = (await get('/v1/receipts/inbox')).json();
-  assert.deepEqual([list.waiting.map((w: { id: string }) => w.id), list.recentlyLinked.length], [[ID], 0]);
-  assert.deepEqual((await get(`/v1/receipts/inbox/${ID}/photo`)).rawPayload, JPEG);
+  assert.deepEqual([list.waiting.length, list.recentlyLinked.length], [0, 0]);
+  assert.equal(getInboxRow(db, ID)!.linked_transaction_id, 'c1');
+  assert.equal(matchInbox(deps), 0);
+});
+
+test('replacing a transaction photo detaches the inbox link', async () => {
+  const { put, post, app, db } = setup();
+  await put(ID);
+  await settle();
+  seedTxn(db, { id: 'c1', accountId: 'card', date: '2026-03-15', amountCents: -1050, source: 'plaid', sourceId: 's-c1' });
+  await post(`/v1/receipts/inbox/${ID}/link`, { transactionId: 'c1' });
+  const r = await app.inject({ method: 'PUT', url: '/v1/transactions/c1/receipt', headers: { ...AUTH, 'content-type': 'image/jpeg' }, payload: JPEG });
+  assert.equal(r.statusCode, 200);
+  assert.equal(getInboxRow(db, ID)!.linked_transaction_id, null);
+});
+
+test('a background read landing on an untagged row during an explicit read is not a conflict', async () => {
+  const { put, post, db, reader } = setup();
+  await put(ID);
+  await settle();
+  reader.onRead = () => { storeRead(db, ID, { ...READ, items: [{ name: 'Synthetic Jam', amountCents: 600 }] }, 'now'); };
+  const r = await post(`/v1/receipts/inbox/${ID}/read`);
+  assert.equal(r.statusCode, 200);
 });

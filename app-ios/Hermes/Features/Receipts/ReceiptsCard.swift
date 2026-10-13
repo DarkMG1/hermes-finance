@@ -14,6 +14,7 @@ struct ReceiptsCard: View {
     @State private var choosingPhoto = false
     @State private var pickerItem: PhotosPickerItem?
     @State private var itemizing: LedgerTransaction?
+    @State private var handledSnaps = 0
     private var snap: QuickActions { QuickActions.shared }
 
     var body: some View {
@@ -46,10 +47,11 @@ struct ReceiptsCard: View {
             }
             InlineError(message: error ?? queue.error)
         }
-        .task(id: refreshToken) { await queue.retryAll(client: model.client); await load() }
+        .task(id: refreshToken) { await load(); await queue.retryAll(client: model.client) }
         .onChange(of: queue.pending.count) { Task { await load() } }
-        .onChange(of: snap.snapRequested, initial: true) { _, requested in
-            guard requested, model.client != nil else { return }
+        .onChange(of: snap.snapRequests, initial: true) { _, requests in
+            guard requests > handledSnaps, model.client != nil else { return }
+            handledSnaps = requests
             snapPhoto()
         }
         .photosPicker(isPresented: $choosingPhoto, selection: $pickerItem, matching: .images)
@@ -70,8 +72,6 @@ struct ReceiptsCard: View {
                 guard let photo else { return }
                 Task { await queue.add(photo, client: model.client) }
             }
-            // cleared once the camera is really up, so a blocked presentation keeps the request
-            .onAppear { snap.snapRequested = false }
             .ignoresSafeArea()
         }
         .sheet(item: $itemizing) { transaction in
@@ -80,7 +80,7 @@ struct ReceiptsCard: View {
     }
 
     private func snapPhoto() {
-        if UIImagePickerController.isSourceTypeAvailable(.camera) { takingPhoto = true } else { snap.snapRequested = false; choosingPhoto = true }
+        if UIImagePickerController.isSourceTypeAvailable(.camera) { takingPhoto = true } else { choosingPhoto = true }
     }
 
     private var summary: String {

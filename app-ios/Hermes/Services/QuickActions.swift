@@ -5,14 +5,14 @@ import UIKit
 @MainActor @Observable
 final class QuickActions {
     static let shared = QuickActions()
-    var snapRequested = false
+    var snapRequests = 0
     static let snapType = "snapReceipt"
 }
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication, configurationForConnecting connecting: UISceneSession,
                      options: UIScene.ConnectionOptions) -> UISceneConfiguration {
-        if options.shortcutItem?.type == QuickActions.snapType { Task { @MainActor in QuickActions.shared.snapRequested = true } }
+        if options.shortcutItem?.type == QuickActions.snapType { Task { @MainActor in QuickActions.shared.snapRequests += 1 } }
         let config = UISceneConfiguration(name: nil, sessionRole: connecting.role)
         config.delegateClass = SceneDelegate.self
         return config
@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 final class SceneDelegate: NSObject, UIWindowSceneDelegate {
     func windowScene(_ windowScene: UIWindowScene, performActionFor shortcutItem: UIApplicationShortcutItem) async -> Bool {
         guard shortcutItem.type == QuickActions.snapType else { return false }
-        await MainActor.run { QuickActions.shared.snapRequested = true }
+        await MainActor.run { QuickActions.shared.snapRequests += 1 }
         return true
     }
 }

@@ -249,6 +249,10 @@ struct ItemizeView: View {
         } catch {
             // the re-read matched a charge and linked it: this inbox receipt is gone
             if case .api(409, let body) = error as? ClientError, body.code == "LINKED" { await onSaved(); dismiss(); return }
+            if case .api(409, let body) = error as? ClientError, body.code == "CHANGED" {
+                self.error = "Items were saved while the receipt was being read, so nothing was replaced."
+                return
+            }
             // the list stays as it was (empty on a first read): items can be added by hand
             if case .api(503, let body) = error as? ClientError, body.code == "READER_NOT_CONFIGURED" {
                 self.error = "Receipt reading isn't set up on the server. You can add the items by hand."

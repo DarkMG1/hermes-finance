@@ -73,7 +73,7 @@ struct MainTabs: View {
             Tab("Settings", systemImage: "gearshape", value: 3) { NavigationStack { SettingsView() } }
         }
         .environment(\.selectedTab, tab)
-        .onChange(of: QuickActions.shared.snapRequested, initial: true) { _, requested in if requested { tab = 0 } }
+        .onChange(of: QuickActions.shared.snapRequests) { tab = 0 }
     }
 }
 

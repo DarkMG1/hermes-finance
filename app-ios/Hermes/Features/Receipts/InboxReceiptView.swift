@@ -125,7 +125,8 @@ struct InboxReceiptView: View {
             if payer == nil { itemizing = .transaction(fresh ?? t) }
         } catch {
             linkWrites.didFail(error)
-            if thenItemize { unlinked = t }
+            unlinked = linkWrites.unresolved && thenItemize ? t : nil
+            if case .api(404, _) = error as? ClientError { await refresh() }
             self.error = linkWrites.unresolved ? "Couldn't confirm the link. Try again; it won't link twice." : errorMessage(error)
         }
     }

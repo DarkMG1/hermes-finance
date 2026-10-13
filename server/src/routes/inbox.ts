@@ -75,7 +75,7 @@ export function inboxRoutes(app: FastifyInstance, deps: Deps): void {
       throw new ApiError(502, 'READ_FAILED', "couldn't read the receipt");
     }
     const now = getInboxRow(db, row.id);
-    if (now && (now.items !== items || now.tagged !== tagged)) throw new ApiError(409, 'CHANGED', 'the items changed while reading');
+    if (now && now.tagged === 1 && (tagged === 0 || now.items !== items)) throw new ApiError(409, 'CHANGED', 'the items changed while reading');
     if (!storeRead(db, row.id, r, deps.now().toISOString())) throw new ApiError(404, 'NOT_FOUND', 'inbox receipt not found');
     rematch(row.id);
     const after = getInboxRow(db, row.id)!;
