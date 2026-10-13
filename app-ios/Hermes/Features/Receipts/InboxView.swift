@@ -27,6 +27,11 @@ struct InboxView: View {
                             Button("Retry") { Task { await queue.retryAll(client: model.client); await load() } }
                         }
                         .swipeActions { Button("Delete", role: .destructive) { deletingUpload = id } }
+                        .confirmationDialog("Delete this receipt?", isPresented: Binding(get: { deletingUpload == id },
+                                                                                          set: { if !$0 { deletingUpload = nil } }),
+                                            titleVisibility: .visible) {
+                            Button("Delete", role: .destructive) { queue.delete(id) }
+                        }
                     }
                 }
             }
@@ -56,6 +61,11 @@ struct InboxView: View {
                         }
                     }
                     .swipeActions { Button("Delete", role: .destructive) { deleting = receipt } }
+                    .confirmationDialog("Delete this receipt?", isPresented: Binding(get: { deleting?.id == receipt.id },
+                                                                                      set: { if !$0 { deleting = nil } }),
+                                        titleVisibility: .visible) {
+                        Button("Delete", role: .destructive) { Task { await delete(receipt) } }
+                    }
                 }
                 if list?.waiting.isEmpty == true && queue.pending.isEmpty {
                     Text("Nothing waiting. Tap the camera to snap a receipt.").textStyle(.subhead, color: Palette.secondaryText)
@@ -84,13 +94,7 @@ struct InboxView: View {
                 await load()
             }
         }
-        .confirmationDialog("Delete this receipt?", isPresented: Binding(get: { deleting != nil || deletingUpload != nil },
-                                                                          set: { if !$0 { deleting = nil; deletingUpload = nil } }),
-                            titleVisibility: .visible) {
-            Button("Delete", role: .destructive) {
-                if let deleting { Task { await delete(deleting) } } else if let deletingUpload { queue.delete(deletingUpload) }
-            }
-        }
+        .onChange(of: queue.pending.count) { Task { await load() } }
     }
 
     private func subtitle(_ r: InboxReceipt) -> String {
