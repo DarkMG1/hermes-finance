@@ -35,10 +35,11 @@ struct ForgiveSheet: View {
                 NotesField(text: $notes, error: error)
             } footer: {
                 if let amount {
-                    Text("\(person.name) will owe \(Money.format(person.balanceCents - amount)). \(Money.format(amount)) counts as your spending.")
+                    let category = categoryId == nil ? "Gifts" : model.categoryName(categoryId)
+                    Text("\(person.name) will owe \(Money.format(person.balanceCents - amount)). \(Money.format(amount)) counts as spending in \(category).")
                 }
             }
-            .disabled(writes.unresolved)
+            .disabled(busy || writes.unresolved)
         }
         .onAppear { if amountText.isEmpty { amountText = owed } }
     }
@@ -58,6 +59,7 @@ struct ForgiveSheet: View {
             let body = ForgiveBody(amountCents: amount, date: DayText.ymd(date), categoryId: categoryId, notes: notes.isEmpty ? nil : notes)
             _ = try await client.forgive(personId: person.id, body: body, idempotencyKey: writes.key)
             writes.didSucceed()
+            if categoryId == nil { await model.refreshReferenceData() }
             await onDone()
             dismiss()
         } catch {

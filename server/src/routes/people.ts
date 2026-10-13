@@ -34,14 +34,13 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
       if (owed <= 0) throw new ApiError(409, 'NOTHING_OWED', "they don't owe you anything");
       if (body.amountCents > owed) throw new ApiError(400, 'INVALID_REQUEST', 'amountCents: more than they owe', 'amountCents');
       let categoryId = body.categoryId ?? null;
-      if (categoryId) {
-        assertCategoryExists(db, categoryId, 'categoryId');
-        const c = db.prepare('SELECT is_income, is_transfer FROM categories WHERE id = ?').get(categoryId) as { is_income: number; is_transfer: number };
-        if (c.is_income || c.is_transfer) throw new ApiError(400, 'INVALID_REQUEST', 'categoryId: pick a spending category', 'categoryId');
-      } else {
-        categoryId = (db.prepare("SELECT id FROM categories WHERE name = 'Gifts'").pluck().get() as string | undefined) ?? randomUUID();
+      if (categoryId) assertCategoryExists(db, categoryId, 'categoryId');
+      else {
+        categoryId = (db.prepare("SELECT id FROM categories WHERE lower(name) = 'gifts'").pluck().get() as string | undefined) ?? randomUUID();
         db.prepare("INSERT OR IGNORE INTO categories (id, name, group_name) VALUES (?, 'Gifts', 'Gifts')").run(categoryId);
       }
+      const c = db.prepare('SELECT is_income, is_transfer FROM categories WHERE id = ?').get(categoryId) as { is_income: number; is_transfer: number };
+      if (c.is_income || c.is_transfer) throw new ApiError(400, 'INVALID_REQUEST', 'categoryId: pick a spending category', 'categoryId');
       const id = randomUUID();
       const now = deps.now().toISOString();
       db.prepare(`INSERT INTO transactions (id, account_id, source, date, amount_cents, bank_description, payee, notes, forgiven, created_at, updated_at)

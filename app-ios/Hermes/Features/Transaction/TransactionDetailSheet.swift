@@ -51,10 +51,12 @@ struct TransactionDetailSheet: View {
                 if transaction.pending { LabeledContent("Status", value: "Pending") }
                 if !transaction.bankDescription.isEmpty { LabeledContent("Bank description", value: transaction.bankDescription) }
             }
-            Section {
-                Toggle("Reconciled", isOn: Binding(get: { reconciled }, set: { on in Task { await setReconciled(on) } }))
-                    .disabled(busy || reconciling || deleteWrites.unresolved)
-                InlineError(message: reconcileError)
+            if !forgiven {
+                Section {
+                    Toggle("Reconciled", isOn: Binding(get: { reconciled }, set: { on in Task { await setReconciled(on) } }))
+                        .disabled(busy || reconciling || deleteWrites.unresolved)
+                    InlineError(message: reconcileError)
+                }
             }
             Section {
                 Field(label: "Payee", error: payeeInvalid ? "Payee can't be empty" : nil) { TextField("Payee", text: $payee) }
@@ -87,9 +89,11 @@ struct TransactionDetailSheet: View {
                         ) {
                             MoneyText(cents: line.amountCents)
                         }
-                        .disabled(forgiven)
                     }
-                    if forgiven { Text("A forgiveness. Delete it to change the amount.").textStyle(.caption, color: Palette.secondaryText) }
+                    if forgiven {
+                        let name = transaction.splitLines.first?.personId.map(model.personName) ?? "them"
+                        Text("Forgiveness for \(name). Delete it to change the amount.").textStyle(.caption, color: Palette.secondaryText)
+                    }
                     if splitDrifted {
                         Text("The bank changed this amount, so the split no longer adds up. Edit the split to fix it.")
                             .textStyle(.caption, color: Palette.loss)

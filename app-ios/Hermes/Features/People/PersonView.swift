@@ -42,7 +42,7 @@ struct PersonView: View {
                         Text("Spent on them \(Money.format(spent))" + (forgiven > 0 ? " · Forgiven \(Money.format(forgiven))" : ""))
                             .textStyle(.caption, color: Palette.secondaryText)
                     }
-                    if detail.person.balanceCents > 0 { Button("Forgive…") { forgiving = detail.person } }
+                    if detail.person.balanceCents > 0, detail.forgivenCents != nil { Button("Forgive…") { forgiving = detail.person } }
                 }
                 // entries up to and including the latest settle-up are the current period; older ones fold away
                 let cut = (detail.history.firstIndex(where: \.settled) ?? detail.history.count - 1) + 1
@@ -155,6 +155,8 @@ struct PersonView: View {
         guard let client = model.client else { return }
         do {
             try await client.deleteTransaction(id: entry.transactionId, idempotencyKey: UUID().uuidString)
+            await load()
+        } catch ClientError.api(status: 404, _) {
             await load()
         } catch {
             self.error = errorMessage(error)

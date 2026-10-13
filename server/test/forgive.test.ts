@@ -16,7 +16,7 @@ function setup() {
   const send = (method: 'POST' | 'PUT' | 'PATCH' | 'DELETE', url: string, payload?: object, key = `k${(n += 1)}`) =>
     app.inject({ method, url, headers: { ...AUTH, 'idempotency-key': key }, ...(payload ? { payload } : {}) });
   const forgive = (body: object, key?: string) => send('POST', '/v1/people/p1/forgive', body, key);
-  return { deps, get, send, forgive };
+  return { deps, app, get, send, forgive };
 }
 
 test('forgiving part lowers the balance and counts as spending in Gifts, created once', async () => {
@@ -32,6 +32,7 @@ test('forgiving part lowers the balance and counts as spending in Gifts, created
   assert.equal(t.splitLines[1].categoryId, gifts[0]!.id);
   const spending = await get('/v1/spending?period=month&date=2026-03');
   assert.equal(spending.totalCents, 1500);
+  assert.deepEqual(spending.categories.map((c: { name: string; spentCents: number }) => [c.name, c.spentCents]), [['Gifts', 1500]]);
   await forgive({ amountCents: 500, date: '2026-03-11' });
   assert.equal((deps.db.prepare("SELECT COUNT(*) AS n FROM categories WHERE name = 'Gifts'").get() as { n: number }).n, 1);
 });
@@ -51,7 +52,7 @@ test('forgiving all, a chosen category, and the refusals', async () => {
 });
 
 test('a forgiveness is locked against re-splitting and retagging, and deleting it restores the balance', async () => {
-  const { get, send, forgive } = setup();
+  const { app, get, send, forgive } = setup();
   const id = (await forgive({ amountCents: 1500, date: '2026-03-10' })).json().id as string;
   const lineId = (await get(`/v1/transactions/${id}`)).splitLines[0].id as string;
   assert.equal((await send('PUT', `/v1/transactions/${id}/splits`, { lines: [] })).statusCode, 409);
@@ -59,6 +60,11 @@ test('a forgiveness is locked against re-splitting and retagging, and deleting i
   const locked = await send('PATCH', `/v1/transactions/${id}`, { categoryId: 'c-food' });
   assert.equal(locked.statusCode, 409);
   assert.equal(locked.json().code, 'FORGIVENESS_LOCKED');
+  assert.equal((await send('PATCH', `/v1/transactions/${id}`, { personId: 'p1' })).statusCode, 409);
+  assert.equal((await send('PATCH', `/v1/transactions/${id}`, { paidByPersonId: 'p1' })).statusCode, 409);
+  const jpeg = await app.inject({ method: 'PUT', url: `/v1/transactions/${id}/receipt`, headers: { ...AUTH, 'content-type': 'image/jpeg' }, payload: Buffer.from([0xff, 0xd8, 0xff, 0]) });
+  assert.equal(jpeg.statusCode, 409);
+  assert.equal(jpeg.json().code, 'FORGIVENESS_LOCKED');
   assert.equal((await send('PATCH', `/v1/transactions/${id}`, { notes: 'Synthetic' })).statusCode, 200);
   assert.equal((await send('DELETE', `/v1/transactions/${id}`)).statusCode, 200);
   assert.equal((await get('/v1/people/p1')).person.balanceCents, 4000);
@@ -70,4 +76,16 @@ test('replaying a key forgives once; suggestions ignore forgiveness rows', async
   await forgive({ amountCents: 1000, date: '2026-03-10' }, 'same');
   assert.equal((await get('/v1/people/p1')).person.balanceCents, 3000);
   assert.equal((await get('/v1/people/suggestions')).length, 0);
+});
+
+test('the default category: an income Gifts is refused, a lowercase gifts is reused', async () => {
+  const { forgive, deps } = setup();
+  seedCategory(deps.db, { id: 'c-gifts', name: 'Gifts', isIncome: true });
+  assert.equal((await forgive({ amountCents: 100, date: '2026-03-10' })).statusCode, 400);
+  assert.equal((deps.db.prepare('SELECT COUNT(*) FROM transactions WHERE forgiven = 1').pluck().get() as number), 0);
+  deps.db.prepare("UPDATE categories SET name = 'gifts', is_income = 0 WHERE id = 'c-gifts'").run();
+  const r = await forgive({ amountCents: 100, date: '2026-03-10' });
+  assert.equal(r.statusCode, 201);
+  assert.equal(r.json().splitLines[1].categoryId, 'c-gifts');
+  assert.equal((deps.db.prepare("SELECT COUNT(*) FROM categories WHERE lower(name) = 'gifts'").pluck().get() as number), 1);
 });
