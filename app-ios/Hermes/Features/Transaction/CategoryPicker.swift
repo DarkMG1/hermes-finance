@@ -22,6 +22,7 @@ struct CategoryPicker: View {
         }
         .themedForm()
         .navigationTitle("Category")
+        .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query)
     }
 

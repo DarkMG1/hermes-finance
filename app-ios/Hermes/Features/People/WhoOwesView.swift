@@ -16,7 +16,7 @@ struct WhoOwesView: View {
     @State private var error: String?
 
     var body: some View {
-        Screen(title: "Who Owes Me") {
+        Screen(title: "IOUs") {
             // swiftlint:disable:next multiple_closures_with_trailing_closure
             LoadingContent(state: state, retry: { Task { await load() } }) { loaded in
                 LastUpdated(loaded: loaded)

@@ -11,5 +11,6 @@ struct Screen<Content: View>: View {
         }
         .background(Palette.background)
         .navigationTitle(title)
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
