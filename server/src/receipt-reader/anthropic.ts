@@ -4,7 +4,9 @@ import { ReaderError, type ReadResult, type ReceiptReader } from '../receipt-rea
 const INSTRUCTIONS = `Read this receipt and call record_receipt once.
 - items: every purchased line in printed order. name: the item as printed, tidied (no SKU or barcode numbers). amountCents: the line total in integer cents after quantity (2 x $3.50 is 700). A discount, coupon or instant saving for one item (printed under it, often starting with / or \\, or naming it) is subtracted from that item's amountCents, not listed. Only a saving on the whole order is its own item with a negative amountCents.
 - taxCents, tipCents, feesCents (service charge, bag fee, delivery, card surcharge): integer cents, 0 when absent. Never list these as items.
-- totalCents: the printed total in integer cents, or null when none is printed.`;
+- totalCents: the printed total in integer cents, or null when none is printed.
+- merchant: the store or restaurant name as printed at the top, or null.
+- purchaseDate: the purchase date as YYYY-MM-DD, or null when none is printed.`;
 
 const TOOL = {
   name: 'record_receipt',
@@ -14,6 +16,7 @@ const TOOL = {
     properties: {
       items: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, amountCents: { type: 'integer' } }, required: ['name', 'amountCents'] } },
       taxCents: { type: 'integer' }, tipCents: { type: 'integer' }, feesCents: { type: 'integer' }, totalCents: { type: ['integer', 'null'] },
+      merchant: { type: ['string', 'null'] }, purchaseDate: { type: ['string', 'null'] },
     },
     required: ['items', 'taxCents', 'tipCents', 'feesCents', 'totalCents'],
   },

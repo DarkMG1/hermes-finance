@@ -263,6 +263,8 @@ export const ReceiptReadOutput = z.object({
   tipCents: z.number().int().min(0).max(10_000_000),
   feesCents: z.number().int().min(0).max(10_000_000),
   totalCents: z.number().int().min(0).max(100_000_000).nullable(),
+  merchant: z.string().trim().max(200).nullable().optional().catch(null).transform((m) => (m ? m : null)),
+  purchaseDate: DateStr.nullable().optional().catch(null).transform((d) => d ?? null),
 });
 export type ReceiptReadOutput = z.infer<typeof ReceiptReadOutput>;
 
@@ -288,3 +290,21 @@ export const SaveItemsBody = z.object({
   taxCents: Extra, tipCents: Extra, feesCents: Extra,
 }).strict();
 export type SaveItemsBody = z.infer<typeof SaveItemsBody>;
+
+export const InboxReceipt = z.object({
+  id: Id, capturedAt: z.string(), status: z.enum(['reading', 'read', 'failed']),
+  merchant: z.string().nullable(), purchaseDate: DateStr.nullable(), totalCents: Cents.nullable(), tagged: z.boolean(),
+  suggestions: z.array(Transaction),
+});
+export type InboxReceipt = z.infer<typeof InboxReceipt>;
+
+export const LinkedReceipt = z.object({
+  id: Id, transactionId: Id, merchant: z.string().nullable(), totalCents: Cents.nullable(), linkedAt: z.string(), splitApplied: z.boolean(),
+});
+export type LinkedReceipt = z.infer<typeof LinkedReceipt>;
+
+export const InboxList = z.object({ waiting: z.array(InboxReceipt), recentlyLinked: z.array(LinkedReceipt) });
+export type InboxList = z.infer<typeof InboxList>;
+
+export const LinkInboxBody = z.object({ transactionId: Id }).strict();
+export type LinkInboxBody = z.infer<typeof LinkInboxBody>;

@@ -12,10 +12,12 @@ test('sends the photo with the tool, without forcing it, and returns the validat
   let sent: { url: string; init: RequestInit } | undefined;
   const reader = createAnthropicReader('synthetic-key', 'claude-sonnet-5-5', async (url, init) => {
     sent = { url: String(url), init: init! };
-    return toolReply({ items: [{ name: ' Synthetic Bread ', amountCents: 350 }, { name: 'Free Bag', amountCents: 0 }], taxCents: 20, tipCents: 0, feesCents: 0, totalCents: 370 })();
+    return toolReply({ items: [{ name: ' Synthetic Bread ', amountCents: 350 }, { name: 'Free Bag', amountCents: 0 }], taxCents: 20, tipCents: 0, feesCents: 0, totalCents: 370,
+      merchant: ' Synthetic Grocer ', purchaseDate: '2026-03-14' })();
   });
   const r = await reader.read(JPEG);
-  assert.deepEqual(r, { items: [{ name: 'Synthetic Bread', amountCents: 350 }], taxCents: 20, tipCents: 0, feesCents: 0, totalCents: 370, model: 'claude-sonnet-5-5' });
+  assert.deepEqual(r, { items: [{ name: 'Synthetic Bread', amountCents: 350 }], taxCents: 20, tipCents: 0, feesCents: 0, totalCents: 370,
+    merchant: 'Synthetic Grocer', purchaseDate: '2026-03-14', model: 'claude-sonnet-5-5' });
   assert.equal(sent!.url, 'https://api.anthropic.com/v1/messages');
   const headers = sent!.init.headers as Record<string, string>;
   assert.equal(headers['x-api-key'], 'synthetic-key');
@@ -28,6 +30,14 @@ test('sends the photo with the tool, without forcing it, and returns the validat
   assert.equal(image.source!.data, JPEG.toString('base64'));
   assert.ok(sent!.init.signal);
   assert.equal((body as unknown as { max_tokens: number }).max_tokens, 8192);
+});
+
+test('merchant and purchase date are optional and a bad date becomes null', async () => {
+  const read = (extra: object) => createAnthropicReader('k', 'm', toolReply({ items: [{ name: 'X', amountCents: 100 }], taxCents: 0, tipCents: 0, feesCents: 0, totalCents: 100, ...extra })).read(JPEG);
+  const none = await read({});
+  assert.deepEqual([none.merchant, none.purchaseDate], [null, null]);
+  const bad = await read({ merchant: '  ', purchaseDate: 'March 14' });
+  assert.deepEqual([bad.merchant, bad.purchaseDate], [null, null]);
 });
 
 test('a non-2xx answer, a missing tool call, invalid input or a network failure is a ReaderError', async () => {
