@@ -30,7 +30,8 @@ export function createAnthropicReader(apiKey: string, model: string, fetchFn: ty
           method: 'POST',
           headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
           body: JSON.stringify({
-            model, max_tokens: 8192, tools: [TOOL], tool_choice: { type: 'tool', name: 'record_receipt' },
+            // Sonnet 5.5 refuses a forced tool_choice ("tool"/"any"), so the instructions ask for the call
+            model, max_tokens: 8192, tools: [TOOL],
             messages: [{ role: 'user', content: [
               { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: jpeg.toString('base64') } },
               { type: 'text', text: INSTRUCTIONS },

@@ -8,7 +8,7 @@ const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
 const toolReply = (input: unknown, status = 200) => async () =>
   new Response(JSON.stringify({ content: [{ type: 'tool_use', name: 'record_receipt', input }], usage: { input_tokens: 1, output_tokens: 2 } }), { status });
 
-test('sends the photo with the forced tool and returns the validated result', async () => {
+test('sends the photo with the tool, without forcing it, and returns the validated result', async () => {
   let sent: { url: string; init: RequestInit } | undefined;
   const reader = createAnthropicReader('synthetic-key', 'claude-sonnet-5-5', async (url, init) => {
     sent = { url: String(url), init: init! };
@@ -22,7 +22,7 @@ test('sends the photo with the forced tool and returns the validated result', as
   assert.equal(headers['anthropic-version'], '2023-06-01');
   const body = JSON.parse(String(sent!.init.body)) as { model: string; tool_choice: unknown; messages: { content: { type: string; source?: { data: string; media_type: string } }[] }[] };
   assert.equal(body.model, 'claude-sonnet-5-5');
-  assert.deepEqual(body.tool_choice, { type: 'tool', name: 'record_receipt' });
+  assert.equal(body.tool_choice, undefined);
   const image = body.messages[0]!.content.find((c) => c.type === 'image')!;
   assert.equal(image.source!.media_type, 'image/jpeg');
   assert.equal(image.source!.data, JPEG.toString('base64'));
