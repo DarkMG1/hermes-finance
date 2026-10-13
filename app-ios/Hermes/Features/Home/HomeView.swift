@@ -17,6 +17,7 @@ struct HomeView: View {
     @State private var showBalancesError: String?
     @State private var inboxCount = 0
     @State private var snapping = false
+    @State private var showingInbox = false
     @State private var handledSnaps = 0
 
     var body: some View {
@@ -139,7 +140,8 @@ struct HomeView: View {
             handledSnaps = requests
             snapping = true
         }
-        .receiptCamera(isPresented: $snapping, scanDirectly: true)
+        .receiptCamera(isPresented: $snapping, scanDirectly: true) { showingInbox = true }
+        .navigationDestination(isPresented: $showingInbox) { InboxView() }
         .sheet(item: $selected) { transaction in
             TransactionDetailSheet(transaction: transaction) { await load() }
         }
