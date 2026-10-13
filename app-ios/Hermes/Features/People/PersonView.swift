@@ -129,8 +129,8 @@ struct PersonView: View {
         }
     }
 
-    private func row(_ entry: HistoryEntry) -> some View {
-        Button { Task { await open(entry.transactionId) } } label: {
+    @ViewBuilder private func row(_ entry: HistoryEntry) -> some View {
+        let button = Button { Task { await open(entry.transactionId) } } label: {
             ListRow(title: entry.payee, subtitle: subtitle(entry)) {
                 if entry.hasReceipt == true {
                     Image(systemName: "doc.text")
@@ -144,8 +144,10 @@ struct PersonView: View {
             }
         }
         .buttonStyle(.plain)
-        .contextMenu {
-            if entry.kind == "forgiven" { Button("Delete forgiveness", role: .destructive) { deletingForgiveness = entry } }
+        if entry.kind == "forgiven" {
+            button.contextMenu { Button("Delete forgiveness", role: .destructive) { deletingForgiveness = entry } }
+        } else {
+            button
         }
     }
 
@@ -153,11 +155,10 @@ struct PersonView: View {
         guard let client = model.client else { return }
         do {
             try await client.deleteTransaction(id: entry.transactionId, idempotencyKey: UUID().uuidString)
-            error = nil
+            await load()
         } catch {
             self.error = errorMessage(error)
         }
-        await load()
     }
 
     private func subtitle(_ entry: HistoryEntry) -> String {
