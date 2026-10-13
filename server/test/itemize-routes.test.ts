@@ -47,6 +47,12 @@ test('read stores the items (all mine) and the extras', async () => {
   assert.equal(reader.calls, 1);
 });
 
+test('a "they paid" read starts every item as shared by me and the payer', async () => {
+  const { read } = setup();
+  const got = (await read('paid')).json();
+  assert.deepEqual(got.items.map((i: { people: string[] }) => i.people), [['me', 'p1'], ['me', 'p1']]);
+});
+
 test('read errors: no receipt, removed, reader off, reader failure; nothing stored', async () => {
   const s = setup();
   assert.equal((await s.read('noreceipt')).statusCode, 404);

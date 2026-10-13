@@ -23,9 +23,13 @@ struct ItemizeView: View {
     @State private var editing: DraftItem?
     @State private var confirmReread = false
     @State private var writes = WriteGuard()
+    @State private var photo: UIImage?
+    @State private var showingPhoto = false
+    @State private var loadingPhoto = false
 
     var body: some View {
-        Sheet(title: "Itemize", canSave: canSave, busy: busy || reading || loading, unresolved: writes.unresolved, onCancel: {
+        Sheet(title: "Itemize", canSave: canSave, busy: busy || reading || loading, unresolved: writes.unresolved,
+              pinned: showingPhoto ? photo.map { AnyView(ZoomableImage(image: $0).frame(height: Space.xxl * 7)) } : nil, onCancel: {
             // the save may have landed: the detail sheet refreshes and closes, as it does after a confirmed save
             if writes.unresolved { Task { await onSaved() } }
             dismiss()
@@ -38,6 +42,13 @@ struct ItemizeView: View {
                     Button("Try again") { Task { await load() } }
                 }
             } else if loaded {
+                // pinned above the list, so items can be checked against the photo while scrolling
+                Section {
+                    Button { Task { await togglePhoto() } } label: {
+                        if loadingPhoto { ProgressView() } else { Text(showingPhoto ? "Hide receipt" : "Show receipt") }
+                    }
+                    .disabled(loadingPhoto)
+                }
                 if handEdited {
                     Section {
                         Text("This transaction changed since these items were saved. Saving replaces it.").textStyle(.caption, color: Palette.secondaryText)
@@ -73,6 +84,8 @@ struct ItemizeView: View {
                 }
                 .disabled(locked)
                 Section {
+                    // what Save replaces, so a change to the row is visible before it happens
+                    if isTheyPaid { LabeledContent("Your share now") { MoneyText(cents: -transaction.amountCents, colored: false) } }
                     if let result {
                         ForEach(result.shares, id: \.person) { share in
                             LabeledContent(label(share.person)) { MoneyText(cents: share.cents, colored: false) }
@@ -160,6 +173,19 @@ struct ItemizeView: View {
         tipText = text(it.tipCents)
         feesText = text(it.feesCents)
         handEdited = it.handEdited
+    }
+
+    private func togglePhoto() async {
+        if showingPhoto || photo != nil { showingPhoto.toggle(); return }
+        guard let client = model.client else { return }
+        loadingPhoto = true
+        defer { loadingPhoto = false }
+        do {
+            photo = UIImage(data: try await client.receipt(transactionId: transaction.id))
+            showingPhoto = photo != nil
+        } catch {
+            self.error = errorMessage(error)
+        }
     }
 
     private func load() async {
