@@ -58,7 +58,7 @@ struct InboxView: View {
                     .swipeActions { Button("Delete", role: .destructive) { deleting = receipt } }
                 }
                 if list?.waiting.isEmpty == true && queue.pending.isEmpty {
-                    Text("Nothing waiting. Snap a receipt from Home.").textStyle(.subhead, color: Palette.secondaryText)
+                    Text("Nothing waiting. Tap the camera to snap a receipt.").textStyle(.subhead, color: Palette.secondaryText)
                 }
             }
         }

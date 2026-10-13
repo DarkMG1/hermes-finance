@@ -135,11 +135,18 @@ struct HomeView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink { InboxView() } label: { Image(systemName: "tray") }
-                    .badge(inboxCount + queue.pending.count)
+                    .overlay(alignment: .topTrailing) {
+                        let count = inboxCount + queue.pending.count
+                        if count > 0 {
+                            Text("\(count)").font(.caption2).foregroundStyle(.white)
+                                .padding(.horizontal, Space.xs).background(Palette.accent, in: Capsule())
+                                .offset(x: Space.s, y: -Space.xs)
+                        }
+                    }
                     .accessibilityLabel("Receipt inbox")
             }
         }
-        .refreshable { await load() }
+        .refreshable { await queue.retryAll(client: model.client); await load() }
         .task { await load() }
         .task { await queue.retryAll(client: model.client) }
         .onChange(of: queue.pending.count) { Task { await loadInbox() } }
@@ -205,7 +212,7 @@ struct HomeView: View {
     }
 
     private func load() async {
-        async let _: Void = loadInbox()
+        await loadInbox()
         guard let reader = model.reader else { return }
         do {
             let loaded = try await reader.read("/v1/home", as: Home.self)
