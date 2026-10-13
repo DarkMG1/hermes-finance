@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getInboxRow, linkInbox, listInbox, matchInbox, saveInboxItems, storeRead } from '../src/inbox.ts';
+import { getInboxRow, linkInbox, listInbox, markInterruptedReads, matchInbox, saveInboxItems, storeRead } from '../src/inbox.ts';
 import { getTransaction } from '../src/ledger.ts';
 import { makeTestDeps, seedAccount, seedCategory, seedPerson, seedSplit, seedTxn } from './helpers.ts';
 
@@ -135,4 +135,54 @@ test('storeRead does nothing on a linked or deleted row; saving tags sets a miss
   snap('r2');
   saveInboxItems(db, 'r2', { items: [{ name: 'Synthetic Pear', amountCents: 300, people: ['me'] }], taxCents: 20, tipCents: 0, feesCents: 0 });
   assert.equal(getInboxRow(db, 'r2')!.total_cents, 320);
+});
+
+test('an exact-amount charge from another store only suggests; a receipt with no store never links', () => {
+  const { deps, db, snap, charge } = setup();
+  snap('r1');
+  storeRead(db, 'r1', READ, 'now');
+  charge('other', '2026-03-11', -1050, { bankDescription: 'HARDWARE DEPOT 02' });
+  assert.equal(matchInbox(deps), 0);
+  assert.deepEqual(listInbox(db).waiting[0]!.suggestions.map((s) => s.id), ['other']);
+  snap('r2');
+  storeRead(db, 'r2', { ...READ, merchant: null, totalCents: 777 }, 'now');
+  charge('c2', '2026-03-11', -777);
+  assert.equal(matchInbox(deps), 0);
+});
+
+test('tags of me + the payer are applied on a they-paid target', () => {
+  const { deps, db, snap, charge } = setup();
+  snap('r1');
+  storeRead(db, 'r1', READ, 'now');
+  saveInboxItems(db, 'r1', { items: [{ name: 'Synthetic Bread', amountCents: 400, people: ['me'] }, { name: 'Synthetic Jam', amountCents: 600, people: ['me', 'p1'] }], taxCents: 50, tipCents: 0, feesCents: 0 });
+  charge('paid', '2026-03-11', -1050, { source: 'manual', sourceId: undefined, paidByPersonId: 'p1' });
+  assert.equal(linkInbox(deps, 'r1', 'paid').splitApplied, true);
+});
+
+test('a linked pending charge removed with no posted row gives the receipt back, and it links to the next match', () => {
+  const { deps, db, snap, charge } = setup();
+  snap('r1');
+  storeRead(db, 'r1', READ, 'now');
+  charge('pend', '2026-03-11', -1050, { pending: true });
+  assert.equal(matchInbox(deps), 1);
+  db.prepare("UPDATE transactions SET removed_at = 'gone' WHERE id = 'pend'").run();
+  assert.equal(matchInbox(deps), 0);
+  const row = getInboxRow(db, 'r1')!;
+  assert.deepEqual([row.linked_transaction_id, row.linked_at, row.split_applied], [null, null, 0]);
+  assert.deepEqual(row.jpeg, JPEG);
+  assert.equal(db.prepare("SELECT 1 FROM receipts WHERE transaction_id = 'pend'").get(), undefined);
+  charge('c2', '2026-03-12', -1050);
+  assert.equal(matchInbox(deps), 1);
+  assert.equal(getInboxRow(db, 'r1')!.linked_transaction_id, 'c2');
+});
+
+test('a restart mid-read marks the read failed; tagged, read or linked rows are left alone', () => {
+  const { db, snap } = setup();
+  snap('mid');
+  snap('tagged');
+  saveInboxItems(db, 'tagged', { items: [{ name: 'Synthetic Pear', amountCents: 300, people: ['me'] }], taxCents: 0, tipCents: 0, feesCents: 0 });
+  snap('done');
+  storeRead(db, 'done', READ, 'now');
+  markInterruptedReads(db);
+  assert.deepEqual(['mid', 'tagged', 'done'].map((id) => getInboxRow(db, id)!.read_failed), [1, 0, 0]);
 });

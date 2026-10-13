@@ -98,8 +98,9 @@ extension APIClient {
     public func inbox() async throws -> InboxList { try decode(try await getData("/v1/receipts/inbox")) }
 
     /// The id comes from the phone, so a retry after a lost reply can't add the receipt twice.
-    public func uploadInboxReceipt(id: String, jpeg: Data) async throws {
-        try await send("PUT", "/v1/receipts/inbox/\(id)", body: jpeg, contentType: "image/jpeg", idempotencyKey: nil, timeout: 60)
+    public func uploadInboxReceipt(id: String, jpeg: Data, capturedAt: Date) async throws {
+        try await send("PUT", "/v1/receipts/inbox/\(id)", body: jpeg, contentType: "image/jpeg", idempotencyKey: nil, timeout: 60,
+                       extraHeaders: ["x-captured-at": capturedAt.ISO8601Format()])
     }
 
     public func inboxPhoto(id: String) async throws -> Data { try await getData("/v1/receipts/inbox/\(id)/photo") }

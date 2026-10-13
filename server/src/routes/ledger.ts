@@ -8,6 +8,7 @@ import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { assertPersonTaggable, owedToYouCents, suggestions, youOweCents } from '../people.ts';
 import { getExpenses, getSpending } from '../cashflow.ts';
+import { restoreToInbox } from '../inbox.ts';
 import { getNetWorth, localDay } from '../networth.ts';
 import { oldestOpenBefore } from '../reconcile.ts';
 import { assertCategoryExists, getHome, getTransaction, learnCategory, listAccounts, listCategories, listTransactions } from '../ledger.ts';
@@ -183,6 +184,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       const row = db.prepare('SELECT source FROM transactions WHERE id = ? AND removed_at IS NULL').get(req.params.id) as { source: string } | undefined;
       if (!row) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
       if (row.source !== 'manual') throw new ApiError(409, 'BANK_TRANSACTION', 'only manual transactions can be deleted');
+      restoreToInbox(db, req.params.id);
       db.prepare('DELETE FROM transactions WHERE id = ?').run(req.params.id);
       return { status: 200, body: { ok: true } };
     });

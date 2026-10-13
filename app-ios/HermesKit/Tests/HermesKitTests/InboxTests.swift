@@ -14,10 +14,11 @@ import Testing
 @Test func uploadPutsTheJpegWithoutAKey() async throws {
     let transport = FakeTransport([.success(HTTPResponse(status: 200, body: Data(#"{"id":"u1","bytes":3}"#.utf8)))])
     let client = APIClient(baseURL: testBase, token: "t", transport: transport)
-    try await client.uploadInboxReceipt(id: "u1", jpeg: Data([0xff, 0xd8, 0xff]))
+    try await client.uploadInboxReceipt(id: "u1", jpeg: Data([0xff, 0xd8, 0xff]), capturedAt: Date(timeIntervalSince1970: 0))
     let request = try #require(transport.requests.first)
     #expect(request.method == "PUT" && request.url.path() == "/v1/receipts/inbox/u1")
     #expect(request.headers["Content-Type"] == "image/jpeg" && request.headers["Idempotency-Key"] == nil)
+    #expect(request.headers["x-captured-at"] == "1970-01-01T00:00:00Z")
 }
 
 @Test func linkPostsTheTransactionWithAKey() async throws {

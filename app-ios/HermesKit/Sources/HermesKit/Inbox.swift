@@ -1,7 +1,7 @@
 import Foundation
 
 /// A receipt snapped before its bank charge arrived.
-public struct InboxReceipt: Codable, Sendable, Identifiable, Hashable {
+public struct InboxReceipt: Codable, Sendable, Identifiable {
     public let id: String
     public let capturedAt: String
     /// "reading", "read" or "failed"
@@ -14,7 +14,7 @@ public struct InboxReceipt: Codable, Sendable, Identifiable, Hashable {
     public let suggestions: [LedgerTransaction]
 }
 
-public struct LinkedReceipt: Codable, Sendable, Identifiable, Hashable {
+public struct LinkedReceipt: Codable, Sendable, Identifiable {
     public let id: String
     public let transactionId: String
     public let merchant: String?

@@ -70,6 +70,7 @@ struct ItemizeView: View {
                     Section {
                         Text("Not read yet").textStyle(.subhead, color: Palette.secondaryText)
                         Button("Read receipt") { Task { await read() } }
+                            .disabled(locked)
                     }
                 }
                 if handEdited {
@@ -275,7 +276,11 @@ struct ItemizeView: View {
             dismiss()
         } catch {
             writes.didFail(error)
-            self.error = writes.unresolved ? "Couldn't confirm the save. Tap Save to retry; it won't be applied twice." : errorMessage(error)
+            if inboxId != nil, case .api(404, _) = error as? ClientError {
+                self.error = "This receipt was just linked to its charge. Itemize it from the transaction."
+            } else {
+                self.error = writes.unresolved ? "Couldn't confirm the save. Tap Save to retry; it won't be applied twice." : errorMessage(error)
+            }
         }
     }
 }

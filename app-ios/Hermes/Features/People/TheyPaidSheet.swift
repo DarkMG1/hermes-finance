@@ -23,6 +23,7 @@ struct TheyPaidSheet: View {
     @State private var writes = WriteGuard()
     @State private var error: String?
     @State private var busy = false
+    @State private var prefilled = false
 
     var body: some View {
         Sheet(
@@ -50,7 +51,8 @@ struct TheyPaidSheet: View {
             .disabled(writes.unresolved)
         }
         .onAppear {
-            if let prefill, payee.isEmpty {
+            if let prefill, !prefilled {
+                prefilled = true
                 payee = prefill.payee
                 date = prefill.date
                 totalText = prefill.totalCents.map { Money.format($0).replacingOccurrences(of: "$", with: "") } ?? ""

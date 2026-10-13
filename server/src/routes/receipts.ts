@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
+import { restoreToInbox } from '../inbox.ts';
 
 // production nginx caps bodies at 3 MB (client_max_body_size 3m)
 export const MAX_BYTES = 3 * 1024 * 1024;
@@ -42,6 +43,7 @@ export function receiptRoutes(app: FastifyInstance, deps: Deps): void {
   app.delete<{ Params: { id: string } }>('/v1/transactions/:id/receipt', async (req, reply) => {
     assertLive(req.params.id);
     db.transaction(() => {
+      restoreToInbox(db, req.params.id);
       db.prepare('DELETE FROM receipts WHERE transaction_id = ?').run(req.params.id);
       db.prepare('DELETE FROM receipt_items WHERE transaction_id = ?').run(req.params.id);
     })();

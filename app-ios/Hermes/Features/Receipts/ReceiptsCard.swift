@@ -46,11 +46,10 @@ struct ReceiptsCard: View {
             }
             InlineError(message: error ?? queue.error)
         }
-        .task(id: refreshToken) { await load() }
+        .task(id: refreshToken) { await queue.retryAll(client: model.client); await load() }
         .onChange(of: queue.pending.count) { Task { await load() } }
         .onChange(of: snap.snapRequested, initial: true) { _, requested in
             guard requested, model.client != nil else { return }
-            snap.snapRequested = false
             snapPhoto()
         }
         .photosPicker(isPresented: $choosingPhoto, selection: $pickerItem, matching: .images)
@@ -63,15 +62,16 @@ struct ReceiptsCard: View {
                     return
                 }
                 await queue.add(picked, client: model.client)
-                await load()
             }
         }
         .fullScreenCover(isPresented: $takingPhoto) {
             CameraPicker { photo in
                 takingPhoto = false
                 guard let photo else { return }
-                Task { await queue.add(photo, client: model.client); await load() }
+                Task { await queue.add(photo, client: model.client) }
             }
+            // cleared once the camera is really up, so a blocked presentation keeps the request
+            .onAppear { snap.snapRequested = false }
             .ignoresSafeArea()
         }
         .sheet(item: $itemizing) { transaction in
@@ -80,7 +80,7 @@ struct ReceiptsCard: View {
     }
 
     private func snapPhoto() {
-        if UIImagePickerController.isSourceTypeAvailable(.camera) { takingPhoto = true } else { choosingPhoto = true }
+        if UIImagePickerController.isSourceTypeAvailable(.camera) { takingPhoto = true } else { snap.snapRequested = false; choosingPhoto = true }
     }
 
     private var summary: String {

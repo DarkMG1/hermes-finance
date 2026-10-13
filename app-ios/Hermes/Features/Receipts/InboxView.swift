@@ -8,6 +8,7 @@ struct InboxView: View {
     @State private var list: InboxList?
     @State private var error: String?
     @State private var deleting: InboxReceipt?
+    @State private var deletingUpload: String?
 
     var body: some View {
         List {
@@ -23,7 +24,7 @@ struct InboxView: View {
                             Spacer()
                             Button("Retry") { Task { await queue.retryAll(client: model.client); await load() } }
                         }
-                        .swipeActions { Button("Delete", role: .destructive) { queue.delete(id) } }
+                        .swipeActions { Button("Delete", role: .destructive) { deletingUpload = id } }
                     }
                 }
             }
@@ -52,9 +53,12 @@ struct InboxView: View {
                 await load()
             }
         }
-        .confirmationDialog("Delete this receipt?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+        .confirmationDialog("Delete this receipt?", isPresented: Binding(get: { deleting != nil || deletingUpload != nil },
+                                                                          set: { if !$0 { deleting = nil; deletingUpload = nil } }),
                             titleVisibility: .visible) {
-            Button("Delete", role: .destructive) { if let deleting { Task { await delete(deleting) } } }
+            Button("Delete", role: .destructive) {
+                if let deleting { Task { await delete(deleting) } } else if let deletingUpload { queue.delete(deletingUpload) }
+            }
         }
     }
 

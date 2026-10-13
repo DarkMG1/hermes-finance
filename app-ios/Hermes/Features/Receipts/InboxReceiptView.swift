@@ -5,7 +5,7 @@ import SwiftUI
 struct InboxReceiptView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
-    let receipt: InboxReceipt
+    @State var receipt: InboxReceipt
     let onChange: () async -> Void
 
     @State private var photo: UIImage?
@@ -21,6 +21,9 @@ struct InboxReceiptView: View {
     @State private var picked: LedgerTransaction?
     @State private var linked: LedgerTransaction?
     @State private var linkWrites = WriteGuard()
+    @State private var linkTarget: String?
+    /// Paid by added the transaction but the link failed: retry just the link.
+    @State private var unlinked: LedgerTransaction?
 
     var body: some View {
         List {
@@ -36,10 +39,15 @@ struct InboxReceiptView: View {
                         Button { confirming = t } label: { TransactionRow(transaction: t).contentShape(Rectangle()) }.buttonStyle(.plain)
                     }
                 }
+                .disabled(busy)
             }
             Section {
                 Button("Link to transaction…") { picking = true }
-                Button("Paid by…") { choosingPayer = true }
+                if let unlinked {
+                    Button("Retry link to \(unlinked.payee)") { Task { await link(unlinked, thenItemize: true) } }
+                } else {
+                    Button("Paid by…") { choosingPayer = true }
+                }
                 Button("Itemize") { itemizing = .inbox(receipt.id) }
                 Button("Read again") { if receipt.tagged { confirmReread = true } else { Task { await readAgain() } } }
                 Button("Delete", role: .destructive) { confirmDelete = true }
@@ -73,7 +81,7 @@ struct InboxReceiptView: View {
                           onCreated: { created in await link(created, thenItemize: true) }, onDone: {})
         })
         // linked: this inbox receipt is gone, so close its stale screen too
-        .sheet(item: $itemizing, onDismiss: { if linked != nil { dismiss() } }, content: { source in
+        .sheet(item: $itemizing, onDismiss: { if linked != nil { dismiss() } else { Task { await refresh() } } }, content: { source in
             ItemizeView(source: source) { await onChange() }
         })
     }
@@ -92,21 +100,32 @@ struct InboxReceiptView: View {
         do { photo = UIImage(data: try await client.inboxPhoto(id: receipt.id)) } catch { self.error = errorMessage(error) }
     }
 
+    /// Re-reads this receipt; once it is linked (a save or a read can link it), the screen closes.
+    private func refresh() async {
+        await onChange()
+        guard let list = try? await model.client?.inbox() else { return }
+        if let fresh = list.waiting.first(where: { $0.id == receipt.id }) { receipt = fresh } else { dismiss() }
+    }
+
     private func link(_ t: LedgerTransaction, thenItemize: Bool = false) async {
         guard let client = model.client else { return }
+        if linkTarget != t.id { linkWrites = WriteGuard(); linkTarget = t.id }
         busy = true
         defer { busy = false }
         do {
-            _ = try await client.linkInboxReceipt(id: receipt.id, transactionId: t.id, idempotencyKey: linkWrites.key)
+            let result = try await client.linkInboxReceipt(id: receipt.id, transactionId: t.id, idempotencyKey: linkWrites.key)
             linkWrites.didSucceed()
+            unlinked = nil
             await onChange()
-            if thenItemize, let fresh = try? await model.reader?.read("/v1/transactions/\(t.id)", as: LedgerTransaction.self).value {
-                linked = fresh
-            } else {
-                dismiss()
-            }
+            // tags that couldn't be applied: show the itemizing so the owner sees the shares weren't set
+            guard thenItemize || (receipt.tagged && !result.splitApplied) else { dismiss(); return }
+            let fresh = try? await model.reader?.read("/v1/transactions/\(t.id)", as: LedgerTransaction.self).value
+            linked = fresh ?? t
+            // under Paid by's sheet, its onDismiss opens Itemize
+            if payer == nil { itemizing = .transaction(fresh ?? t) }
         } catch {
             linkWrites.didFail(error)
+            if thenItemize { unlinked = t }
             self.error = linkWrites.unresolved ? "Couldn't confirm the link. Try again; it won't link twice." : errorMessage(error)
         }
     }
@@ -117,10 +136,9 @@ struct InboxReceiptView: View {
         defer { busy = false }
         do {
             _ = try await client.readInboxReceipt(id: receipt.id)
-            await onChange()
+            await refresh()
         } catch ClientError.api(409, let body) where body.code == "LINKED" {
-            await onChange()
-            dismiss()
+            await refresh()
         } catch {
             self.error = errorMessage(error)
         }

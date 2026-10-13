@@ -6,7 +6,6 @@ import UIKit
 @MainActor @Observable
 final class ReceiptQueue {
     private(set) var pending: [String] = []
-    private(set) var uploading = false
     private(set) var error: String?
 
     private let dir: URL = {
@@ -38,11 +37,11 @@ final class ReceiptQueue {
             return
         }
         pending.insert(id, at: 0)
-        await upload(id, client: client)
+        // a good signal now is the moment to send the ones that failed earlier
+        if await upload(id, client: client) { await retryAll(client: client) }
     }
 
     func retryAll(client: APIClient?) async {
-        guard !uploading else { return }
         for id in pending { await upload(id, client: client) }
     }
 
@@ -53,16 +52,18 @@ final class ReceiptQueue {
 
     func photo(_ id: String) -> UIImage? { UIImage(contentsOfFile: file(id).path()) }
 
-    private func upload(_ id: String, client: APIClient?) async {
-        guard let client, let jpeg = try? Data(contentsOf: file(id)) else { return }
-        uploading = true
-        defer { uploading = false }
+    /// The server's PUT is idempotent by id, so overlapping retries are harmless.
+    @discardableResult
+    private func upload(_ id: String, client: APIClient?) async -> Bool {
+        guard let client, let jpeg = try? Data(contentsOf: file(id)) else { return false }
         do {
-            try await client.uploadInboxReceipt(id: id, jpeg: jpeg)
+            try await client.uploadInboxReceipt(id: id, jpeg: jpeg, capturedAt: file(id).creationDate ?? .now)
             delete(id)
             error = nil
+            return true
         } catch {
             self.error = "Some receipts are waiting to upload. They'll retry when Hermes is back in the foreground."
+            return false
         }
     }
 }

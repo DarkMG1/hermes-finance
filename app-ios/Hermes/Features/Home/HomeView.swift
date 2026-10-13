@@ -18,6 +18,8 @@ struct HomeView: View {
 
     var body: some View {
         Screen(title: "Home") {
+            // outside the loaded state, so snapping works offline or when Home fails to load
+            ReceiptsCard(refreshToken: refreshToken)
             // swiftlint:disable:next multiple_closures_with_trailing_closure
             LoadingContent(state: state, retry: { Task { await load() } }) { loaded in
                 LastUpdated(loaded: loaded)
@@ -72,7 +74,6 @@ struct HomeView: View {
                     }
                     .buttonStyle(.plain)
                 }
-                ReceiptsCard(refreshToken: refreshToken)
                 if let investments, hasInvestments || !investments.reconnect.isEmpty {
                     investmentsCard(investments, signInAgain: loaded.value.reconnect)
                 }

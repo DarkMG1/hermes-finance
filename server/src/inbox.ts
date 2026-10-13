@@ -16,7 +16,7 @@ export type InboxRow = {
 type Item = { name: string; amountCents: number; people: string[] };
 
 export const getInboxRow = (db: Db, id: string) => db.prepare('SELECT * FROM inbox_receipts WHERE id = ?').get(id) as InboxRow | undefined;
-const waitingRow = (db: Db, id: string) => {
+export const waitingRow = (db: Db, id: string) => {
   const row = getInboxRow(db, id);
   return row && row.linked_at === null ? row : undefined;
 };
@@ -35,6 +35,7 @@ const addDays = (ymd: string, n: number) => {
   return d.toISOString().slice(0, 10);
 };
 const words = (s: string | null) => new Set((s ?? '').toLowerCase().match(/[a-z]{3,}/g) ?? []);
+const sharesWord = (t: Transaction, store: Set<string>) => [t.payee, t.merchantName, t.bankDescription].some((s) => [...words(s)].some((w) => store.has(w)));
 
 function candidates(db: Db, row: InboxRow): { exact: Transaction[]; near: Transaction[] } {
   if (row.total_cents === null || row.total_cents <= 0) return { exact: [], near: [] };
@@ -47,8 +48,7 @@ function candidates(db: Db, row: InboxRow): { exact: Transaction[]; near: Transa
   const total = row.total_cents;
   const store = words(row.merchant);
   const exact = txns.filter((t) => -t.amountCents === total);
-  const near = txns.filter((t) => -t.amountCents > total && -t.amountCents <= Math.floor(total * 1.3)
-    && [t.payee, t.merchantName, t.bankDescription].some((s) => [...words(s)].some((w) => store.has(w))));
+  const near = txns.filter((t) => -t.amountCents > total && -t.amountCents <= Math.floor(total * 1.3) && sharesWord(t, store));
   return { exact, near };
 }
 
@@ -57,18 +57,46 @@ export function suggestionsFor(db: Db, row: InboxRow): Transaction[] {
   return [...exact, ...near].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
 }
 
-/** Links every waiting receipt with exactly one exact charge that no other waiting receipt also matches exactly. */
+/** Puts a linked receipt's photo back in the inbox before its transaction loses it; items and tags stay on the inbox row. */
+export function restoreToInbox(db: Db, txnId: string): void {
+  db.prepare(`UPDATE inbox_receipts SET jpeg = (SELECT jpeg FROM receipts WHERE transaction_id = ?), linked_transaction_id = NULL, linked_at = NULL,
+      split_applied = 0, dismissed_at = NULL WHERE linked_transaction_id = ? AND EXISTS (SELECT 1 FROM receipts WHERE transaction_id = ?)`).run(txnId, txnId, txnId);
+}
+
+/** A restart mid-read would otherwise show "Reading…" forever. */
+export function markInterruptedReads(db: Db): void {
+  db.prepare('UPDATE inbox_receipts SET read_failed = 1 WHERE read_at IS NULL AND read_failed = 0 AND tagged = 0 AND linked_at IS NULL').run();
+}
+
+/** Links every waiting receipt with exactly one exact charge from its store that no other waiting receipt also matches exactly. */
 export function matchInbox(deps: Deps, onlyId?: string): number {
   const { db } = deps;
+  // a removed charge (say, a pending one with no posted row) gives its receipt back to the inbox
+  const gone = db.prepare(`SELECT t.id FROM inbox_receipts i JOIN transactions t ON t.id = i.linked_transaction_id
+    WHERE t.removed_at IS NOT NULL`).pluck().all() as string[];
+  for (const id of gone) {
+    db.transaction(() => {
+      restoreToInbox(db, id);
+      db.prepare('DELETE FROM receipts WHERE transaction_id = ?').run(id);
+      db.prepare('DELETE FROM receipt_items WHERE transaction_id = ?').run(id);
+    })();
+  }
   const rows = db.prepare('SELECT * FROM inbox_receipts WHERE linked_at IS NULL AND jpeg IS NOT NULL AND total_cents IS NOT NULL').all() as InboxRow[];
-  const exact = new Map(rows.map((r) => [r.id, candidates(db, r).exact.map((t) => t.id)]));
+  const exact = new Map(rows.map((r) => [r.id, candidates(db, r).exact]));
   const claims = new Map<string, number>();
-  for (const ids of exact.values()) for (const id of ids) claims.set(id, (claims.get(id) ?? 0) + 1);
+  for (const ts of exact.values()) for (const t of ts) claims.set(t.id, (claims.get(t.id) ?? 0) + 1);
   let linked = 0;
   for (const r of rows) {
     if (onlyId && r.id !== onlyId) continue;
-    const ids = exact.get(r.id)!;
-    if (ids.length === 1 && claims.get(ids[0]!) === 1) { linkInbox(deps, r.id, ids[0]!); linked += 1; }
+    const store = words(r.merchant);
+    const sure = exact.get(r.id)!.filter((t) => sharesWord(t, store));
+    if (sure.length !== 1 || claims.get(sure[0]!.id) !== 1) continue;
+    try {
+      linkInbox(deps, r.id, sure[0]!.id);
+      linked += 1;
+    } catch (e) {
+      console.error(`[hermes] inbox link failed code=${e instanceof ApiError ? e.code : 'UNKNOWN'}`);
+    }
   }
   return linked;
 }
@@ -79,9 +107,7 @@ export function linkInbox(deps: Deps, inboxId: string, transactionId: string): L
     const row = waitingRow(db, inboxId);
     if (!row || !row.jpeg) throw new ApiError(404, 'NOT_FOUND', 'inbox receipt not found');
     const txn = getTransaction(db, transactionId);
-    if (!txn || db.prepare('SELECT removed_at FROM transactions WHERE id = ?').pluck().get(transactionId) !== null) {
-      throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
-    }
+    if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
     if (txn.amountCents >= 0) throw new ApiError(409, 'NOT_MONEY_OUT', 'only money out can have a receipt from the inbox');
     if (txn.hasReceipt) throw new ApiError(409, 'HAS_RECEIPT', 'this transaction already has a receipt');
     const now = deps.now().toISOString();
@@ -114,11 +140,12 @@ const toLinked = (r: InboxRow): LinkedReceipt => ({
   id: r.id, transactionId: r.linked_transaction_id!, merchant: r.merchant, totalCents: r.total_cents, linkedAt: r.linked_at!, splitApplied: r.split_applied === 1,
 });
 
-const status = (r: InboxRow): InboxReceipt['status'] => (r.read_failed ? 'failed' : r.read_at === null && !r.tagged ? 'reading' : 'read');
+const status = (r: InboxRow): InboxReceipt['status'] => (r.tagged ? 'read' : r.read_failed ? 'failed' : r.read_at === null ? 'reading' : 'read');
 
 export function listInbox(db: Db): InboxList {
   const waiting = db.prepare('SELECT * FROM inbox_receipts WHERE linked_at IS NULL ORDER BY captured_at DESC, id').all() as InboxRow[];
   const linked = db.prepare(`SELECT * FROM inbox_receipts WHERE linked_at IS NOT NULL AND dismissed_at IS NULL AND linked_transaction_id IS NOT NULL
+    AND EXISTS (SELECT 1 FROM receipts WHERE transaction_id = linked_transaction_id)
     ORDER BY linked_at DESC, id LIMIT 20`).all() as InboxRow[];
   return {
     waiting: waiting.map((r) => ({

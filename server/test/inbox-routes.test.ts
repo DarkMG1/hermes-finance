@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.ts';
-import { getInboxRow } from '../src/inbox.ts';
+import { getInboxRow, matchInbox } from '../src/inbox.ts';
 import { applyPages } from '../src/sync/apply.ts';
 import { txn } from './fake-plaid.ts';
 import { AUTH, makeTestDeps, seedAccount, seedCategory, seedPerson, seedTxn } from './helpers.ts';
@@ -18,8 +18,8 @@ function setup() {
   seedPerson(db, { id: 'p1', name: 'Synthetic Moss' });
   const app = buildApp(t.deps);
   let n = 0;
-  const put = (id: string, body: Buffer = JPEG, type = 'image/jpeg') =>
-    app.inject({ method: 'PUT', url: `/v1/receipts/inbox/${id}`, headers: { ...AUTH, 'content-type': type }, payload: body });
+  const put = (id: string, body: Buffer = JPEG, type = 'image/jpeg', extra: Record<string, string> = {}) =>
+    app.inject({ method: 'PUT', url: `/v1/receipts/inbox/${id}`, headers: { ...AUTH, 'content-type': type, ...extra }, payload: body });
   const get = (url: string) => app.inject({ method: 'GET', url, headers: AUTH });
   const post = (url: string, payload?: object, key = `k${(n += 1)}`) =>
     app.inject({ method: 'POST', url, headers: { ...AUTH, 'idempotency-key': key }, ...(payload ? { payload } : {}) });
@@ -130,7 +130,6 @@ test('a sync links a waiting receipt, and a pending link follows the posted row'
   await put(ID);
   await settle();
   seedTxn(db, { id: 'pend', accountId: 'card', date: '2026-03-15', amountCents: -1050, source: 'plaid', sourceId: 'p-pend', pending: true });
-  const { matchInbox } = await import('../src/inbox.ts');
   assert.equal(matchInbox(deps), 1);
   assert.equal(getInboxRow(db, ID)!.linked_transaction_id, 'pend');
   db.prepare("UPDATE accounts SET plaid_account_id = 'pa-card' WHERE id = 'card'").run();
@@ -139,4 +138,44 @@ test('a sync links a waiting receipt, and a pending link follows the posted row'
   const postedId = (db.prepare("SELECT id FROM transactions WHERE source_id = 'posted'").get() as { id: string }).id;
   assert.equal(getInboxRow(db, ID)!.linked_transaction_id, postedId);
   assert.equal((db.prepare('SELECT COUNT(*) AS n FROM receipts WHERE transaction_id = ?').get(postedId) as { n: number }).n, 1);
+});
+
+test('the capture time comes from x-captured-at when it is sane, otherwise now', async () => {
+  const { put, db, deps } = setup();
+  const now = deps.now().getTime();
+  const earlier = new Date(now - 3 * 86_400_000).toISOString();
+  await put(ID, JPEG, 'image/jpeg', { 'x-captured-at': earlier });
+  assert.equal(getInboxRow(db, ID)!.captured_at, earlier);
+  const other = '0f8c5a7e-3333-4222-8333-944445555666';
+  await put(other, JPEG, 'image/jpeg', { 'x-captured-at': new Date(now + 86_400_000).toISOString() });
+  assert.equal(getInboxRow(db, other)!.captured_at, new Date(now).toISOString());
+  const old = '0f8c5a7e-4444-4222-8333-944445555666';
+  await put(old, JPEG, 'image/jpeg', { 'x-captured-at': '2020-01-01T00:00:00.000Z' });
+  assert.equal(getInboxRow(db, old)!.captured_at, new Date(now).toISOString());
+});
+
+test('read again clears the tags; tags saved while it reads win with 409 CHANGED', async () => {
+  const { put, post, putItems, db, reader } = setup();
+  await put(ID);
+  await settle();
+  await putItems(ID, { items: [{ name: 'Synthetic Bread', amountCents: 400, people: ['me', 'p1'] }], taxCents: 0, tipCents: 0, feesCents: 0 });
+  const again = await post(`/v1/receipts/inbox/${ID}/read`);
+  assert.deepEqual([again.statusCode, again.json().tagged], [200, false]);
+  const items = [{ name: 'Synthetic Jam', amountCents: 600, people: ['p1'] }];
+  reader.onRead = () => { db.prepare("UPDATE inbox_receipts SET items = ?, tagged = 1 WHERE id = ?").run(JSON.stringify(items), ID); };
+  const raced = await post(`/v1/receipts/inbox/${ID}/read`);
+  assert.deepEqual([raced.statusCode, raced.json().code], [409, 'CHANGED']);
+  assert.deepEqual(JSON.parse(getInboxRow(db, ID)!.items!), items);
+});
+
+test('deleting a linked receipt from its transaction puts it back in the inbox with its photo', async () => {
+  const { put, post, get, app, db } = setup();
+  await put(ID);
+  await settle();
+  seedTxn(db, { id: 'c1', accountId: 'card', date: '2026-03-15', amountCents: -2000, source: 'plaid', sourceId: 's-c1' });
+  assert.equal((await post(`/v1/receipts/inbox/${ID}/link`, { transactionId: 'c1' })).statusCode, 200);
+  assert.equal((await app.inject({ method: 'DELETE', url: '/v1/transactions/c1/receipt', headers: AUTH })).statusCode, 204);
+  const list = (await get('/v1/receipts/inbox')).json();
+  assert.deepEqual([list.waiting.map((w: { id: string }) => w.id), list.recentlyLinked.length], [[ID], 0]);
+  assert.deepEqual((await get(`/v1/receipts/inbox/${ID}/photo`)).rawPayload, JPEG);
 });
