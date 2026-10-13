@@ -122,7 +122,8 @@ struct HomeView: View {
                     .accessibilityValue(repayments > 0 ? "\(repayments) possible repayments" : "")
             }
             ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink { InboxView() } label: {
+                // same flag as the quick action, so a snap while the inbox is open doesn't push a second one
+                Button { showingInbox = true } label: {
                     Image(systemName: "tray").padding(Space.s).overlay(alignment: .topTrailing) { CountBadge(count: badgeCount) }
                 }
                     .accessibilityLabel("Receipt inbox")
