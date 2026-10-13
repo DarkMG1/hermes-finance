@@ -136,18 +136,19 @@ struct HomeView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink { InboxView() } label: { Image(systemName: "tray") }
                     .overlay(alignment: .topTrailing) {
-                        let count = inboxCount + queue.pending.count
-                        if count > 0 {
-                            Text("\(count)").font(.caption2).foregroundStyle(.white)
+                        if badgeCount > 0 {
+                            Text("\(badgeCount)").font(.caption2).foregroundStyle(.white)
                                 .padding(.horizontal, Space.xs).background(Palette.accent, in: Capsule())
                                 .offset(x: Space.s, y: -Space.xs)
                         }
                     }
                     .accessibilityLabel("Receipt inbox")
+                    .accessibilityValue(badgeCount > 0 ? "\(badgeCount) waiting" : "")
             }
         }
-        .refreshable { await queue.retryAll(client: model.client); await load() }
+        .refreshable { await queue.retryAll(client: model.client); await load(); await loadInbox() }
         .task { await load() }
+        .task { await loadInbox() }
         .task { await queue.retryAll(client: model.client) }
         .onChange(of: queue.pending.count) { Task { await loadInbox() } }
         // outside the loaded state, so snapping works offline or when Home fails to load
@@ -164,6 +165,8 @@ struct HomeView: View {
             AccountSheet(account: account) { await model.refreshReferenceData() }
         }
     }
+
+    private var badgeCount: Int { inboxCount + queue.pending.count }
 
     private var hasInvestments: Bool { model.accounts.contains { $0.type == "investment" && !$0.hidden } }
 
@@ -212,7 +215,6 @@ struct HomeView: View {
     }
 
     private func load() async {
-        await loadInbox()
         guard let reader = model.reader else { return }
         do {
             let loaded = try await reader.read("/v1/home", as: Home.self)
