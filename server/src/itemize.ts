@@ -14,7 +14,8 @@ export class ShareError extends Error {
 
 /**
  * Each person's share of `targetCents` (the bank amount, or the receipt total on a "they paid" row).
- * Items divide evenly among their people (odd cents to "me" first, then list order); everything else on the bill
+ * Items divide evenly among their people; an item's odd cents go to whoever has had the fewest so far (a discount's take back
+ * from whoever has had the most), ties to "me" first, then list order. Everything else on the bill
  * (tax, tip, fees, any gap to the bank amount) follows each person's item total. Shares add up to the target exactly:
  * leftover cents go to "me" first when "me" had items, then by largest remainder, ties in first-appearance order.
  * The Swift twin is HermesKit's ItemShares; both are tested against shared/test-vectors/item-shares.json.
@@ -27,6 +28,8 @@ export function computeShares(input: ShareInput): ShareResult {
   if (itemsTotal <= 0) throw new ShareError('the items must add up to more than zero');
   const order: string[] = [];
   const base = new Map<string, number>();
+  // odd cents each person has had so far, so they spread across the bill instead of piling on one person
+  const odd = new Map<string, number>();
   for (const item of items) {
     if (!item.people.length) throw new ShareError('every item needs someone');
     if (new Set(item.people).size !== item.people.length) throw new ShareError('a person is listed twice on an item');
@@ -34,7 +37,11 @@ export function computeShares(input: ShareInput): ShareResult {
     const people = item.people.includes(ME) ? [ME, ...item.people.filter((p) => p !== ME)] : item.people;
     const each = Math.trunc(item.amountCents / people.length);
     const rem = item.amountCents - each * people.length;
-    people.forEach((p, i) => base.set(p, (base.get(p) ?? 0) + each + (i < Math.abs(rem) ? Math.sign(rem) : 0)));
+    const s = Math.sign(rem);
+    const takers = people.map((p, i) => ({ p, i })).sort((a, b) => s * ((odd.get(a.p) ?? 0) - (odd.get(b.p) ?? 0)) || a.i - b.i)
+      .slice(0, Math.abs(rem)).map((x) => x.p);
+    for (const p of people) base.set(p, (base.get(p) ?? 0) + each);
+    for (const p of takers) { base.set(p, (base.get(p) ?? 0) + s); odd.set(p, (odd.get(p) ?? 0) + s); }
   }
   const people = order.includes(ME) ? [ME, ...order.filter((p) => p !== ME)] : order;
   for (const p of people) if ((base.get(p) ?? 0) <= 0) throw new ShareError("each person's items must add up to more than zero");
