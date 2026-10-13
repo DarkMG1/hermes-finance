@@ -40,5 +40,7 @@
       "settled": false,
       "hasReceipt": false
     }
-  ]
+  ],
+  "spentOnThemCents": 1500,
+  "forgivenCents": 0
 }

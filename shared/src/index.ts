@@ -33,6 +33,7 @@ export const Transaction = z.object({
   /** Marked reconciled and the bank amount unchanged since. */
   reconciled: z.boolean(),
   hasReceipt: z.boolean(),
+  forgiven: z.boolean(),
 });
 export type Transaction = z.infer<typeof Transaction>;
 
@@ -85,13 +86,18 @@ export const Person = z.object({ id: Id, name: z.string(), matchText: z.string()
 export type Person = z.infer<typeof Person>;
 
 export const HistoryEntry = z.object({
-  transactionId: Id, lineId: Id.nullable(), date: DateStr, payee: z.string(), kind: z.enum(['forThem', 'fromThem', 'paidByThem']),
+  transactionId: Id, lineId: Id.nullable(), date: DateStr, payee: z.string(), kind: z.enum(['forThem', 'fromThem', 'paidByThem', 'forgiven']),
   effectCents: Cents, balanceAfterCents: Cents, settled: z.boolean(), hasReceipt: z.boolean(),
 });
 export type HistoryEntry = z.infer<typeof HistoryEntry>;
 
-export const PersonDetail = z.object({ person: Person, history: z.array(HistoryEntry) });
+export const PersonDetail = z.object({ person: Person, history: z.array(HistoryEntry), spentOnThemCents: Cents, forgivenCents: Cents });
 export type PersonDetail = z.infer<typeof PersonDetail>;
+
+export const ForgiveBody = z.object({
+  amountCents: z.number().int().min(1).max(10_000_000), date: DateStr, categoryId: Id.nullable().optional(), notes: z.string().max(2000).optional(),
+}).strict();
+export type ForgiveBody = z.infer<typeof ForgiveBody>;
 
 export const RepaymentSuggestion = z.object({ transaction: Transaction, personId: Id.nullable() });
 export type RepaymentSuggestion = z.infer<typeof RepaymentSuggestion>;

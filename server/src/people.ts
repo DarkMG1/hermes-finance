@@ -8,20 +8,20 @@ import { TXN_COLS, rowToTransaction, type TxnRow } from './ledger.ts';
 export const TAGGED = `
   SELECT sl.person_id AS person_id, t.id AS transaction_id, sl.id AS line_id, t.date AS date,
          COALESCE(sl.payee, t.payee, t.merchant_name, t.bank_description) AS payee, sl.amount_cents AS amount, 0 AS paid_by,
-         t.created_at AS created_at, t.rowid AS row_order
+         t.created_at AS created_at, t.rowid AS row_order, t.forgiven AS forgiven
     FROM split_lines sl JOIN transactions t ON t.id = sl.transaction_id
    WHERE sl.person_id IS NOT NULL AND t.removed_at IS NULL
   UNION ALL
-  SELECT t.person_id, t.id, NULL, t.date, COALESCE(t.payee, t.merchant_name, t.bank_description), t.amount_cents, 0, t.created_at, t.rowid
+  SELECT t.person_id, t.id, NULL, t.date, COALESCE(t.payee, t.merchant_name, t.bank_description), t.amount_cents, 0, t.created_at, t.rowid, t.forgiven
     FROM transactions t
    WHERE t.person_id IS NOT NULL AND t.removed_at IS NULL
      AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
   UNION ALL
-  SELECT t.paid_by_person_id, t.id, NULL, t.date, COALESCE(t.payee, t.merchant_name, t.bank_description), -t.amount_cents, 1, t.created_at, t.rowid
+  SELECT t.paid_by_person_id, t.id, NULL, t.date, COALESCE(t.payee, t.merchant_name, t.bank_description), -t.amount_cents, 1, t.created_at, t.rowid, t.forgiven
     FROM transactions t
    WHERE t.paid_by_person_id IS NOT NULL AND t.removed_at IS NULL AND t.source = 'manual' AND t.amount_cents < 0`;
 
-type Tagged = { person_id: string; transaction_id: string; line_id: string | null; date: string; payee: string; amount: number; paid_by: number; created_at: string };
+type Tagged = { person_id: string; transaction_id: string; line_id: string | null; date: string; payee: string; amount: number; paid_by: number; created_at: string; forgiven: number };
 type PersonRow = { id: string; name: string; match_text: string | null; archived: number };
 
 const toPerson = (r: PersonRow, balanceCents: number): Person =>
@@ -52,11 +52,13 @@ export function getPerson(db: Db, id: string): PersonDetail | null {
     balance -= t.amount;
     return {
       transactionId: t.transaction_id, lineId: t.line_id, date: t.date, payee: t.payee,
-      kind: t.paid_by ? 'paidByThem' : t.amount < 0 ? 'forThem' : 'fromThem', effectCents: -t.amount, balanceAfterCents: balance, settled: balance === 0,
+      kind: t.forgiven ? 'forgiven' : t.paid_by ? 'paidByThem' : t.amount < 0 ? 'forThem' : 'fromThem', effectCents: -t.amount, balanceAfterCents: balance, settled: balance === 0,
       hasReceipt: withReceipt.has(t.transaction_id),
     };
   });
-  return { person: toPerson(row, balance), history: history.reverse() };
+  const spentOnThemCents = items.filter((t) => t.amount < 0 && !t.paid_by && !t.forgiven).reduce((s, t) => s - t.amount, 0);
+  const forgivenCents = items.filter((t) => t.forgiven).reduce((s, t) => s + t.amount, 0);
+  return { person: toPerson(row, balance), history: history.reverse(), spentOnThemCents, forgivenCents };
 }
 
 /** A new tag or payer must name a live person; a person archived after being added stays valid on that same transaction. */
