@@ -99,26 +99,6 @@ struct HomeView: View {
                         }
                     }
                 }
-                let home = loaded.value
-                NavigationLink { WhoOwesView() } label: {
-                    Card {
-                        Text("IOUs").textStyle(.subhead, color: Palette.secondaryText)
-                        if home.owedToYouCents == 0 && home.youOweCents == 0 {
-                            Text("Nobody owes you anything").textStyle(.body, color: Palette.secondaryText)
-                        }
-                        if home.owedToYouCents > 0 {
-                            LabeledContent("Owed to you") { MoneyText(cents: home.owedToYouCents, colored: false) }.textStyle(.body)
-                        }
-                        if home.youOweCents > 0 {
-                            LabeledContent("You owe") { MoneyText(cents: home.youOweCents, colored: false) }.textStyle(.body)
-                        }
-                        if home.repaymentSuggestions > 0 {
-                            Text(home.repaymentSuggestions == 1 ? "1 possible repayment" : "\(home.repaymentSuggestions) possible repayments")
-                                .textStyle(.caption, color: Palette.accent)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
                 Card {
                     Text("Recent").textStyle(.headline)
                     if loaded.value.recent.isEmpty {
@@ -133,15 +113,15 @@ struct HomeView: View {
             }
         }
         .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                NavigationLink { WhoOwesView() } label: { Image(systemName: "person.2") }
+                    .overlay(alignment: .topTrailing) { countBadge(repayments) }
+                    .accessibilityLabel("IOUs")
+                    .accessibilityValue(repayments > 0 ? "\(repayments) possible repayments" : "")
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink { InboxView() } label: { Image(systemName: "tray") }
-                    .overlay(alignment: .topTrailing) {
-                        if badgeCount > 0 {
-                            Text("\(badgeCount)").font(.caption2).foregroundStyle(.white)
-                                .padding(.horizontal, Space.xs).background(Palette.accent, in: Capsule())
-                                .offset(x: Space.s, y: -Space.xs)
-                        }
-                    }
+                    .overlay(alignment: .topTrailing) { countBadge(badgeCount) }
                     .accessibilityLabel("Receipt inbox")
                     .accessibilityValue(badgeCount > 0 ? "\(badgeCount) waiting" : "")
             }
@@ -167,6 +147,18 @@ struct HomeView: View {
     }
 
     private var badgeCount: Int { inboxCount + queue.pending.count }
+
+    private var repayments: Int {
+        if case .loaded(let loaded) = state { loaded.value.repaymentSuggestions } else { 0 }
+    }
+
+    @ViewBuilder private func countBadge(_ count: Int) -> some View {
+        if count > 0 {
+            Text("\(count)").font(.caption2).foregroundStyle(.white)
+                .padding(.horizontal, Space.xs).background(Palette.accent, in: Capsule())
+                .offset(x: Space.s, y: -Space.xs)
+        }
+    }
 
     private var hasInvestments: Bool { model.accounts.contains { $0.type == "investment" && !$0.hidden } }
 
