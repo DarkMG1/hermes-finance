@@ -18,9 +18,8 @@ struct RecurringSheet: View {
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var patch: PatchRecurringBody {
         PatchRecurringBody(name: !trimmedName.isEmpty && trimmedName != item.name ? trimmedName : nil,
-                           frequency: frequency != startFrequency ? frequency : nil)
+                           frequency: frequency != item.frequency ? frequency : nil)
     }
-    private var startFrequency: String { item.frequency == "unknown" ? "monthly" : item.frequency }
     private var dirty: Bool { patch.name != nil || patch.frequency != nil }
 
     var body: some View {
@@ -28,9 +27,11 @@ struct RecurringSheet: View {
               onCancel: { dismiss() }, onSave: { Task { await send(patch) } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
                 Field(label: "Name") { TextField("Name", text: $name) }
+                    .disabled(busy || writes.unresolved)
                 Picker("Repeats", selection: $frequency) {
                     ForEach(RecurringFrequency.writable, id: \.self) { Text(RecurringFrequency.label($0)).tag($0) }
                 }
+                .disabled(busy || writes.unresolved)
                 LabeledContent("Last charge") {
                     Text("\(DayText.display(item.lastDate)) · \(Money.format(item.lastCents))")
                 }
@@ -43,7 +44,6 @@ struct RecurringSheet: View {
                     }
                 } else {
                     HButton(title: "Delete", kind: .destructive, busy: busy) { confirmDelete = true }
-                        .disabled(busy)
                         .confirmationDialog("Delete this recurring item?", isPresented: $confirmDelete, titleVisibility: .visible) {
                             Button("Delete", role: .destructive) { Task { await run(guarded: false) { try await $0.deleteRecurring(id: item.id) } } }
                         }
@@ -54,7 +54,7 @@ struct RecurringSheet: View {
             guard !loaded else { return }
             loaded = true
             name = item.name
-            frequency = startFrequency
+            frequency = item.frequency == "unknown" ? "monthly" : item.frequency
         }
     }
 

@@ -31,20 +31,32 @@ const DAYS: Record<string, number> = { weekly: 7, biweekly: 14, semi_monthly: 15
 const MONTHS: Record<string, number> = { monthly: 1, annually: 12 };
 const FACTOR: Record<string, number> = { weekly: 52 / 12, biweekly: 26 / 12, semi_monthly: 2, monthly: 1, annually: 1 / 12 };
 
-export function addInterval(ymd: string, frequency: string): string | null {
+const addDays = (ymd: string, n: number) => {
   const [y, m, d] = ymd.split('-').map(Number) as [number, number, number];
-  if (DAYS[frequency]) return new Date(Date.UTC(y, m - 1, d + DAYS[frequency]!)).toISOString().slice(0, 10);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+};
+
+/** k intervals after ymd, counted from ymd so month-end days don't drift. */
+export function addInterval(ymd: string, frequency: string, k = 1): string | null {
+  if (DAYS[frequency]) return addDays(ymd, DAYS[frequency]! * k);
   if (!MONTHS[frequency]) return null;
-  const target = new Date(Date.UTC(y, m - 1 + MONTHS[frequency]!, 1));
+  const [y, m, d] = ymd.split('-').map(Number) as [number, number, number];
+  const target = new Date(Date.UTC(y, m - 1 + MONTHS[frequency]! * k, 1));
   const last = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
   target.setUTCDate(Math.min(d, last));
   return target.toISOString().slice(0, 10);
 }
 
-const addDays = (ymd: string, n: number) => {
-  const [y, m, d] = ymd.split('-').map(Number) as [number, number, number];
-  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
-};
+/** A next date already past (no newer charge yet, or Plaid's prediction is stale) moves on by whole intervals from the last charge. */
+function rollForward(next: string | null, last: string, frequency: string, today: string): string | null {
+  for (let k = 1; next && next < today; k++) {
+    const d = addInterval(last, frequency, k);
+    if (!d) break;
+    next = d;
+  }
+  return next;
+}
+
 const monthly = (cents: number, frequency: string) => (FACTOR[frequency] ? Math.round(cents * FACTOR[frequency]!) : null);
 const priceUp = (last: number, avg: number) => (last - avg > Math.max(avg * 0.05, 100) ? last - avg : 0);
 
@@ -53,7 +65,8 @@ type StreamRow = { stream_id: string; name: string; frequency: string; average_c
 type ManualRow = { id: string; name: string; match_text: string; frequency: string; source_transaction_id: string | null; hidden: number };
 type OutRow = { date: string; amount_cents: number; payee: string | null; merchant_name: string | null; bank_description: string };
 
-function manualItem(db: Db, m: ManualRow): RecurringItem | null {
+function manualItem(db: Db, m: ManualRow, today: string): RecurringItem | null {
+  // ponytail: scans every money-out row per manual item; filter in SQL or index a normalized column if it gets slow
   let rows = (db.prepare(`SELECT date, amount_cents, payee, merchant_name, bank_description FROM transactions
       WHERE removed_at IS NULL AND amount_cents < 0 ORDER BY date DESC, id DESC`).all() as OutRow[])
     .filter((t) => [t.payee, t.merchant_name, t.bank_description].some((s) => s && normalizeName(s) === m.match_text)).slice(0, 6);
@@ -63,11 +76,11 @@ function manualItem(db: Db, m: ManualRow): RecurringItem | null {
   }
   if (!rows.length) return null;
   const amounts = rows.map((r) => -r.amount_cents).sort((a, b) => a - b);
-  const median = amounts[Math.floor(amounts.length / 2)]!;
+  const median = Math.round((amounts[Math.floor((amounts.length - 1) / 2)]! + amounts[Math.floor(amounts.length / 2)]!) / 2);
   return {
     id: m.id, source: 'manual', name: m.name, frequency: m.frequency as RecurringItem['frequency'], amountCents: median,
     variable: amounts[amounts.length - 1]! - amounts[0]! > median * 0.2, lastDate: rows[0]!.date, lastCents: -rows[0]!.amount_cents,
-    nextDate: addInterval(rows[0]!.date, m.frequency), monthlyCents: monthly(median, m.frequency), priceUpCents: priceUp(-rows[0]!.amount_cents, median),
+    nextDate: rollForward(addInterval(rows[0]!.date, m.frequency), rows[0]!.date, m.frequency, today), monthlyCents: monthly(median, m.frequency), priceUpCents: priceUp(-rows[0]!.amount_cents, median),
     isNew: false, hidden: m.hidden === 1,
   };
 }
@@ -80,13 +93,15 @@ export function getRecurring(db: Db, today: string, includeHidden: boolean): Rec
     return {
       id: s.stream_id, source: 'plaid', name: s.o_name ?? s.name, frequency, amountCents: s.average_cents,
       variable: Math.abs(s.last_cents - s.average_cents) > s.average_cents * 0.2, lastDate: s.last_date, lastCents: s.last_cents,
-      nextDate: s.o_frequency ? addInterval(s.last_date, frequency) : (s.next_date ?? addInterval(s.last_date, frequency)),
+      nextDate: rollForward(s.o_frequency ? addInterval(s.last_date, frequency) : (s.next_date ?? addInterval(s.last_date, frequency)), s.last_date, frequency, today),
       monthlyCents: monthly(s.average_cents, frequency), priceUpCents: priceUp(s.last_cents, s.average_cents), isNew: s.status === 'early_detection',
       hidden: s.o_hidden === 1,
     };
   });
+  // a bill Plaid also finds shows once, as Plaid's; the manual row comes back if that stream is hidden or gone
+  const plaidKeys = new Set(streams.filter((s) => s.o_hidden !== 1).flatMap((s) => [s.name, s.o_name ?? s.name].map(normalizeName)));
   for (const m of db.prepare('SELECT * FROM recurring_manual').all() as ManualRow[]) {
-    const item = manualItem(db, m);
+    const item = plaidKeys.has(m.match_text) ? null : manualItem(db, m, today);
     if (item) all.push(item);
   }
   const visible = all.filter((i) => !i.hidden);

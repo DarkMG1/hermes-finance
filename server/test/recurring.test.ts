@@ -25,7 +25,7 @@ test('refresh replaces an item’s streams in positive cents with lowercase enum
 });
 
 test('normalizeName and addInterval', () => {
-  assert.equal(normalizeName('NETFLIX.COM #1234 866-579*X'), 'netflix com x');
+  assert.equal(normalizeName('SYNTHETIC.COM #1234 555-012*X'), 'synthetic com x');
   assert.equal(addInterval('2026-01-31', 'monthly'), '2026-02-28');
   assert.equal(addInterval('2026-03-15', 'monthly'), '2026-04-15');
   assert.equal(addInterval('2026-03-15', 'annually'), '2027-03-15');
@@ -74,4 +74,47 @@ test('a manual item whose text no longer matches falls back to its source transa
   assert.deepEqual([item.id, item.lastDate, item.amountCents, item.nextDate], ['man-1', '2026-03-02', 1234, '2026-04-02']);
   db.prepare("UPDATE transactions SET removed_at = 'x' WHERE id = 'src'").run();
   assert.equal(getRecurring(db, '2026-03-15', false).items.length, 0);
+});
+
+test('median averages the middle two; a manual item a visible Plaid stream also finds counts once until that stream is hidden', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedItem(deps, { id: 'item-1', plaidItemId: 'p1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
+  const ins = db.prepare(`INSERT INTO recurring_streams VALUES (?, 'item-1', ?, 'monthly', 999, 999, '2026-03-10', '2026-04-10', 1, 'mature', 'x')`);
+  ins.run('s1', 'SYNTHETIC CLOUD 4455');
+  ins.run('s2', 'Synthetic Other');
+  db.prepare("INSERT INTO recurring_overrides (stream_id, name) VALUES ('s2', 'Synthetic Box')").run();
+  seedAccount(db, { id: 'a1', type: 'credit' });
+  seedTxn(db, { id: 't1', accountId: 'a1', date: '2026-02-10', amountCents: -1000, payee: 'Synthetic Cloud' });
+  seedTxn(db, { id: 't2', accountId: 'a1', date: '2026-03-10', amountCents: -1200, payee: 'Synthetic Cloud' });
+  seedTxn(db, { id: 't3', accountId: 'a1', date: '2026-03-10', amountCents: -500, payee: 'Synthetic Box' });
+  db.prepare("INSERT INTO recurring_manual VALUES ('man-1', 'Synthetic Cloud', 'synthetic cloud', 'monthly', 't1', 0, 'x')").run();
+  db.prepare("INSERT INTO recurring_manual VALUES ('man-2', 'Synthetic Box', 'synthetic box', 'monthly', 't3', 0, 'x')").run();
+  const r = getRecurring(db, '2026-03-15', true);
+  assert.deepEqual(r.items.map((i) => i.id), ['s2', 's1']);
+  assert.equal(r.monthlyTotalCents, 999 * 2);
+  db.prepare("INSERT INTO recurring_overrides (stream_id, hidden) VALUES ('s1', 1)").run();
+  const cloud = getRecurring(db, '2026-03-15', false).items.find((i) => i.id === 'man-1')!;
+  assert.equal(cloud.amountCents, 1100);
+});
+
+test('past next dates roll forward by whole intervals; windows include today, +7 and +30 but not +8 (week) or +31; unknown has no monthly', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedItem(deps, { id: 'item-1', plaidItemId: 'p1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
+  const ins = db.prepare(`INSERT INTO recurring_streams VALUES (?, 'item-1', ?, ?, 100, 100, ?, ?, 1, 'mature', 'x')`);
+  for (const [id, next] of [['d0', '2026-03-15'], ['d7', '2026-03-22'], ['d8', '2026-03-23'], ['d30', '2026-04-14'], ['d31', '2026-04-15']]) {
+    ins.run(id, `Synthetic ${id}`, 'monthly', '2026-03-01', next);
+  }
+  ins.run('past', 'Synthetic Past', 'monthly', '2026-01-10', '2026-02-10');
+  ins.run('unk', 'Synthetic Unknown', 'unknown', '2026-03-01', null);
+  seedAccount(db, { id: 'a1', type: 'credit' });
+  seedTxn(db, { id: 't1', accountId: 'a1', date: '2026-01-31', amountCents: -100, payee: 'Synthetic Gym' });
+  db.prepare("INSERT INTO recurring_manual VALUES ('man', 'Synthetic Gym', 'synthetic gym', 'monthly', 't1', 0, 'x')").run();
+  const r = getRecurring(db, '2026-03-15', false);
+  assert.deepEqual(r.upcoming.map((i) => [i.id, i.nextDate]), [['d0', '2026-03-15'], ['d7', '2026-03-22'], ['d8', '2026-03-23'],
+    ['man', '2026-03-31'], ['past', '2026-04-10'], ['d30', '2026-04-14']]);
+  assert.equal(r.dueThisWeek, 2);
+  assert.equal(r.items.find((i) => i.id === 'unk')!.monthlyCents, null);
+  assert.equal(r.monthlyTotalCents, 700);
 });

@@ -1,6 +1,6 @@
 import Foundation
 
-public struct RecurringItem: Codable, Sendable, Identifiable, Hashable {
+public struct RecurringItem: Codable, Sendable, Identifiable {
     public let id: String
     /// "plaid" or "manual"
     public let source: String

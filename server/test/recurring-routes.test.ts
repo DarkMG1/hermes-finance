@@ -10,7 +10,9 @@ function setup() {
   seedAccount(deps.db, { id: 'a1', type: 'credit' });
   seedTxn(deps.db, { id: 'sub', accountId: 'a1', date: '2026-03-02', amountCents: -1099, payee: 'Synthetic Music', source: 'plaid', sourceId: 'sub' });
   seedTxn(deps.db, { id: 'tv', accountId: 'a1', date: '2026-03-05', amountCents: -1500, payee: 'Synthetic TV', source: 'plaid', sourceId: 'tv' });
+  seedTxn(deps.db, { id: 'noname', accountId: 'a1', date: '2026-03-03', amountCents: -100, payee: '#123456', source: 'plaid', sourceId: 'nn' });
   seedTxn(deps.db, { id: 'refund', accountId: 'a1', date: '2026-03-06', amountCents: 500, payee: 'Synthetic Shop', source: 'plaid', sourceId: 'rf' });
+  deps.db.prepare("INSERT INTO recurring_streams VALUES ('s-off', 'item-1', 'Synthetic Off', 'monthly', 100, 100, '2026-01-05', null, 0, 'mature', 'x')").run();
   const app = buildApp(deps);
   let n = 0;
   const get = async (url: string) => (await app.inject({ method: 'GET', url, headers: AUTH })).json();
@@ -34,6 +36,7 @@ test('mark as recurring, rename, change interval, hide, show again, delete', asy
   assert.equal((await send('DELETE', '/v1/recurring/s-tv')).statusCode, 409);
   assert.equal((await send('DELETE', `/v1/recurring/${id}`)).statusCode, 204);
   assert.equal((await send('PATCH', '/v1/recurring/nope', { hidden: true })).statusCode, 404);
+  assert.equal((await send('PATCH', '/v1/recurring/s-off', { hidden: true })).statusCode, 404);
 });
 
 test('refusals: money in, already recurring (Plaid name), bad frequency; replay creates once', async () => {
@@ -41,6 +44,7 @@ test('refusals: money in, already recurring (Plaid name), bad frequency; replay 
   assert.equal((await send('POST', '/v1/recurring', { transactionId: 'refund', frequency: 'monthly' })).statusCode, 409);
   assert.equal((await send('POST', '/v1/recurring', { transactionId: 'tv', frequency: 'monthly' })).statusCode, 409);
   assert.equal((await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'unknown' })).statusCode, 400);
+  assert.equal((await send('POST', '/v1/recurring', { transactionId: 'noname', frequency: 'monthly' })).json().code, 'NO_NAME');
   await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly' }, 'same');
   await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly' }, 'same');
   assert.equal((await get('/v1/recurring')).items.filter((i: { source: string }) => i.source === 'manual').length, 1);
