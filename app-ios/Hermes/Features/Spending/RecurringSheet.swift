@@ -13,6 +13,7 @@ struct RecurringSheet: View {
     @State private var busy = false
     @State private var error: String?
     @State private var loaded = false
+    @State private var confirmDelete = false
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var patch: PatchRecurringBody {
@@ -38,10 +39,14 @@ struct RecurringSheet: View {
                 InlineError(message: error)
                 if item.source == "plaid" {
                     HButton(title: item.hidden ? "Show again" : "Not recurring", kind: .destructive, busy: busy) {
-                        Task { await send(PatchRecurringBody(hidden: !item.hidden)) }
+                        Task { await send(PatchRecurringBody(hidden: !item.hidden), guarded: false) }
                     }
                 } else {
-                    HButton(title: "Delete", kind: .destructive, busy: busy) { Task { await run { try await $0.deleteRecurring(id: item.id) } } }
+                    HButton(title: "Delete", kind: .destructive, busy: busy) { confirmDelete = true }
+                        .disabled(busy)
+                        .confirmationDialog("Delete this recurring item?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                            Button("Delete", role: .destructive) { Task { await run(guarded: false) { try await $0.deleteRecurring(id: item.id) } } }
+                        }
                 }
             }
         }
@@ -53,22 +58,24 @@ struct RecurringSheet: View {
         }
     }
 
-    private func send(_ body: PatchRecurringBody) async {
-        await run { _ = try await $0.patchRecurring(id: item.id, body: body, idempotencyKey: writes.key) }
+    /// Hide/show sets the state outright, so it takes a fresh key and leaves Save's guard alone.
+    private func send(_ body: PatchRecurringBody, guarded: Bool = true) async {
+        let key = guarded ? writes.key : UUID().uuidString
+        await run(guarded: guarded) { _ = try await $0.patchRecurring(id: item.id, body: body, idempotencyKey: key) }
     }
 
-    private func run(_ write: (APIClient) async throws -> Void) async {
-        guard let client = model.client else { return }
+    private func run(guarded: Bool = true, _ write: (APIClient) async throws -> Void) async {
+        guard !busy, let client = model.client else { return }
         busy = true
         defer { busy = false }
         do {
             try await write(client)
-            writes.didSucceed()
+            if guarded { writes.didSucceed() }
             await onDone()
             dismiss()
         } catch {
-            writes.didFail(error)
-            self.error = writes.unresolved ? "Couldn't confirm the save. Try again." : errorMessage(error)
+            if guarded { writes.didFail(error) }
+            self.error = guarded && writes.unresolved ? "Couldn't confirm the save. Try again." : errorMessage(error)
         }
     }
 }

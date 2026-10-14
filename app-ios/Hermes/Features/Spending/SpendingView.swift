@@ -74,7 +74,21 @@ struct SpendingView: View {
             if loadedPeriod != period { state = .loading }
             await load()
         }
-        .refreshable { await load() }
+        .task { await loadDue() }
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink { RecurringView() } label: {
+                    Image(systemName: "calendar").padding(Space.s).overlay(alignment: .topTrailing) { CountBadge(count: dueThisWeek) }
+                }
+                .accessibilityLabel("Recurring")
+                .accessibilityValue(dueThisWeek > 0 ? "\(dueThisWeek) due this week" : "")
+            }
+        }
+        .refreshable { await load(); await loadDue() }
+    }
+
+    private func loadDue() async {
+        if let list = try? await model.client?.recurring() { dueThisWeek = list.dueThisWeek }
     }
 
     private func expenses(_ title: String, _ query: ExpensesQuery, total: Int) -> some View {
