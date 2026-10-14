@@ -2,6 +2,7 @@ import HermesKit
 import PhotosUI
 import SwiftUI
 import UIKit
+import VisionKit
 
 /// A transaction's receipt photo: add from the camera or library, view full screen, replace, delete. Each change is saved at once.
 struct ReceiptSection: View {
@@ -24,6 +25,7 @@ struct ReceiptSection: View {
     @State private var choosingSource = false
     @State private var choosingPhoto = false
     @State private var takingPhoto = false
+    @State private var scanning = false
     @State private var viewing = false
     @State private var confirmDelete = false
 
@@ -56,6 +58,9 @@ struct ReceiptSection: View {
             }
             .disabled(busy || loading)
             .confirmationDialog("Receipt", isPresented: $choosingSource) {
+                if VNDocumentCameraViewController.isSupported {
+                    Button("Scan receipt") { scanning = true }
+                }
                 if UIImagePickerController.isSourceTypeAvailable(.camera) {
                     Button("Take photo") { takingPhoto = true }
                 }
@@ -89,6 +94,18 @@ struct ReceiptSection: View {
                 }
                 .ignoresSafeArea()
             }
+            .fullScreenCover(isPresented: $scanning) {
+                DocumentScanner { scan in
+                    scanning = false
+                    guard let scan, !busy else { return }
+                    busy = true
+                    Task {
+                        defer { busy = false }
+                        await upload(scan, scan: true)
+                    }
+                }
+                .ignoresSafeArea()
+            }
             .task { await load() }
             if image != nil {
                 Button("Delete receipt", role: .destructive) { confirmDelete = true }
@@ -115,9 +132,9 @@ struct ReceiptSection: View {
     }
 
     /// The caller sets `busy` before reading the photo and clears it after.
-    private func upload(_ photo: UIImage) async {
+    private func upload(_ photo: UIImage, scan: Bool = false) async {
         guard let client = model.client else { return }
-        guard let jpeg = ReceiptImage.jpeg(photo) else {
+        guard let jpeg = ReceiptImage.jpeg(photo, scan: scan) else {
             error = "Couldn't prepare that photo."
             return
         }
@@ -150,7 +167,20 @@ struct ReceiptSection: View {
 }
 
 /// Receipts are stored small: a 1600 px long side at JPEG quality 0.7 stays readable for itemizing.
+/// Scans may be tall, so they keep up to 4000 px and step down until under the server's 3 MB limit.
 enum ReceiptImage {
+    static func jpeg(_ image: UIImage, scan: Bool) -> Data? {
+        guard scan else { return jpeg(image) }
+        var side: CGFloat = 4000
+        while side >= 800 {
+            for quality in [0.7, 0.5, 0.35] as [CGFloat] {
+                if let data = jpeg(image, longSide: side, quality: quality), data.count <= 2_800_000 { return data }
+            }
+            side *= 0.75
+        }
+        return nil
+    }
+
     static func jpeg(_ image: UIImage, longSide: CGFloat = 1600, quality: CGFloat = 0.7) -> Data? {
         let size = image.size
         guard size.width > 0, size.height > 0 else { return nil }
@@ -189,6 +219,56 @@ struct CameraPicker: UIViewControllerRepresentable {
         }
 
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { onFinish(nil) }
+    }
+}
+
+struct DocumentScanner: UIViewControllerRepresentable {
+    /// One image: several pages are stitched top to bottom. Nil when cancelled or failed.
+    let onFinish: (UIImage?) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator(onFinish: onFinish) }
+
+    func makeUIViewController(context: Context) -> VNDocumentCameraViewController {
+        let controller = VNDocumentCameraViewController()
+        controller.delegate = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ controller: VNDocumentCameraViewController, context: Context) {}
+
+    @MainActor
+    final class Coordinator: NSObject, @preconcurrency VNDocumentCameraViewControllerDelegate {
+        let onFinish: (UIImage?) -> Void
+        init(onFinish: @escaping (UIImage?) -> Void) { self.onFinish = onFinish }
+
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
+            onFinish(Self.stitched((0..<scan.pageCount).map { scan.imageOfPage(at: $0) }))
+        }
+
+        func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) { onFinish(nil) }
+
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) { onFinish(nil) }
+
+        static func stitched(_ pages: [UIImage]) -> UIImage? {
+            guard pages.count > 1 else { return pages.first }
+            let full = pages.map(\.size.width).max() ?? 0
+            let fullHeights = pages.map { $0.size.width > 0 ? $0.size.height * full / $0.size.width : 0 }
+            // Upload caps the long side at 4000 anyway; drawing smaller keeps memory down.
+            let k = min(1, 4000 / max(fullHeights.reduce(0, +), 1))
+            let width = full * k
+            let heights = fullHeights.map { $0 * k }
+            let total = CGSize(width: width, height: heights.reduce(0, +))
+            guard total.width > 0, total.height > 0 else { return nil }
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = 1
+            return UIGraphicsImageRenderer(size: total, format: format).image { _ in
+                var y: CGFloat = 0
+                for (page, height) in zip(pages, heights) {
+                    page.draw(in: CGRect(x: 0, y: y, width: width, height: height))
+                    y += height
+                }
+            }
+        }
     }
 }
 

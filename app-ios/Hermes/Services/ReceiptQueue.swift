@@ -27,8 +27,8 @@ final class ReceiptQueue {
 
     private func file(_ id: String) -> URL { dir.appending(path: "\(id).jpg") }
 
-    func add(_ image: UIImage, client: APIClient?) async {
-        guard let jpeg = ReceiptImage.jpeg(image) else { error = "Couldn't read that photo."; return }
+    func add(_ image: UIImage, scan: Bool = false, client: APIClient?) async {
+        guard let jpeg = ReceiptImage.jpeg(image, scan: scan) else { error = "Couldn't read that photo."; return }
         let id = UUID().uuidString.lowercased()
         do {
             try jpeg.write(to: file(id), options: [.atomic, .completeFileProtection])

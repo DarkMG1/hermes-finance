@@ -101,13 +101,6 @@ struct PersonView: View {
         .sheet(item: $forgiving) { person in
             ForgiveSheet(person: person) { await load() }
         }
-        .confirmationDialog("Delete this forgiveness?", isPresented: Binding(get: { deletingForgiveness != nil },
-                                                                              set: { if !$0 { deletingForgiveness = nil } }),
-                            titleVisibility: .visible, presenting: deletingForgiveness) { entry in
-            Button("Delete forgiveness", role: .destructive) { Task { await deleteForgiveness(entry) } }
-        } message: { entry in
-            Text("Their balance goes back up by \(Money.format(-entry.effectCents)).")
-        }
         .sheet(item: $splitting) { transaction in
             SplitSheet(transaction: transaction, sharingWith: personId) { await load() }
         }
@@ -146,6 +139,14 @@ struct PersonView: View {
         .buttonStyle(.plain)
         if entry.kind == "forgiven" {
             button.contextMenu { Button("Delete forgiveness", role: .destructive) { deletingForgiveness = entry } }
+                // on the row, not the screen, so it opens beside the entry
+                .confirmationDialog("Delete this forgiveness?", isPresented: Binding(get: { deletingForgiveness?.id == entry.id },
+                                                                                      set: { if !$0 { deletingForgiveness = nil } }),
+                                    titleVisibility: .visible) {
+                    Button("Delete forgiveness", role: .destructive) { Task { await deleteForgiveness(entry) } }
+                } message: {
+                    Text("Their balance goes back up by \(Money.format(-entry.effectCents)).")
+                }
         } else {
             button
         }

@@ -1,10 +1,15 @@
 import PhotosUI
 import SwiftUI
+import VisionKit
 
 private struct ReceiptCamera: ViewModifier {
     @Environment(AppModel.self) private var model
     @Environment(ReceiptQueue.self) private var queue
     @Binding var isPresented: Bool
+    let scanDirectly: Bool
+    let onCaptured: () -> Void
+    @State private var choosingSource = false
+    @State private var scanning = false
     @State private var takingPhoto = false
     @State private var choosingPhoto = false
     @State private var pickerItem: PhotosPickerItem?
@@ -15,7 +20,26 @@ private struct ReceiptCamera: ViewModifier {
             .onChange(of: isPresented) { _, wanted in
                 guard wanted else { return }
                 isPresented = false
-                if UIImagePickerController.isSourceTypeAvailable(.camera) { takingPhoto = true } else { choosingPhoto = true }
+                let canScan = VNDocumentCameraViewController.isSupported
+                let canSnap = UIImagePickerController.isSourceTypeAvailable(.camera)
+                if scanDirectly && canScan { scanning = true } else if canScan || canSnap { choosingSource = true } else { choosingPhoto = true }
+            }
+            .confirmationDialog("Receipt", isPresented: $choosingSource) {
+                if VNDocumentCameraViewController.isSupported {
+                    Button("Scan receipt") { scanning = true }
+                }
+                if UIImagePickerController.isSourceTypeAvailable(.camera) {
+                    Button("Take photo") { takingPhoto = true }
+                }
+                Button("Choose photo") { choosingPhoto = true }
+            }
+            .fullScreenCover(isPresented: $scanning) {
+                DocumentScanner { scan in
+                    scanning = false
+                    guard let scan else { return }
+                    add(scan, scan: true)
+                }
+                .ignoresSafeArea()
             }
             .photosPicker(isPresented: $choosingPhoto, selection: $pickerItem, matching: .images)
             .onChange(of: pickerItem) { _, item in
@@ -26,7 +50,7 @@ private struct ReceiptCamera: ViewModifier {
                         unreadable = true
                         return
                     }
-                    await queue.add(picked, client: model.client)
+                    add(picked)
                 }
             }
             .alert("Couldn't read that photo.", isPresented: $unreadable) {}
@@ -34,14 +58,22 @@ private struct ReceiptCamera: ViewModifier {
                 CameraPicker { photo in
                     takingPhoto = false
                     guard let photo else { return }
-                    Task { await queue.add(photo, client: model.client) }
+                    add(photo)
                 }
                 .ignoresSafeArea()
             }
     }
+
+    private func add(_ image: UIImage, scan: Bool = false) {
+        onCaptured()
+        Task { await queue.add(image, scan: scan, client: model.client) }
+    }
 }
 
 extension View {
-    /// Set `isPresented` true to snap a receipt (camera, or the photo library without one); the photo joins the upload queue.
-    func receiptCamera(isPresented: Binding<Bool>) -> some View { modifier(ReceiptCamera(isPresented: isPresented)) }
+    /// Set `isPresented` true to snap a receipt (scan, camera or library; `scanDirectly` skips the choice); the photo joins the upload queue
+    /// and `onCaptured` runs.
+    func receiptCamera(isPresented: Binding<Bool>, scanDirectly: Bool = false, onCaptured: @escaping () -> Void = {}) -> some View {
+        modifier(ReceiptCamera(isPresented: isPresented, scanDirectly: scanDirectly, onCaptured: onCaptured))
+    }
 }

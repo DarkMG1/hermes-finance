@@ -17,6 +17,7 @@ struct HomeView: View {
     @State private var showBalancesError: String?
     @State private var inboxCount = 0
     @State private var snapping = false
+    @State private var showingInbox = false
     @State private var handledSnaps = 0
 
     var body: some View {
@@ -114,14 +115,17 @@ struct HomeView: View {
         }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                NavigationLink { WhoOwesView() } label: { Image(systemName: "person.2") }
-                    .overlay(alignment: .topTrailing) { countBadge(repayments) }
+                NavigationLink { WhoOwesView() } label: {
+                    Image(systemName: "person.2").padding(Space.s).overlay(alignment: .topTrailing) { CountBadge(count: repayments) }
+                }
                     .accessibilityLabel("IOUs")
                     .accessibilityValue(repayments > 0 ? "\(repayments) possible repayments" : "")
             }
             ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink { InboxView() } label: { Image(systemName: "tray") }
-                    .overlay(alignment: .topTrailing) { countBadge(badgeCount) }
+                // same flag as the quick action, so a snap while the inbox is open doesn't push a second one
+                Button { showingInbox = true } label: {
+                    Image(systemName: "tray").padding(Space.s).overlay(alignment: .topTrailing) { CountBadge(count: badgeCount) }
+                }
                     .accessibilityLabel("Receipt inbox")
                     .accessibilityValue(badgeCount > 0 ? "\(badgeCount) waiting" : "")
             }
@@ -137,7 +141,8 @@ struct HomeView: View {
             handledSnaps = requests
             snapping = true
         }
-        .receiptCamera(isPresented: $snapping)
+        .receiptCamera(isPresented: $snapping, scanDirectly: true) { showingInbox = true }
+        .navigationDestination(isPresented: $showingInbox) { InboxView() }
         .sheet(item: $selected) { transaction in
             TransactionDetailSheet(transaction: transaction) { await load() }
         }
@@ -150,14 +155,6 @@ struct HomeView: View {
 
     private var repayments: Int {
         if case .loaded(let loaded) = state { loaded.value.repaymentSuggestions } else { 0 }
-    }
-
-    @ViewBuilder private func countBadge(_ count: Int) -> some View {
-        if count > 0 {
-            Text("\(count)").font(.caption2).foregroundStyle(.white)
-                .padding(.horizontal, Space.xs).background(Palette.accent, in: Capsule())
-                .offset(x: Space.s, y: -Space.xs)
-        }
     }
 
     private var hasInvestments: Bool { model.accounts.contains { $0.type == "investment" && !$0.hidden } }
