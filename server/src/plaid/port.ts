@@ -16,6 +16,11 @@ export type PlaidInvestmentTxn = {
   quantity: number; amount: number; price: number | null;
 };
 export type PlaidHoldings = { holdings: PlaidHolding[]; securities: PlaidSecurity[] };
+/** Outflow streams only; dollars, positive. */
+export type PlaidRecurringStream = {
+  streamId: string; name: string; frequency: string; averageAmount: number; lastAmount: number; lastDate: string;
+  nextDate: string | null; isActive: boolean; status: string;
+};
 export type LinkTokenOpts = { mode: 'create' } | { mode: 'update'; accessToken: string; addInvestments?: boolean };
 export type LinkResult =
   | { status: 'pending' }
@@ -25,6 +30,7 @@ export type LinkResult =
 export interface PlaidPort {
   transactionsSync(accessToken: string, cursor: string | null): Promise<SyncPage>;
   accountsGet(accessToken: string): Promise<PlaidAccount[]>;
+  recurringGet(accessToken: string): Promise<PlaidRecurringStream[]>;
   investmentsHoldingsGet(accessToken: string): Promise<PlaidHoldings>;
   investmentsTransactionsGet(accessToken: string, startDate: string, endDate: string): Promise<{ transactions: PlaidInvestmentTxn[]; securities: PlaidSecurity[] }>;
   createLinkToken(opts: LinkTokenOpts): Promise<{ linkToken: string; hostedLinkUrl: string; expiration: string }>;
