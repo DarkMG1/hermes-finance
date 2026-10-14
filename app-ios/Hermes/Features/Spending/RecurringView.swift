@@ -33,10 +33,12 @@ struct RecurringView: View {
                 Section("All recurring · \(Money.format(list.monthlyTotalCents))/month") {
                     ForEach(list.items) { item in row(item, subtitle: subtitle(item)).opacity(item.hidden ? 0.5 : 1) }
                 }
+            } else if error == nil {
+                ProgressView().frame(maxWidth: .infinity)
             }
             Section {
                 InlineError(message: error)
-                Toggle("Show hidden", isOn: $showHidden)
+                if list != nil { Toggle("Show hidden", isOn: $showHidden) }
             }
         }
         .themedForm()
