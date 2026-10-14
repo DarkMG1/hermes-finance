@@ -27,19 +27,11 @@ struct RecurringView: View {
         List {
             if let list {
                 Section("Due in the next 30 days") {
-                    ForEach(list.upcoming) { item in
-                        ListRow(title: item.name, subtitle: item.nextDate.map(DayText.display)) { amountText(item) }
-                    }
+                    ForEach(list.upcoming) { item in row(item, subtitle: item.nextDate.map(DayText.display)) }
                     if list.upcoming.isEmpty { Text("Nothing due in the next 30 days").textStyle(.subhead, color: Palette.secondaryText) }
                 }
                 Section("All recurring · \(Money.format(list.monthlyTotalCents))/month") {
-                    ForEach(list.items) { item in
-                        Button { editing = item } label: {
-                            ListRow(title: item.name, subtitle: subtitle(item)) { amountText(item) }
-                        }
-                        .buttonStyle(.plain)
-                        .opacity(item.hidden ? 0.5 : 1)
-                    }
+                    ForEach(list.items) { item in row(item, subtitle: subtitle(item)).opacity(item.hidden ? 0.5 : 1) }
                 }
             }
             Section {
@@ -53,6 +45,11 @@ struct RecurringView: View {
         .task(id: showHidden) { await load() }
         .refreshable { await load() }
         .sheet(item: $editing) { item in RecurringSheet(item: item) { await load() } }
+    }
+
+    private func row(_ item: RecurringItem, subtitle: String?) -> some View {
+        Button { editing = item } label: { ListRow(title: item.name, subtitle: subtitle) { amountText(item) } }
+            .buttonStyle(.plain)
     }
 
     private func subtitle(_ item: RecurringItem) -> String {
