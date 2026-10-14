@@ -24,6 +24,9 @@ struct TransactionDetailSheet: View {
     @State private var savedForSplit = false
     @State private var itemizing = false
     @State private var savedFromItems = false
+    @State private var markingRecurring = false
+    @State private var recurringMessage: String?
+    @State private var recurringError: String?
     @State private var reconciled = false
     @State private var reconciling = false
     @State private var reconcileError: String?
@@ -111,6 +114,19 @@ struct TransactionDetailSheet: View {
                                    onItemize: patch.isEmpty && transaction.amountCents < 0 ? { itemizing = true } : nil) { savedOutside = true }
                 }
                 .disabled(deleteWrites.unresolved)
+            }
+            if transaction.amountCents < 0 && !forgiven {
+                Section {
+                    // dialog on its button: on the Form it floats mid-screen
+                    Button("Mark as recurring…") { markingRecurring = true }
+                        .confirmationDialog("How often?", isPresented: $markingRecurring, titleVisibility: .visible) {
+                            ForEach(RecurringFrequency.writable, id: \.self) { frequency in
+                                Button(RecurringFrequency.label(frequency)) { Task { await markRecurring(frequency) } }
+                            }
+                        }
+                    if let recurringMessage { Text(recurringMessage).textStyle(.caption, color: Palette.secondaryText) }
+                    InlineError(message: recurringError)
+                }
             }
             if transaction.repaymentDismissed == true {
                 Section {
@@ -240,6 +256,19 @@ struct TransactionDetailSheet: View {
             reconcileError = reconcileErrorMessage(error)
             // the bank changed the amount: the list behind is stale too
             if isAmountChanged(error) { savedOutside = true }
+        }
+    }
+
+    private func markRecurring(_ frequency: String) async {
+        guard let client = model.client else { return }
+        recurringMessage = nil
+        recurringError = nil
+        do {
+            _ = try await client.createRecurring(body: CreateRecurringBody(transactionId: transaction.id, frequency: frequency, name: nil),
+                                                 idempotencyKey: UUID().uuidString)
+            recurringMessage = "Added to Recurring"
+        } catch {
+            recurringError = errorMessage(error)
         }
     }
 

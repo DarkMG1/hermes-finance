@@ -7,6 +7,7 @@ struct SpendingView: View {
     @State private var period = SpendingPeriod.current(today: DayText.ymd(.now))
     @State private var state: LoadState<Spending> = .loading
     @State private var loadedPeriod: SpendingPeriod?
+    @State private var dueThisWeek = 0
 
     var body: some View {
         Screen(title: "Spending") {

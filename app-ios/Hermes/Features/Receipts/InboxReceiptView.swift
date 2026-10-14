@@ -63,7 +63,8 @@ struct InboxReceiptView: View {
             }
             Section {
                 Button("Link to transaction…") { picking = true }
-                    .confirmationDialog(pickedToConfirm.map(confirmTitle) ?? "", isPresented: Binding(get: { pickedToConfirm != nil }, set: { if !$0 { pickedToConfirm = nil } }),
+                    .confirmationDialog(pickedToConfirm.map(confirmTitle) ?? "",
+                                        isPresented: Binding(get: { pickedToConfirm != nil }, set: { if !$0 { pickedToConfirm = nil } }),
                                         titleVisibility: .visible) {
                         Button("Link") { if let t = pickedToConfirm { Task { await link(t) } } }
                     }
@@ -72,7 +73,9 @@ struct InboxReceiptView: View {
                 } else {
                     Button("Paid by…") { choosingPayer = true }
                         .confirmationDialog("Who paid?", isPresented: $choosingPayer) {
-                            ForEach(model.people.filter { !$0.archived }) { person in Button(person.name) { if receipt.totalCents != nil { Task { await paidBy(person) } } else { payer = person } } }
+                            ForEach(model.people.filter { !$0.archived }) { person in
+                                Button(person.name) { if receipt.totalCents != nil { Task { await paidBy(person) } } else { payer = person } }
+                            }
                         }
                 }
                 Button("Itemize") { itemizing = .inbox(receipt.id) }
