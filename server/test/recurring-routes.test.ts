@@ -45,3 +45,14 @@ test('refusals: money in, already recurring (Plaid name), bad frequency; replay 
   await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly' }, 'same');
   assert.equal((await get('/v1/recurring')).items.filter((i: { source: string }) => i.source === 'manual').length, 1);
 });
+
+test('already recurring also matches a renamed manual item and a renamed Plaid stream, creating nothing', async () => {
+  const { get, send } = setup();
+  const id = (await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly', name: 'Synthetic Tunes' })).json().id as string;
+  assert.equal((await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly' })).statusCode, 409);
+  await send('PATCH', `/v1/recurring/${id}`, { name: 'Synthetic Other' });
+  assert.equal((await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly' })).statusCode, 409);
+  await send('PATCH', '/v1/recurring/s-tv', { name: 'Synthetic Telly' });
+  assert.equal((await send('POST', '/v1/recurring', { transactionId: 'tv', frequency: 'monthly' })).statusCode, 409);
+  assert.equal((await get('/v1/recurring')).items.filter((i: { source: string }) => i.source === 'manual').length, 1);
+});

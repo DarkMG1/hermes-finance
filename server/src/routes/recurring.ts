@@ -44,7 +44,13 @@ export function recurringRoutes(app: FastifyInstance, deps: Deps): void {
       if (!t) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
       if (t.amountCents >= 0) throw new ApiError(409, 'NOT_MONEY_OUT', 'only money out can recur');
       const matchText = normalizeName(t.payee);
-      if (getRecurring(db, today(), false).items.some((i) => normalizeName(i.name) === matchText)) {
+      const keys = [
+        ...(db.prepare('SELECT match_text AS k FROM recurring_manual WHERE hidden = 0').all() as { k: string }[]).map((r) => r.k),
+        ...(db.prepare(`SELECT s.name, o.name AS o_name FROM recurring_streams s LEFT JOIN recurring_overrides o ON o.stream_id = s.stream_id
+            WHERE s.is_active = 1 AND s.status != 'tombstoned' AND COALESCE(o.hidden, 0) = 0`).all() as { name: string; o_name: string | null }[])
+          .flatMap((r) => [normalizeName(r.name), r.o_name ? normalizeName(r.o_name) : '']),
+      ];
+      if (keys.includes(matchText)) {
         throw new ApiError(409, 'ALREADY_RECURRING', 'this is already recurring');
       }
       const id = randomUUID();
