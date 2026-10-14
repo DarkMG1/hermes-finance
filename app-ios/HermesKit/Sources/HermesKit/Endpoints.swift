@@ -130,4 +130,20 @@ extension APIClient {
     public func deleteInboxReceipt(id: String) async throws {
         try await send("DELETE", "/v1/receipts/inbox/\(id)", body: nil, idempotencyKey: nil, timeout: 20)
     }
+
+    public func recurring(includeHidden: Bool = false) async throws -> RecurringList {
+        try decode(try await getData("/v1/recurring", query: includeHidden ? [URLQueryItem(name: "hidden", value: "1")] : []))
+    }
+
+    public func patchRecurring(id: String, body: PatchRecurringBody, idempotencyKey: String) async throws -> RecurringItem {
+        try await write("PATCH", "/v1/recurring/\(id)", body: body, key: idempotencyKey)
+    }
+
+    public func createRecurring(body: CreateRecurringBody, idempotencyKey: String) async throws -> RecurringItem {
+        try await write("POST", "/v1/recurring", body: body, key: idempotencyKey)
+    }
+
+    public func deleteRecurring(id: String) async throws {
+        try await send("DELETE", "/v1/recurring/\(id)", body: nil, idempotencyKey: nil, timeout: 20)
+    }
 }
