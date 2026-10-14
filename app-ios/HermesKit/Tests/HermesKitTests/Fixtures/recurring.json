@@ -1,0 +1,38 @@
+{
+  "upcoming": [
+    {
+      "id": "fx-stream",
+      "source": "plaid",
+      "name": "Synthetic TV",
+      "frequency": "monthly",
+      "amountCents": 1500,
+      "variable": false,
+      "lastDate": "2026-03-05",
+      "lastCents": 1700,
+      "nextDate": "2026-04-05",
+      "monthlyCents": 1500,
+      "priceUpCents": 200,
+      "isNew": false,
+      "hidden": false
+    }
+  ],
+  "items": [
+    {
+      "id": "fx-stream",
+      "source": "plaid",
+      "name": "Synthetic TV",
+      "frequency": "monthly",
+      "amountCents": 1500,
+      "variable": false,
+      "lastDate": "2026-03-05",
+      "lastCents": 1700,
+      "nextDate": "2026-04-05",
+      "monthlyCents": 1500,
+      "priceUpCents": 200,
+      "isNew": false,
+      "hidden": false
+    }
+  ],
+  "monthlyTotalCents": 1500,
+  "dueThisWeek": 0
+}

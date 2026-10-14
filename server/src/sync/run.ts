@@ -5,6 +5,7 @@ import { applyPages, getCutoverDate, upsertAccounts } from './apply.ts';
 import { localDay, snapshotBalances } from '../networth.ts';
 import { syncHoldings } from '../investments.ts';
 import { matchInbox } from '../inbox.ts';
+import { refreshRecurring } from '../recurring.ts';
 
 export type ItemResult = {
   itemId: string; institutionName: string; result: 'ok' | 'login_required' | 'error' | 'already_running';
@@ -69,6 +70,7 @@ export async function syncItem(deps: Deps, itemId: string): Promise<ItemResult> 
       // matching never fails a sync; the next sync tries again
       console.error('[hermes] inbox matching failed');
     }
+    await refreshRecurring(deps, itemId, token);
     await syncHoldings(deps, itemId, token);
     return { ...base, ...counts, result: 'ok' };
   } catch (e) {

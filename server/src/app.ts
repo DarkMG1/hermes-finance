@@ -13,6 +13,7 @@ import { reconcileRoutes } from './routes/reconcile.ts';
 import { receiptRoutes } from './routes/receipts.ts';
 import { inboxRoutes } from './routes/inbox.ts';
 import { itemizeRoutes } from './routes/itemize.ts';
+import { recurringRoutes } from './routes/recurring.ts';
 
 function tokenMatches(header: string | undefined, token: string): boolean {
   if (!header?.startsWith('Bearer ')) return false;
@@ -68,6 +69,7 @@ export function buildApp(deps: Deps): FastifyInstance {
   receiptRoutes(app, deps);
   inboxRoutes(app, deps);
   itemizeRoutes(app, deps);
+  recurringRoutes(app, deps);
 
   return app;
 }

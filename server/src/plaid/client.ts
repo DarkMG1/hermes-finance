@@ -79,6 +79,17 @@ export function createPlaidClient(config: Config): PlaidPort {
       } catch (e) { return rethrow(e); }
     },
 
+    async recurringGet(accessToken) {
+      try {
+        const { data } = await api.transactionsRecurringGet({ access_token: accessToken });
+        return data.outflow_streams.map((s) => ({
+          streamId: s.stream_id, name: s.merchant_name || s.description, frequency: String(s.frequency),
+          averageAmount: s.average_amount.amount ?? 0, lastAmount: s.last_amount.amount ?? 0, lastDate: s.last_date,
+          nextDate: s.predicted_next_date ?? null, isActive: s.is_active, status: String(s.status),
+        }));
+      } catch (e) { return rethrow(e); }
+    },
+
     async investmentsHoldingsGet(accessToken): Promise<PlaidHoldings> {
       try {
         const { data } = await api.investmentsHoldingsGet({ access_token: accessToken });

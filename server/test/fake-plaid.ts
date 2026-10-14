@@ -1,4 +1,4 @@
-import { PlaidError, type LinkResult, type LinkTokenOpts, type PlaidAccount, type PlaidHoldings, type PlaidInvestmentTxn, type PlaidSecurity, type PlaidPort, type PlaidTxn, type SyncPage } from '../src/plaid/port.ts';
+import { PlaidError, type LinkResult, type LinkTokenOpts, type PlaidAccount, type PlaidHoldings, type PlaidInvestmentTxn, type PlaidSecurity, type PlaidPort, type PlaidRecurringStream, type PlaidTxn, type SyncPage } from '../src/plaid/port.ts';
 
 export function txn(over: Partial<PlaidTxn> & { transactionId: string }): PlaidTxn {
   return {
@@ -19,6 +19,8 @@ export class FakePlaid implements PlaidPort {
   investmentTxns: { transactions: PlaidInvestmentTxn[]; securities: PlaidSecurity[] } = { transactions: [], securities: [] };
   investmentTxnCalls: [string, string][] = [];
   private investmentTxnFailures: string[] = [];
+  recurring: PlaidRecurringStream[] = [];
+  private recurringFailures: string[] = [];
   holdingsCalls = 0;
   linkOpts: LinkTokenOpts[] = [];
   private holdingsFailures: string[] = [];
@@ -49,6 +51,14 @@ export class FakePlaid implements PlaidPort {
     const failure = this.investmentTxnFailures.shift();
     if (failure) throw new PlaidError(failure);
     return this.investmentTxns;
+  }
+
+  failNextRecurring(code: string): void { this.recurringFailures.push(code); }
+
+  async recurringGet(): Promise<PlaidRecurringStream[]> {
+    const failure = this.recurringFailures.shift();
+    if (failure) throw new PlaidError(failure);
+    return this.recurring;
   }
 
   failNextHoldings(code: string): void { this.holdingsFailures.push(code); }
