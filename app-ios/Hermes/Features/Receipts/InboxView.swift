@@ -35,7 +35,7 @@ struct InboxView: View {
                     }
                 }
             }
-            if let linked = list?.recentlyLinked.prefix(3), !linked.isEmpty {
+            if let linked = list?.recentlyLinked, !linked.isEmpty {
                 Section("Recently linked") {
                     ForEach(linked) { linked in
                         HStack {

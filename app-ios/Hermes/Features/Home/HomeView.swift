@@ -143,6 +143,8 @@ struct HomeView: View {
         }
         .receiptCamera(isPresented: $snapping, scanDirectly: true) { showingInbox = true }
         .navigationDestination(isPresented: $showingInbox) { InboxView() }
+        // recently linked receipts show once: closing the inbox clears them and their badge
+        .onChange(of: showingInbox) { _, open in if !open { Task { await clearLinked() } } }
         .sheet(item: $selected) { transaction in
             TransactionDetailSheet(transaction: transaction) { await load() }
         }
@@ -196,6 +198,12 @@ struct HomeView: View {
         let check = await confirmShowBalances(lock: lock, model: model)
         if check.shown { hideBalances = false }
         showBalancesError = check.error
+    }
+
+    private func clearLinked() async {
+        guard let client = model.client, let list = try? await client.inbox() else { return }
+        for linked in list.recentlyLinked { try? await client.dismissInboxReceipt(id: linked.id) }
+        await loadInbox()
     }
 
     private func loadInbox() async {

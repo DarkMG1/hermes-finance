@@ -51,7 +51,7 @@ struct ActivityView: View {
         .themedForm()
         .navigationTitle("Activity")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $query)
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic))
         .sheet(isPresented: $choosingCategory) {
             NavigationStack {
                 CategoryPicker(selection: $categoryId, noneTitle: "All categories")

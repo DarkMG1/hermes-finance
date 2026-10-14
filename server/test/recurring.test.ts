@@ -4,7 +4,7 @@ import { addInterval, getRecurring, normalizeName, refreshRecurring } from '../s
 import { makeTestDeps, seedAccount, seedItem, seedTxn } from './helpers.ts';
 
 const stream = (id: string, extra: object = {}) => ({ streamId: id, name: 'Synthetic Stream', frequency: 'MONTHLY', averageAmount: 15.49, lastAmount: 15.49,
-  lastDate: '2026-03-01', nextDate: '2026-04-01', isActive: true, status: 'MATURE', ...extra });
+  lastDate: '2026-03-01', nextDate: '2026-04-01', isActive: true, status: 'MATURE', category: null, ...extra });
 
 test('refresh replaces an item’s streams in positive cents with lowercase enums; an error keeps the old rows', async () => {
   const { deps, plaid } = makeTestDeps();
@@ -16,7 +16,7 @@ test('refresh replaces an item’s streams in positive cents with lowercase enum
     { stream_id: 's1', frequency: 'monthly', average_cents: 1549, status: 'mature', is_active: 1 },
     { stream_id: 's2', frequency: 'semi_monthly', average_cents: 1549, status: 'early_detection', is_active: 0 },
   ]);
-  plaid.recurring = [stream('s3')];
+  plaid.recurring = [stream('s3'), stream('card', { category: 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' }), stream('xfer', { category: 'TRANSFER_OUT_ACCOUNT_TRANSFER' })];
   plaid.failNextRecurring('INTERNAL_SERVER_ERROR');
   await refreshRecurring(deps, 'item-1', 'tok');
   assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM recurring_streams').get() as { n: number }).n, 2);
