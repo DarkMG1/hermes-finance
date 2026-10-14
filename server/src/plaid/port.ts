@@ -19,7 +19,7 @@ export type PlaidHoldings = { holdings: PlaidHolding[]; securities: PlaidSecurit
 /** Outflow streams only; dollars, positive. */
 export type PlaidRecurringStream = {
   streamId: string; name: string; frequency: string; averageAmount: number; lastAmount: number; lastDate: string;
-  nextDate: string | null; isActive: boolean; status: string;
+  nextDate: string | null; isActive: boolean; status: string; category: string | null;
 };
 export type LinkTokenOpts = { mode: 'create' } | { mode: 'update'; accessToken: string; addInvestments?: boolean };
 export type LinkResult =

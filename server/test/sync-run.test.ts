@@ -197,7 +197,7 @@ test('an already_running reply is not saved under the idempotency key', async ()
 test('a failed recurring refresh never fails the sync; a good one stores the streams', async () => {
   const { deps, plaid } = setup();
   const n = () => (deps.db.prepare('SELECT COUNT(*) AS n FROM recurring_streams').get() as { n: number }).n;
-  plaid.recurring = [{ streamId: 's1', name: 'Synthetic Stream', frequency: 'MONTHLY', averageAmount: 5, lastAmount: 5, lastDate: '2026-03-01', nextDate: null, isActive: true, status: 'MATURE' }];
+  plaid.recurring = [{ streamId: 's1', name: 'Synthetic Stream', frequency: 'MONTHLY', averageAmount: 5, lastAmount: 5, lastDate: '2026-03-01', nextDate: null, isActive: true, status: 'MATURE', category: null }];
   plaid.failNextRecurring('X');
   assert.equal((await syncItem(deps, 'i1')).result, 'ok');
   assert.equal(n(), 0);
