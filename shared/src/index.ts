@@ -314,3 +314,18 @@ export type InboxList = z.infer<typeof InboxList>;
 
 export const LinkInboxBody = z.object({ transactionId: Id }).strict();
 export type LinkInboxBody = z.infer<typeof LinkInboxBody>;
+
+export const RecurringFrequency = z.enum(['weekly', 'biweekly', 'semi_monthly', 'monthly', 'annually', 'unknown']);
+const WritableFrequency = RecurringFrequency.exclude(['unknown']);
+export const RecurringItem = z.object({
+  id: z.string(), source: z.enum(['plaid', 'manual']), name: z.string(), frequency: RecurringFrequency, amountCents: Cents, variable: z.boolean(),
+  lastDate: DateStr, lastCents: Cents, nextDate: DateStr.nullable(), monthlyCents: Cents.nullable(), priceUpCents: Cents, isNew: z.boolean(), hidden: z.boolean(),
+});
+export type RecurringItem = z.infer<typeof RecurringItem>;
+export const RecurringList = z.object({ upcoming: z.array(RecurringItem), items: z.array(RecurringItem), monthlyTotalCents: Cents, dueThisWeek: z.number().int() });
+export type RecurringList = z.infer<typeof RecurringList>;
+export const PatchRecurringBody = z.object({ hidden: z.boolean().optional(), name: z.string().trim().min(1).max(100).nullable().optional(), frequency: WritableFrequency.optional() })
+  .strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+export type PatchRecurringBody = z.infer<typeof PatchRecurringBody>;
+export const CreateRecurringBody = z.object({ transactionId: Id, frequency: WritableFrequency, name: z.string().trim().min(1).max(100).optional() }).strict();
+export type CreateRecurringBody = z.infer<typeof CreateRecurringBody>;
