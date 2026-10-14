@@ -121,7 +121,7 @@ struct ItemizeView: View {
                         Text(sharesProblem).textStyle(.caption, color: Palette.loss)
                     }
                     InlineError(message: error)
-                } header: { Text(inboxId != nil ? "Shares · before the bank charge arrives" : "Shares") }
+                } header: { Text(inboxId != nil ? "Shares · you paid · applied when your charge arrives" : "Shares") }
                 if !(inboxId != nil && unread) { Section {
                     Button("Read receipt again") { confirmReread = true }
                         .disabled(locked)

@@ -25,6 +25,8 @@ struct InboxReceiptView: View {
     @State private var linked: LedgerTransaction?
     @State private var linkWrites = WriteGuard()
     @State private var linkTarget: String?
+    @State private var payWrites = WriteGuard()
+    @State private var payTarget: String?
     /// Paid by added the transaction but the link failed: retry just the link.
     @State private var unlinked: LedgerTransaction?
 
@@ -70,7 +72,7 @@ struct InboxReceiptView: View {
                 } else {
                     Button("Paid by…") { choosingPayer = true }
                         .confirmationDialog("Who paid?", isPresented: $choosingPayer) {
-                            ForEach(model.people.filter { !$0.archived }) { person in Button(person.name) { payer = person } }
+                            ForEach(model.people.filter { !$0.archived }) { person in Button(person.name) { if receipt.totalCents != nil { Task { await paidBy(person) } } else { payer = person } } }
                         }
                 }
                 Button("Itemize") { itemizing = .inbox(receipt.id) }
@@ -147,6 +149,25 @@ struct InboxReceiptView: View {
             unlinked = linkWrites.unresolved && thenItemize ? t : nil
             if case .api(404, _) = error as? ClientError { await refresh() }
             self.error = linkWrites.unresolved ? "Couldn't confirm the link. Try again; it won't link twice." : errorMessage(error)
+        }
+    }
+
+    /// Logs the receipt total as paid by `person`, links the receipt, and opens Itemize, whose save sets your share.
+    private func paidBy(_ person: Person) async {
+        guard let client = model.client, let total = receipt.totalCents else { return }
+        if payTarget != person.id { payWrites = WriteGuard(); payTarget = person.id }
+        busy = true
+        do {
+            let created = try await client.createTransaction(
+                CreateTransactionBody(date: DayText.ymd(day), amountCents: -total, payee: receipt.merchant ?? "Receipt", categoryId: nil, notes: nil,
+                                      paidByPersonId: person.id), idempotencyKey: payWrites.key)
+            payWrites.didSucceed()
+            busy = false
+            await link(created, thenItemize: true)
+        } catch {
+            payWrites.didFail(error)
+            busy = false
+            self.error = payWrites.unresolved ? "Couldn't confirm the save. Try again; it won't be added twice." : errorMessage(error)
         }
     }
 
