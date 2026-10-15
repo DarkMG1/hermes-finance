@@ -48,10 +48,11 @@ struct ActivityView: View {
         .listSectionSpacing(Space.xs)
         // 12 + the chips' 4pt padding = the 16pt the other tabs leave under the title
         .contentMargins(.top, Space.m, for: .scrollContent)
+        .background(HideSearchOnOpen())
         .themedForm()
         .navigationTitle("Activity")
         .navigationBarTitleDisplayMode(.inline)
-        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .automatic))
+        .searchable(text: $query)
         .sheet(isPresented: $choosingCategory) {
             NavigationStack {
                 CategoryPicker(selection: $categoryId, noneTitle: "All categories")
@@ -149,6 +150,50 @@ struct ActivityView: View {
         } catch {
             guard gen == generation, !Task.isCancelled else { return }
             self.error = errorMessage(error)
+        }
+    }
+}
+
+/// With an inline title the List opens with the search drawer already shown, and UIKit only collapses it on a scroll.
+/// Nudging the list once on first appearance tucks it away; pull-down and scroll then behave natively.
+/// iOS 26 also draws the field at the top of its 60pt drawer, flush against the bar, so it's shifted down to sit a little below centre.
+private struct HideSearchOnOpen: UIViewRepresentable {
+    func makeUIView(context: Context) -> Nudge { Nudge() }
+    func updateUIView(_ uiView: Nudge, context: Context) {}
+
+    final class Nudge: UIView {
+        private var done = false
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard window != nil, !done else { return }
+            done = true
+            DispatchQueue.main.async { self.nudge(tries: 10) }
+        }
+
+        private func nudge(tries: Int) {
+            guard let controller = controller(), let scroll = firstScroll(in: controller.view) else {
+                if tries > 0 { DispatchQueue.main.async { self.nudge(tries: tries - 1) } }
+                return
+            }
+            if let bar = controller.navigationItem.searchController?.searchBar {
+                // UIKit re-sets the bar's frame on every layout, which cancels a view transform; a sublayer transform sticks
+                let spare = bar.bounds.height - bar.searchTextField.frame.maxY
+                bar.layer.sublayerTransform = CATransform3DMakeTranslation(0, max(0, spare) + 6, 0)
+            }
+            scroll.contentOffset.y += 100
+            DispatchQueue.main.async { scroll.contentOffset.y = -scroll.adjustedContentInset.top }
+        }
+
+        private func controller() -> UIViewController? {
+            var responder: UIResponder? = self
+            while let next = responder, !(next is UIViewController) { responder = next.next }
+            return responder as? UIViewController
+        }
+
+        private func firstScroll(in view: UIView) -> UIScrollView? {
+            if let scroll = view as? UIScrollView { return scroll }
+            return view.subviews.lazy.compactMap { self.firstScroll(in: $0) }.first
         }
     }
 }
