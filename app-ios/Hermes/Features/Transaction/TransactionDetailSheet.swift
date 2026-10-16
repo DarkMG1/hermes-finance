@@ -5,6 +5,10 @@ struct TransactionDetailSheet: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     let transaction: LedgerTransaction
+    /// False when opened from History itself, so sheets don't stack without end.
+    var showsHistory = true
+    /// Other charges edited from History, for a list that refreshes rows one by one; the rest reload whole on onChange.
+    var onOthersChange: ((Set<String>) async -> Void)?
     let onChange: () async -> Void
 
     @State private var payee = ""
@@ -33,6 +37,7 @@ struct TransactionDetailSheet: View {
     @State private var receiptBusy = false
     /// A reconcile or receipt change saved straight away: closing must still refresh the list behind.
     @State private var savedOutside = false
+    @State private var othersChanged: Set<String> = []
     /// onAppear runs again when a full-screen cover (camera, receipt viewer) closes; fill the fields only once.
     @State private var loaded = false
 
@@ -63,13 +68,13 @@ struct TransactionDetailSheet: View {
             }
             Section {
                 Field(label: "Payee", error: payeeInvalid ? "Payee can't be empty" : nil) { TextField("Payee", text: $payee) }
-                // the saved payee, not the text being typed; a name with no a-z letters has nothing to match, and an unsplit
-                // charge for someone else is left out of every history
-                if transaction.payee.contains(where: { $0.isASCII && $0.isLetter }) && !(transaction.personId != nil && transaction.splitLines.isEmpty) {
+                // the saved payee, not the text being typed
+                if showsHistory && transaction.hasHistory == true {
                     NavigationLink {
-                        // this sheet's own charge changed there: its copy is stale, so close it rather than let it save over
-                        PayeeHistoryView(name: transaction.payee) { id in
-                            if id == transaction.id { await onChange(); dismiss() } else { savedOutside = true }
+                        PayeeHistoryView(match: URLQueryItem(name: "name", value: transaction.payee), title: transaction.payee) { ids in
+                            othersChanged.formUnion(ids.subtracting([transaction.id]))
+                            // this sheet's own charge changed there: its copy is stale, so close it rather than let it save over
+                            if ids.contains(transaction.id) { busy = true; await onChange(); dismiss() } else { savedOutside = true }
                         }
                     } label: { Text("History") }
                 }
@@ -168,7 +173,14 @@ struct TransactionDetailSheet: View {
             reconciled = transaction.reconciled ?? false
         }
         // a swipe-down skips onCancel, so the reconcile or receipt change refreshes the list here
-        .onDisappear { if savedOutside { Task { await onChange() } } }
+        .onDisappear {
+            let outside = savedOutside, others = othersChanged
+            guard outside || !others.isEmpty else { return }
+            Task {
+                if outside { await onChange() }
+                if !others.isEmpty { await onOthersChange?(others) }
+            }
+        }
         .sheet(item: $splitting, onDismiss: {
             // the edits were saved but the split was cancelled: this sheet's copy is stale, so close it
             if savedForSplit {
