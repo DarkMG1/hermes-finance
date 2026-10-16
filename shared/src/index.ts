@@ -231,9 +231,9 @@ export type ExpenseRow = z.infer<typeof ExpenseRow>;
 export const ExpensesPage = z.object({ rows: z.array(ExpenseRow), nextCursor: z.string().nullable() });
 export type ExpensesPage = z.infer<typeof ExpensesPage>;
 /** One payee's spending, or one recurring bill's. name is matched after normalizing (case, store numbers, punctuation), as a whole-word prefix;
- * bank (with name) also matches that exact bank text; month (YYYY-MM) narrows the rows only, never the months or totals. */
+ * bank (with name) also matches charges not renamed from that exact bank text; month (YYYY-MM) narrows the rows only, never the months or totals. */
 export const PayeeHistoryQuery = z.object({
-  name: z.string().min(1).max(2000).optional(), bank: z.string().max(2000).optional(), recurringId: Id.optional(),
+  name: z.string().min(1).max(2000).optional(), bank: z.string().min(1).max(2000).optional(), recurringId: Id.optional(),
   month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional(),
   cursor: z.string().max(400).optional(), limit: z.coerce.number().int().min(1).max(200).default(50),
 }).strict()

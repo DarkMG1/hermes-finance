@@ -145,21 +145,24 @@ const toLinked = (r: InboxRow): LinkedReceipt => ({
 const status = (r: InboxRow): InboxReceipt['status'] => (r.tagged ? 'read' : r.read_failed ? 'failed' : r.read_at === null ? 'reading' : 'read');
 
 /** The payee name already in use for this store: the most specific one whose words start the receipt's ("Acme" for "Acme Wholesale"),
- * the most used on a tie; else the receipt's own merchant. */
+ * the most used on a tie, then alphabetical; else the receipt's own merchant. */
 // ponytail: scans every distinct payee per receipt, fine for a personal ledger
 function payeeFor(known: { payee: string; n: number }[], merchant: string | null): string | null {
   if (!merchant) return null;
   const key = `${normalizeName(merchant)} `;
   const best = known.map((k) => ({ ...k, key: normalizeName(k.payee) }))
     .filter((k) => k.key && key.startsWith(`${k.key} `))
-    .sort((a, b) => b.key.length - a.key.length || b.n - a.n)[0];
+    .sort((a, b) => b.key.length - a.key.length || b.n - a.n || a.payee.localeCompare(b.payee))[0];
   return best?.payee ?? merchant;
 }
 
 export function listInbox(db: Db): InboxList {
   const waiting = db.prepare('SELECT * FROM inbox_receipts WHERE linked_at IS NULL ORDER BY captured_at DESC, id').all() as InboxRow[];
-  const known = waiting.length ? db.prepare(`SELECT payee, COUNT(*) AS n FROM transactions WHERE payee IS NOT NULL AND removed_at IS NULL
-      GROUP BY payee`).all() as { payee: string; n: number }[] : [];
+  // the names shown on charges (a bank row's merchant until renamed); never a person's IOU or Zelle row
+  const known = waiting.length ? db.prepare(`SELECT COALESCE(payee, merchant_name) AS payee, COUNT(*) AS n FROM transactions
+      WHERE COALESCE(payee, merchant_name) IS NOT NULL AND removed_at IS NULL AND amount_cents < 0 AND person_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM categories c WHERE c.id = category_id AND (c.is_transfer = 1 OR c.is_income = 1))
+      GROUP BY 1`).all() as { payee: string; n: number }[] : [];
   const linked = db.prepare(`SELECT * FROM inbox_receipts WHERE linked_at IS NOT NULL AND dismissed_at IS NULL AND linked_transaction_id IS NOT NULL
     AND EXISTS (SELECT 1 FROM receipts WHERE transaction_id = linked_transaction_id)
     ORDER BY linked_at DESC, id LIMIT 20`).all() as InboxRow[];

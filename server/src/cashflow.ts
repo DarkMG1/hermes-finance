@@ -38,9 +38,10 @@ const OUT = `((lines.category_id IS NOT NULL AND c.is_transfer = 0 AND c.is_inco
         lines.plaid_category GLOB 'INCOME*' OR lines.plaid_category GLOB 'TRANSFER_IN*'
         OR lines.plaid_category GLOB 'TRANSFER_OUT*' OR lines.plaid_category = 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'))))`;
 
-// Reimbursed charges (work pays them back) are money movement, not spending, but they still belong in a payee's History.
+// Reimbursed charges (work pays them back) are money movement, not spending, but they still belong in a payee's History: an unsplit
+// charge only, never the payback deposit or a split line fronted for someone else.
 // ponytail: found by category name, add a category flag if the owner ever renames it
-const REIMBURSED = "(c.is_transfer = 1 AND lower(c.name) LIKE 'reimburs%')";
+const REIMBURSED = "(c.is_transfer = 1 AND lower(c.name) LIKE 'reimburs%' AND lines.is_split = 0 AND lines.amount < 0)";
 
 // In: income categories only; an uncategorized inflow is never income
 const IN = '(lines.category_id IS NOT NULL AND c.is_income = 1)';
@@ -127,21 +128,26 @@ export function canHaveHistory(db: Db, rows: { id: string; date: string }[]): Se
 
 /** One payee's or bill's spending, by the same rules as Expenses: twelve months ending this month, and every matching charge, newest
  * first and paged. A Plaid bill's posted Plaid charges are exactly its stream's; every other row of a bill matches its name exactly, as
- * Recurring does; a payee's name matches as a whole-word prefix, and its bank text, when given, exactly. */
+ * Recurring does (and, like Recurring, falls back to the charge a manual bill was made from); a payee's name matches as a whole-word
+ * prefix, and its bank text, when given, matches charges not renamed from that same bank text. */
 export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): PayeeHistory {
   let name = q.name ?? '';
   let keys = [normalizeName(name)];
   let ids = new Set<string>();
+  let source: string | null = null;
   if (q.recurringId) {
     const s = db.prepare(`SELECT s.name, o.name AS o_name, s.transaction_ids FROM recurring_streams s
         LEFT JOIN recurring_overrides o ON o.stream_id = s.stream_id WHERE s.stream_id = ?`).get(q.recurringId) as { name: string; o_name: string | null; transaction_ids: string } | undefined;
-    const m = s ? undefined : db.prepare('SELECT name, match_text FROM recurring_manual WHERE id = ?').get(q.recurringId) as { name: string; match_text: string } | undefined;
+    const m = s ? undefined : db.prepare('SELECT name, match_text, source_transaction_id FROM recurring_manual WHERE id = ?').get(q.recurringId) as
+      { name: string; match_text: string; source_transaction_id: string | null } | undefined;
     if (s) { name = s.o_name ?? s.name; keys = [s.name, name].map(normalizeName); ids = new Set(JSON.parse(s.transaction_ids) as string[]); }
-    else if (m) { name = m.name; keys = [m.match_text]; }
+    else if (m) { name = m.name; keys = [m.match_text]; source = m.source_transaction_id; }
     else throw new ApiError(404, 'NOT_FOUND', 'recurring item not found');
   }
   keys = keys.filter(Boolean);
-  const bankKey = q.bank ? normalizeName(q.bank) : '';
+  // bank text compares whole (digits kept), so "CHECK 1234" never pools every check
+  const bankText = (b: string) => b.toLowerCase().replace(/\s+/g, ' ').trim();
+  const bankKey = q.bank ? bankText(q.bank) : '';
   if (!ids.size && !keys.length) throw new ApiError(400, 'NO_NAME', 'this name has nothing to match', 'name');
   const all = ['0000-01-01', '9999-12-31'];
   // a payee's "whole foods" matches "whole foods market", not the other way round
@@ -158,14 +164,8 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
       reimbursed: number;
     }[];
   const rows = new Map<string, { row: PayeeHistoryRow; at: Cursor }>();
-  for (const l of lines) {
-    // pre-cutover imports and pending charges are never in the stream's ids
-    const byId = ids.size > 0 && l.source === 'plaid' && !l.pending;
-    const bankHit = !!bankKey && normalizeName(l.bank_description) === bankKey;
-    const whole = byId ? ids.has(l.source_id!) : bankHit || [l.payee, l.merchant_name, l.bank_description].some(hit);
-    // the row is titled by the name that matched (a bank-text match by its Hermes name); a bill, like Recurring, never matches a split line's own payee
-    const named = byId ? whole && l.name : [q.recurringId ? null : l.name, l.payee, l.merchant_name, l.bank_description].find(hit)
-      ?? (bankHit ? l.payee ?? l.merchant_name ?? l.bank_description : undefined);
+  const collect = (match: (l: (typeof lines)[number]) => { named: string | false | undefined; whole: boolean }) => { for (const l of lines) {
+    const { named, whole } = match(l);
     if (!named) continue;
     const r = rows.get(l.transaction_id);
     if (r) { r.row.shareCents -= l.amount; r.row.reimbursed ||= l.reimbursed === 1; }
@@ -178,7 +178,19 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
         at: [l.date, l.created_at, l.row_order, l.transaction_id],
       });
     }
-  }
+  } };
+  collect((l) => {
+    // pre-cutover imports and pending charges are never in the stream's ids
+    const byId = ids.size > 0 && l.source === 'plaid' && !l.pending;
+    // a charge renamed away from its bank text was set apart on purpose (APPLE.COM/BILL: iCloud vs Music)
+    const bankHit = !!bankKey && bankText(l.bank_description) === bankKey && (l.payee === null || bankText(l.payee) === bankKey);
+    const whole = byId ? ids.has(l.source_id!) : bankHit || [l.payee, l.merchant_name, l.bank_description].some(hit);
+    // the row is titled by the name that matched; a bill, like Recurring, never matches a split line's own payee
+    const named = byId ? whole && l.name : [q.recurringId ? null : l.name, l.payee, l.merchant_name, l.bank_description].find(hit)
+      ?? (bankHit ? l.name : undefined);
+    return { named, whole };
+  });
+  if (!rows.size && source) collect((l) => ({ named: l.transaction_id === source && l.name, whole: true }));
   const months = Array.from({ length: 12 }, (_, i) => ({ month: monthBack(today, 11 - i), cents: 0 }));
   for (const { row } of rows.values()) {
     if (row.totalCents === row.shareCents) row.totalCents = null; // a self-only split reads as a plain charge
@@ -186,9 +198,11 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
     if (m && !row.upcoming) m.cents += row.shareCents;
   }
   const totalCents = months.reduce((s, m) => s + m.cents, 0);
-  // averaged over the months since the first charge (up to 12), so a new subscription shows its real monthly price
+  // averaged over the months from the first charge (at most 12 back) through this month, or last month while this month has no
+  // charge yet, so a new subscription shows its real monthly price
   const first = [...rows.values()].at(-1)?.row.date.slice(0, 7) ?? months[11]!.month;
-  const span = Math.max(1, 12 - Math.max(0, months.findIndex((m) => m.month >= first)));
+  const last = [...rows.values()].some(({ row }) => !row.upcoming && row.date.startsWith(months[11]!.month)) ? 11 : 10;
+  const span = Math.max(1, last + 1 - Math.max(0, months.findIndex((m) => m.month >= first)));
   const c = q.cursor ? decodeCursor(q.cursor) : null;
   const shown = [...rows.values()].filter(({ row }) => !q.month || row.date.startsWith(q.month));
   const after = c ? shown.filter(({ at }) => (at[0] !== c[0] ? at[0] < c[0] : at[1] !== c[1] ? at[1] < c[1] : at[2] < c[2])) : shown;

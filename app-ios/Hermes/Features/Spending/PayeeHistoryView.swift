@@ -40,7 +40,7 @@ struct PayeeHistoryView: View {
                         BarMark(x: .value("Month", bar.month), y: .value("Spent", Double(bar.cents) / 100))
                             .foregroundStyle(Palette.accent.opacity(month == nil || month == bar.month ? 1 : 0.3))
                             .accessibilityLabel(ReconcileMonth.title(bar.month))
-                            .accessibilityValue(Money.format(bar.cents))
+                            .accessibilityValue(month == bar.month ? "\(Money.format(bar.cents)), shown below" : Money.format(bar.cents))
                     }
                     .chartOverlay { proxy in
                         GeometryReader { geo in
@@ -50,11 +50,6 @@ struct PayeeHistoryView: View {
                                     select(tapped)
                                 }
                                 .accessibilityHidden(true)
-                        }
-                    }
-                    .accessibilityActions {
-                        ForEach(history.months, id: \.month) { bar in
-                            Button("Show \(ReconcileMonth.title(bar.month))") { select(bar.month) }
                         }
                     }
                     .chartXAxis { AxisMarks { value in AxisValueLabel { Text(value.as(String.self).map(Self.initial) ?? "") } } }
@@ -80,12 +75,14 @@ struct PayeeHistoryView: View {
                     }
                     if rows.isEmpty { Text("No charges found").textStyle(.subhead, color: Palette.secondaryText) }
                 } header: {
-                    if let month {
-                        HStack {
-                            Text(ReconcileMonth.title(month))
-                            Spacer()
-                            Button("Show all") { select(month) }
+                    // the same filter as tapping a bar, reachable by VoiceOver
+                    Menu {
+                        Button("All months") { if let month { select(month) } }
+                        ForEach(history.months.reversed(), id: \.month) { bar in
+                            Button(ReconcileMonth.title(bar.month)) { if month != bar.month { select(bar.month) } }
                         }
+                    } label: {
+                        Label(month.map(ReconcileMonth.title) ?? "All months", systemImage: "line.3.horizontal.decrease")
                     }
                 }
             }
@@ -113,15 +110,16 @@ struct PayeeHistoryView: View {
     }
 
     private func subtitle(_ row: PayeeHistoryRow) -> String {
-        [DayText.display(row.date), row.upcoming ? "Upcoming" : nil, row.reimbursed ? "Reimbursed" : nil,
+        [DayText.display(row.date), row.upcoming ? "Upcoming" : nil, row.reimbursed == true ? "Reimbursed" : nil,
          row.totalCents.map { "\(Money.format($0)) · your share" }]
             .compactMap { $0 }.joined(separator: " · ")
     }
 
-    /// Tapping the selected month again shows every month.
+    /// Tapping the selected month again shows every month; if that month can't load, the list stays on the one it shows.
     private func select(_ tapped: String) {
+        let shown = month
         month = month == tapped ? nil : tapped
-        Task { await load(reset: true) }
+        Task { if await !load(reset: true) { month = shown } }
     }
 
     private func sendChanges() {
@@ -131,8 +129,10 @@ struct PayeeHistoryView: View {
         Task { await onChange(ids) }
     }
 
-    private func load(reset: Bool) async {
-        guard let reader = model.reader, reset || !loading else { return }
+    /// False only when this, the latest load, failed; a load overtaken by a newer one leaves the state to it.
+    @discardableResult
+    private func load(reset: Bool) async -> Bool {
+        guard let reader = model.reader, reset || !loading else { return false }
         if reset { generation += 1 }
         let gen = generation
         loading = true
@@ -142,14 +142,16 @@ struct PayeeHistoryView: View {
         if !reset, let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
         do {
             let page = try await reader.read("/v1/payee-history", query: query, as: PayeeHistory.self)
-            guard gen == generation, !Task.isCancelled else { return }
+            guard gen == generation, !Task.isCancelled else { return true }
             rows = reset ? page.value.rows : rows + page.value.rows
             cursor = page.value.nextCursor
             lastLoad = page
             error = nil
+            return true
         } catch {
-            guard gen == generation, !Task.isCancelled else { return }
+            guard gen == generation, !Task.isCancelled else { return true }
             self.error = errorMessage(error)
+            return false
         }
     }
 
