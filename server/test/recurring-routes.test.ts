@@ -6,13 +6,17 @@ import { AUTH, makeTestDeps, seedAccount, seedItem, seedTxn } from './helpers.ts
 function setup() {
   const { deps } = makeTestDeps();
   seedItem(deps, { id: 'item-1', plaidItemId: 'p1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
-  deps.db.prepare("INSERT INTO recurring_streams VALUES ('s-tv', 'item-1', 'Synthetic TV', 'monthly', 1500, 1500, '2026-03-05', '2026-04-05', 1, 'mature', 'x')").run();
+  deps.db.prepare("INSERT INTO recurring_streams VALUES ('s-tv', 'item-1', 'Synthetic TV', 'monthly', 1500, 1500, '2026-03-05', '2026-04-05', 1, 'mature', 'x', ?)").run('["tv","tv-ach"]');
   seedAccount(deps.db, { id: 'a1', type: 'credit' });
   seedTxn(deps.db, { id: 'sub', accountId: 'a1', date: '2026-03-02', amountCents: -1099, payee: 'Synthetic Music', source: 'plaid', sourceId: 'sub' });
   seedTxn(deps.db, { id: 'tv', accountId: 'a1', date: '2026-03-05', amountCents: -1500, payee: 'Synthetic TV', source: 'plaid', sourceId: 'tv' });
+  // the stream's other charge carries only bank text; a same-named charge outside the stream and a non-Plaid id clash stay out
+  seedTxn(deps.db, { id: 'tv-ach', accountId: 'a1', date: '2026-03-06', amountCents: -1500, bankDescription: 'SYNTHETIC ACH 0042', source: 'plaid', sourceId: 'tv-ach' });
+  seedTxn(deps.db, { id: 'tv-other', accountId: 'a1', date: '2026-03-07', amountCents: -1500, payee: 'Synthetic TV', source: 'plaid', sourceId: 'tv-other' });
+  seedTxn(deps.db, { id: 'tv-card', accountId: 'a1', date: '2026-03-08', amountCents: -1500, payee: 'Synthetic TV', source: 'applecard', sourceId: 'tv' });
   seedTxn(deps.db, { id: 'noname', accountId: 'a1', date: '2026-03-03', amountCents: -100, payee: '#123456', source: 'plaid', sourceId: 'nn' });
   seedTxn(deps.db, { id: 'refund', accountId: 'a1', date: '2026-03-06', amountCents: 500, payee: 'Synthetic Shop', source: 'plaid', sourceId: 'rf' });
-  deps.db.prepare("INSERT INTO recurring_streams VALUES ('s-off', 'item-1', 'Synthetic Off', 'monthly', 100, 100, '2026-01-05', null, 0, 'mature', 'x')").run();
+  deps.db.prepare("INSERT INTO recurring_streams VALUES ('s-off', 'item-1', 'Synthetic Off', 'monthly', 100, 100, '2026-01-05', null, 0, 'mature', 'x', '[]')").run();
   const app = buildApp(deps);
   let n = 0;
   const get = async (url: string) => (await app.inject({ method: 'GET', url, headers: AUTH })).json();
@@ -61,11 +65,17 @@ test('already recurring also matches a renamed manual item and a renamed Plaid s
   assert.equal((await get('/v1/recurring')).items.filter((i: { source: string }) => i.source === 'manual').length, 1);
 });
 
-test('matchName is the stream name or match text, so a renamed bill still finds its charges', async () => {
+test('bill history: a Plaid stream lists exactly its charges, under any name; a manual bill matches its text', async () => {
   const { get, send } = setup();
   const id = (await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly', name: 'Synthetic Tunes' })).json().id as string;
   await send('PATCH', '/v1/recurring/s-tv', { name: 'Synthetic Telly' });
-  const items = (await get('/v1/recurring')).items as { id: string; name: string; matchName: string }[];
-  assert.deepEqual(items.map((i) => [i.id, i.name, i.matchName]), [['s-tv', 'Synthetic Telly', 'Synthetic TV'], [id, 'Synthetic Tunes', 'synthetic music']]);
-  assert.deepEqual((await get(`/v1/payee-history?name=${encodeURIComponent(items[1]!.matchName)}`)).rows.map((r: { transactionId: string }) => r.transactionId), ['sub']);
+  assert.equal((await get('/v1/recurring')).items.some((i: object) => 'matchName' in i), false);
+  const tv = await get('/v1/payee-history?recurringId=s-tv');
+  assert.equal(tv.name, 'Synthetic Telly');
+  assert.deepEqual(tv.rows.map((r: { transactionId: string; name: string }) => [r.transactionId, r.name]), [['tv-ach', 'SYNTHETIC ACH 0042'], ['tv', 'Synthetic TV']]);
+  const tunes = await get(`/v1/payee-history?recurringId=${id}`);
+  assert.deepEqual([tunes.name, tunes.rows.map((r: { transactionId: string }) => r.transactionId)], ['Synthetic Tunes', ['sub']]);
+  assert.equal((await get('/v1/payee-history?recurringId=nope')).code, 'NOT_FOUND');
+  assert.equal((await get('/v1/payee-history?recurringId=s-tv&name=Synthetic%20TV')).code, 'INVALID_REQUEST');
+  assert.equal((await get('/v1/payee-history')).code, 'INVALID_REQUEST');
 });

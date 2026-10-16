@@ -1,6 +1,7 @@
 import type { Account, Category, Home, ListTransactionsQuery, SpendingQuery, SplitLine, Transaction, TransactionPage } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
+import { normalizeName } from './recurring.ts';
 
 export type TxnRow = {
   id: string; account_id: string; source: 'plaid' | 'manual' | 'actual' | 'applecard'; date: string; amount_cents: number;
@@ -18,13 +19,16 @@ export function rowToTransaction(db: Db, r: TxnRow): Transaction {
   const splitLines: SplitLine[] = lines.map((l) => ({
     id: l.id, amountCents: l.amount_cents, categoryId: l.category_id, notes: l.notes, personId: l.person_id, payee: l.payee,
   }));
+  const payee = r.payee ?? r.merchant_name ?? r.bank_description;
   return {
     id: r.id, accountId: r.account_id, source: r.source, date: r.date, amountCents: r.amount_cents,
-    payee: r.payee ?? r.merchant_name ?? r.bank_description, bankDescription: r.bank_description,
+    payee, bankDescription: r.bank_description,
     merchantName: r.merchant_name, pending: r.pending === 1, categoryId: r.category_id, notes: r.notes, personId: r.person_id, paidByPersonId: r.paid_by_person_id, repaymentDismissed: r.repayment_dismissed === 1, splitLines,
     reconciled: r.reconciled_at !== null && r.reconciled_cents === r.amount_cents,
     forgiven: r.forgiven === 1,
     hasReceipt: db.prepare('SELECT 1 FROM receipts WHERE transaction_id = ?').get(r.id) !== undefined,
+    // raw bank text alone (no merchant, no owner payee) is often generic ("POS PURCHASE") and would pool unrelated charges
+    hasHistory: normalizeName(payee) !== '' && !(lines.length === 0 && r.person_id) && (r.payee !== null || r.merchant_name !== null),
   };
 }
 

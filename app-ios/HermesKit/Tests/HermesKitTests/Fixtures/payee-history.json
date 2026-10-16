@@ -58,7 +58,9 @@
       "date": "2026-03-12",
       "name": "Synthetic Split",
       "shareCents": 2500,
-      "totalCents": 4000
+      "totalCents": 4000,
+      "upcoming": false
     }
-  ]
+  ],
+  "nextCursor": null
 }

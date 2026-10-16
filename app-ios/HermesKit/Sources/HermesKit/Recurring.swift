@@ -5,8 +5,6 @@ public struct RecurringItem: Codable, Sendable, Identifiable {
     /// "plaid" or "manual"
     public let source: String
     public let name: String
-    /// The name charges are matched by: Plaid's own stream name or the manual bill's match text, never the rename.
-    public let matchName: String
     public let frequency: String
     public let amountCents: Int
     public let variable: Bool

@@ -21,7 +21,8 @@
       "splitLines": [],
       "reconciled": false,
       "forgiven": false,
-      "hasReceipt": false
+      "hasReceipt": false,
+      "hasHistory": true
     },
     {
       "id": "txn-1",
@@ -41,7 +42,8 @@
       "splitLines": [],
       "reconciled": false,
       "forgiven": false,
-      "hasReceipt": false
+      "hasReceipt": false,
+      "hasHistory": true
     }
   ]
 }

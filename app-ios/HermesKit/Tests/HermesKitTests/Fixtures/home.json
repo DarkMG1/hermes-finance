@@ -19,7 +19,8 @@
       "splitLines": [],
       "reconciled": false,
       "forgiven": false,
-      "hasReceipt": false
+      "hasReceipt": false,
+      "hasHistory": true
     },
     {
       "id": "txn-2",
@@ -39,7 +40,8 @@
       "splitLines": [],
       "reconciled": false,
       "forgiven": false,
-      "hasReceipt": false
+      "hasReceipt": false,
+      "hasHistory": true
     },
     {
       "id": "txn-3",
@@ -76,7 +78,8 @@
       ],
       "reconciled": false,
       "forgiven": false,
-      "hasReceipt": false
+      "hasReceipt": false,
+      "hasHistory": true
     },
     {
       "id": "txn-4",
@@ -96,7 +99,8 @@
       "splitLines": [],
       "reconciled": false,
       "forgiven": false,
-      "hasReceipt": false
+      "hasReceipt": false,
+      "hasHistory": false
     },
     {
       "id": "txn-5",
@@ -116,7 +120,8 @@
       "splitLines": [],
       "reconciled": false,
       "forgiven": false,
-      "hasReceipt": false
+      "hasReceipt": false,
+      "hasHistory": false
     },
     {
       "id": "txn-6",
@@ -136,7 +141,8 @@
       "splitLines": [],
       "reconciled": false,
       "forgiven": false,
-      "hasReceipt": false
+      "hasReceipt": false,
+      "hasHistory": true
     }
   ],
   "reconnect": [

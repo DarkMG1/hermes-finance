@@ -85,7 +85,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   out.inbox = await get('/v1/receipts/inbox');
   out['inbox-items'] = await get('/v1/receipts/inbox/inbox-1/items');
   out['inbox-linked'] = (out.inbox as { recentlyLinked: unknown[] }).recentlyLinked[0];
-  db.prepare("INSERT INTO recurring_streams VALUES ('fx-stream', 'item-1', 'Synthetic TV', 'monthly', 1500, 1700, '2026-03-05', '2026-04-05', 1, 'mature', '2026-03-15T11:00:00.000Z')").run();
+  db.prepare("INSERT INTO recurring_streams VALUES ('fx-stream', 'item-1', 'Synthetic TV', 'monthly', 1500, 1700, '2026-03-05', '2026-04-05', 1, 'mature', '2026-03-15T11:00:00.000Z', '[]')").run();
   out.recurring = await get('/v1/recurring');
   out['payee-history'] = await get('/v1/payee-history?name=Synthetic%20Split');
   // investments use their own database so the accounts, home and net worth fixtures stay as they are

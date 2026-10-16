@@ -34,6 +34,8 @@ export const Transaction = z.object({
   reconciled: z.boolean(),
   hasReceipt: z.boolean(),
   forgiven: z.boolean(),
+  /** The payee has a History to open: a name to match, not an unsplit IOU, and not only the bank's raw text. */
+  hasHistory: z.boolean(),
 });
 export type Transaction = z.infer<typeof Transaction>;
 
@@ -228,15 +230,19 @@ export type ExpenseRow = z.infer<typeof ExpenseRow>;
 
 export const ExpensesPage = z.object({ rows: z.array(ExpenseRow), nextCursor: z.string().nullable() });
 export type ExpensesPage = z.infer<typeof ExpensesPage>;
-/** One payee's spending. name is matched after normalizing (case, store numbers, punctuation). */
-export const PayeeHistoryQuery = z.object({ name: z.string().min(1).max(200) }).strict();
+/** One payee's spending, or one recurring bill's. name is matched after normalizing (case, store numbers, punctuation), as a whole-word prefix. */
+export const PayeeHistoryQuery = z.object({
+  name: z.string().min(1).max(2000).optional(), recurringId: Id.optional(),
+  cursor: z.string().max(400).optional(), limit: z.coerce.number().int().min(1).max(200).default(50),
+}).strict()
+  .refine((q) => (q.name === undefined) !== (q.recurringId === undefined), { message: 'give name or recurringId', path: ['name'] });
 export type PayeeHistoryQuery = z.infer<typeof PayeeHistoryQuery>;
 export const PayeeMonth = z.object({ month: z.string(), cents: Cents });
 export type PayeeMonth = z.infer<typeof PayeeMonth>;
-/** shareCents: the owner's part, spending positive; totalCents: the whole charge, only when split. */
-export const PayeeHistoryRow = z.object({ transactionId: Id, date: DateStr, name: z.string(), shareCents: Cents, totalCents: Cents.nullable() });
+/** shareCents: the owner's part, spending positive; totalCents: the whole charge, only when the charge itself matched and is split; upcoming: dated after today. */
+export const PayeeHistoryRow = z.object({ transactionId: Id, date: DateStr, name: z.string(), shareCents: Cents, totalCents: Cents.nullable(), upcoming: z.boolean() });
 export type PayeeHistoryRow = z.infer<typeof PayeeHistoryRow>;
-export const PayeeHistory = z.object({ name: z.string(), months: z.array(PayeeMonth), totalCents: Cents, averageCents: Cents, rows: z.array(PayeeHistoryRow) });
+export const PayeeHistory = z.object({ name: z.string(), months: z.array(PayeeMonth), totalCents: Cents, averageCents: Cents, rows: z.array(PayeeHistoryRow), nextCursor: z.string().nullable() });
 export type PayeeHistory = z.infer<typeof PayeeHistory>;
 
 export const Bank = z.object({
@@ -328,7 +334,7 @@ export type LinkInboxBody = z.infer<typeof LinkInboxBody>;
 export const RecurringFrequency = z.enum(['weekly', 'biweekly', 'semi_monthly', 'monthly', 'annually', 'unknown']);
 const WritableFrequency = RecurringFrequency.exclude(['unknown']);
 export const RecurringItem = z.object({
-  id: z.string(), source: z.enum(['plaid', 'manual']), name: z.string(), matchName: z.string(), frequency: RecurringFrequency, amountCents: Cents, variable: z.boolean(),
+  id: z.string(), source: z.enum(['plaid', 'manual']), name: z.string(), frequency: RecurringFrequency, amountCents: Cents, variable: z.boolean(),
   lastDate: DateStr, lastCents: Cents, nextDate: DateStr.nullable(), monthlyCents: Cents.nullable(), priceUpCents: Cents, isNew: z.boolean(), hidden: z.boolean(),
 });
 export type RecurringItem = z.infer<typeof RecurringItem>;
