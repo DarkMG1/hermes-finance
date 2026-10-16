@@ -195,3 +195,39 @@ test('stop-words are not merchant evidence: The Corner Store vs THE HOME DEPOT o
   assert.equal(matchInbox(deps), 0);
   assert.equal(getInboxRow(db, 'r1')!.linked_transaction_id, null);
 });
+
+test('a waiting receipt offers the payee name already used for its store: most specific, then most used', () => {
+  const { db, snap } = setup();
+  seedCategory(db, { id: 'cat-xfer', name: 'Synthetic Transfer', isTransfer: true });
+  const read = (id: string, merchant: string | null) => { snap(id); storeRead(db, id, { ...READ, merchant }, 'now'); };
+  read('r1', 'Synthetic Grocer Wholesale #42');
+  read('r2', 'Synthetic Bakery');
+  read('r3', 'SYNTHETIC GROCERIES');
+  read('r4', 'Synthetic Moss Club');
+  read('r5', 'Synthetic Tires');
+  read('r6', null);
+  read('r7', 'Synthetic Mart Express');
+  const txn = (id: string, more: Partial<Parameters<typeof seedTxn>[1]>) => seedTxn(db, { id, accountId: 'card', date: '2026-01-01', amountCents: -1, ...more });
+  txn('k1', { payee: 'Synthetic Grocer' });
+  txn('k2', { payee: 'SYNTHETIC GROCER' });
+  txn('k3', { payee: 'Synthetic Grocer' });
+  txn('k4', { payee: 'Synthetic' });
+  txn('k5', { payee: 'Synthetic Grocer Annex' });
+  // removed, a person's row, a transfer and money in never name a store
+  txn('k6', { payee: 'SYNTHETIC GROCER', removedAt: 'x' });
+  txn('k7', { payee: 'SYNTHETIC GROCER', removedAt: 'x' });
+  txn('k8', { payee: 'Synthetic Moss', personId: 'p1' });
+  txn('k9', { payee: 'Synthetic Moss', categoryId: 'cat-xfer' });
+  txn('k10', { payee: 'Synthetic Moss', amountCents: 100 });
+  // a bank row's merchant name is its shown name until renamed
+  txn('k11', { merchantName: 'Synthetic Mart', source: 'plaid', sourceId: 's-k11' });
+  const payees = Object.fromEntries(listInbox(db).waiting.map((w) => [w.id, w.payee]));
+  assert.deepEqual(payees, { r1: 'Synthetic Grocer', r2: 'Synthetic', r3: 'Synthetic', r4: 'Synthetic', r5: 'Synthetic', r6: null, r7: 'Synthetic Mart' });
+});
+
+test('a receipt with no known store keeps its own name', () => {
+  const { db, snap } = setup();
+  snap('r1');
+  storeRead(db, 'r1', { ...READ, merchant: 'Synthetic Bakery' }, 'now');
+  assert.equal(listInbox(db).waiting[0]!.payee, 'Synthetic Bakery');
+});

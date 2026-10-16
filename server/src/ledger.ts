@@ -1,6 +1,6 @@
 import type { Account, Category, Home, ListTransactionsQuery, SpendingQuery, SplitLine, Transaction, TransactionPage } from '@hermes/shared';
 import type { Db } from './db.ts';
-import { countsAsSpending } from './cashflow.ts';
+import { canHaveHistory } from './cashflow.ts';
 import { ApiError } from './errors.ts';
 import { normalizeName } from './recurring.ts';
 
@@ -14,7 +14,7 @@ export type TxnRow = {
 export const TXN_COLS = 'id, account_id, source, date, amount_cents, bank_description, merchant_name, pending, category_id, payee, notes, person_id, '
   + 'paid_by_person_id, repayment_dismissed, reconciled_at, reconciled_cents, forgiven';
 
-export function rowToTransaction(db: Db, r: TxnRow, spending = countsAsSpending(db, [r])): Transaction {
+export function rowToTransaction(db: Db, r: TxnRow, spending = canHaveHistory(db, [r])): Transaction {
   const lines = db.prepare('SELECT id, amount_cents, category_id, notes, person_id, payee FROM split_lines WHERE transaction_id = ? ORDER BY id').all(r.id) as
     { id: string; amount_cents: number; category_id: string | null; notes: string | null; person_id: string | null; payee: string | null }[];
   const splitLines: SplitLine[] = lines.map((l) => ({
@@ -100,7 +100,7 @@ export function listTransactions(db: Db, q: ListTransactionsQuery): TransactionP
     .all(...args, q.limit + 1) as TxnRow[];
   const page = rows.slice(0, q.limit);
   const last = page[page.length - 1];
-  const spending = countsAsSpending(db, page);
+  const spending = canHaveHistory(db, page);
   return {
     transactions: page.map((r) => rowToTransaction(db, r, spending)),
     nextCursor: rows.length > q.limit && last ? encodeCursor(last.date, last.id) : null,

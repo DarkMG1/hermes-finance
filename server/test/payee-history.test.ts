@@ -167,3 +167,92 @@ test('hasHistory: a listed page matches the per-transaction values', () => {
   assert.deepEqual(page.map((t) => t.hasHistory), page.map((t) => getTransaction(db, t.id)!.hasHistory));
   assert.deepEqual(page.filter((t) => t.hasHistory).map((t) => t.id).sort(), ['x1', 'x3']);
 });
+
+test('payee history: month narrows the rows only; average spans the months since the first charge', async () => {
+  const get = setup();
+  const full = (await get('synthetic market')).json() as PayeeHistory;
+  const feb = (await get('synthetic market', '&month=2026-02')).json() as PayeeHistory;
+  assert.deepEqual(feb.rows.map((r) => r.transactionId), ['h3', 'h2']);
+  assert.deepEqual([feb.months, feb.totalCents, feb.averageCents], [full.months, full.totalCents, full.averageCents]);
+  assert.equal((await get('synthetic market', '&month=2026-13')).statusCode, 400);
+  // every Grove charge is this month: the average is the month itself, not a twelfth
+  const grove = (await get('Synthetic Grove')).json() as PayeeHistory;
+  assert.deepEqual([grove.totalCents, grove.averageCents], [300, 300]);
+});
+
+test('payee history: bank text adds charges not renamed from it; reimbursed charges count and are marked, paybacks and fronted lines do not', async () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'a1' });
+  seedPerson(db, { id: 'p1', name: 'Synthetic Quill' });
+  seedCategory(db, { id: 'c-soft', name: 'Software' });
+  seedCategory(db, { id: 'c-reimb', name: 'Reimbursement', isTransfer: true });
+  seedCategory(db, { id: 'c-xfer', name: 'Transfer', isTransfer: true });
+  const row = (id: string, date: string, payee: string | undefined, bankDescription: string, categoryId: string | null, amountCents = -2000) =>
+    seedTxn(db, { id, accountId: 'a1', date, amountCents, payee, bankDescription, categoryId: categoryId ?? undefined });
+  row('o1', '2026-03-01', 'Synthetic AI', 'SAI*CHAT SUBSCR', 'c-reimb');
+  row('o2', '2026-02-20', undefined, 'SAI*CHAT  SUBSCR', 'c-soft');
+  row('o3', '2026-02-10', 'SAI*CHAT SUBSCR', 'SAI*CHAT SUBSCR', 'c-soft');
+  row('o4', '2026-02-01', 'Chat Plan', 'SAI*CHAT SUBSCR', 'c-soft');
+  row('o5', '2026-01-20', undefined, 'SAI*CHAT SUBSCR 9999', 'c-soft');
+  row('o6', '2026-01-15', 'Synthetic AI', 'SAI*API', 'c-soft');
+  row('o7', '2026-01-10', 'Synthetic AI', 'SAI*CHAT SUBSCR', 'c-xfer');
+  row('o8', '2026-03-05', 'Synthetic AI', 'SYNTHETIC PAYROLL', 'c-reimb', 2000);
+  // the owner fronted the rest for someone, filed under Reimbursement: only the owner's own line counts
+  row('o9', '2026-01-05', 'Synthetic AI', 'SAI*TEAM', null, -3000);
+  seedSplit(db, { id: 'o9-a', transactionId: 'o9', amountCents: -1000, categoryId: 'c-soft' });
+  seedSplit(db, { id: 'o9-b', transactionId: 'o9', amountCents: -2000, categoryId: 'c-reimb' });
+  const app = buildApp(deps);
+  const get = async (q: string) => (await app.inject({ method: 'GET', url: `/v1/payee-history?${q}`, headers: AUTH })).json() as PayeeHistory;
+  const h = await get(`name=Synthetic%20AI&bank=${encodeURIComponent('SAI*CHAT SUBSCR')}`);
+  assert.deepEqual(h.rows.map((r) => [r.transactionId, r.name, r.shareCents, r.reimbursed]), [
+    ['o1', 'Synthetic AI', 2000, true], ['o2', 'SAI*CHAT  SUBSCR', 2000, false], ['o3', 'SAI*CHAT SUBSCR', 2000, false],
+    ['o6', 'Synthetic AI', 2000, false], ['o9', 'Synthetic AI', 1000, false]]);
+  // first charge in January, one this month: averaged over three months
+  assert.deepEqual([h.totalCents, h.averageCents], [9000, 3000]);
+  assert.deepEqual((await get('name=Synthetic%20AI')).rows.map((r) => r.transactionId), ['o1', 'o6', 'o9']);
+  assert.deepEqual(['o1', 'o7', 'o8'].map((id) => getTransaction(db, id)!.hasHistory), [true, false, false]);
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/payee-history?recurringId=x&bank=y', headers: AUTH })).statusCode, 400);
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/payee-history?name=x&bank=', headers: AUTH })).statusCode, 400);
+});
+
+test('payee history: no charge yet this month averages through last month; a month pages by cursor', async () => {
+  const { deps } = makeTestDeps();
+  seedAccount(deps.db, { id: 'a1' });
+  seedCategory(deps.db, { id: 'c-food', name: 'Food' });
+  for (const [id, date] of [['y1', '2026-01-05'], ['y2', '2026-02-05'], ['y3', '2026-02-06'], ['y4', '2026-02-07']] as const) {
+    seedTxn(deps.db, { id, accountId: 'a1', date, amountCents: -1000, categoryId: 'c-food', payee: 'Synthetic Gym' });
+  }
+  const app = buildApp(deps);
+  const get = async (q: string) => (await app.inject({ method: 'GET', url: `/v1/payee-history?name=Synthetic%20Gym${q}`, headers: AUTH })).json() as PayeeHistory;
+  assert.deepEqual([(await get('')).totalCents, (await get('')).averageCents], [4000, 2000]);
+  const seen: string[] = [];
+  let cursor: string | null = null;
+  do {
+    const page: PayeeHistory = await get(`&month=2026-02&limit=1${cursor ? `&cursor=${cursor}` : ''}`);
+    seen.push(...page.rows.map((r) => r.transactionId));
+    cursor = page.nextCursor;
+  } while (cursor);
+  assert.deepEqual(seen, ['y4', 'y3', 'y2']);
+});
+
+test('payee history: a manual bill whose charge was renamed falls back to that charge, as Recurring does', async () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'a1' });
+  seedCategory(db, { id: 'c-soft', name: 'Software' });
+  seedCategory(db, { id: 'c-reimb', name: 'Reimbursement', isTransfer: true });
+  seedCategory(db, { id: 'c-xfer', name: 'Transfer', isTransfer: true });
+  seedTxn(db, { id: 'src', accountId: 'a1', date: '2026-03-01', amountCents: -2500, categoryId: 'c-soft', payee: 'Synthetic New Cloud' });
+  db.prepare("INSERT INTO recurring_manual VALUES ('man-1', 'Synthetic Hosting', 'synthetic cloud', 'monthly', 'src', 0, 'x')").run();
+  const app = buildApp(deps);
+  const h = (await app.inject({ method: 'GET', url: '/v1/payee-history?recurringId=man-1', headers: AUTH })).json() as PayeeHistory;
+  assert.deepEqual(h.rows.map((r) => [r.transactionId, r.shareCents]), [['src', 2500]]);
+  const bill = async () => (await app.inject({ method: 'GET', url: '/v1/payee-history?recurringId=man-1', headers: AUTH })).json() as PayeeHistory;
+  // a transfer with the bill's name ends the fallback in Recurring, so here too
+  seedTxn(db, { id: 'x1', accountId: 'a1', date: '2026-02-15', amountCents: -2500, categoryId: 'c-xfer', payee: 'Synthetic Cloud' });
+  assert.deepEqual((await bill()).rows.map((r) => r.transactionId), []);
+  // a reimbursed charge with the bill's name is in the bill's History, marked
+  seedTxn(db, { id: 'm2', accountId: 'a1', date: '2026-02-01', amountCents: -2500, categoryId: 'c-reimb', payee: 'Synthetic Cloud' });
+  assert.deepEqual((await bill()).rows.map((r) => [r.transactionId, r.reimbursed]), [['m2', true]]);
+});

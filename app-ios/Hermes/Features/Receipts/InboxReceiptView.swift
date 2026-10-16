@@ -102,7 +102,7 @@ struct InboxReceiptView: View {
         })
         // set after the sheet closes: SwiftUI drops a sheet presented while another is up
         .sheet(item: $payer, onDismiss: { if let t = linked { itemizing = .transaction(t) } }, content: { person in
-            TheyPaidSheet(person: person, prefill: .init(payee: receipt.merchant ?? "", date: day, totalCents: receipt.totalCents),
+            TheyPaidSheet(person: person, prefill: .init(payee: receipt.payee ?? receipt.merchant ?? "", date: day, totalCents: receipt.totalCents),
                           onCreated: { created in await link(created, thenItemize: true) }, onDone: {})
         })
         // linked: this inbox receipt is gone, so close its stale screen too
@@ -162,8 +162,8 @@ struct InboxReceiptView: View {
         busy = true
         do {
             let created = try await client.createTransaction(
-                CreateTransactionBody(date: DayText.ymd(day), amountCents: -total, payee: receipt.merchant ?? "Receipt", categoryId: nil, notes: nil,
-                                      paidByPersonId: person.id), idempotencyKey: payWrites.key)
+                CreateTransactionBody(date: DayText.ymd(day), amountCents: -total, payee: receipt.payee ?? receipt.merchant ?? "Receipt",
+                                      categoryId: nil, notes: nil, paidByPersonId: person.id), idempotencyKey: payWrites.key)
             payWrites.didSucceed()
             busy = false
             await link(created, thenItemize: true)

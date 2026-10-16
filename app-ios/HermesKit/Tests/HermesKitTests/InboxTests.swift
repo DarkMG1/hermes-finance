@@ -5,6 +5,7 @@ import Testing
 @Test func inboxFixturesDecode() throws {
     let list: InboxList = try JSONDecoder().decode(InboxList.self, from: try fixture("inbox"))
     #expect(list.waiting.first?.id == "inbox-1" && list.waiting.first?.status == "read" && list.waiting.first?.totalCents == 640)
+    #expect(list.waiting.first?.payee == "Synthetic Grocer")
     #expect(list.recentlyLinked.first?.transactionId == "txn-1" && list.recentlyLinked.first?.splitApplied == true)
     let items = try JSONDecoder().decode(Itemization.self, from: try fixture("inbox-items"))
     #expect(items.items.first?.people == ["me"])

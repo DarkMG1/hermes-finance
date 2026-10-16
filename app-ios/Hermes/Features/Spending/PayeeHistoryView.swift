@@ -5,8 +5,8 @@ import SwiftUI
 /// One payee's spending: twelve monthly bars and every matching charge. Splits count your share.
 struct PayeeHistoryView: View {
     @Environment(AppModel.self) private var model
-    /// `name` for a payee, `recurringId` for a bill.
-    let match: URLQueryItem
+    /// `name` (and `bank`) for a payee, `recurringId` for a bill.
+    let match: [URLQueryItem]
     let title: String
     /// The ids of transactions edited or deleted here, once their sheet has closed.
     let onChange: (Set<String>) async -> Void
@@ -20,6 +20,10 @@ struct PayeeHistoryView: View {
     @State private var opened: LedgerTransaction?
     @State private var openGeneration = 0
     @State private var changed: Set<String> = []
+    /// A tapped bar's "YYYY-MM": the list shows only that month.
+    @State private var month: String?
+    /// The month the shown rows and cursor belong to.
+    @State private var loadedMonth: String?
 
     var body: some View {
         List {
@@ -34,11 +38,21 @@ struct PayeeHistoryView: View {
                     Text(history.averageCents < 0 ? "About \(average)/month back" : "About \(average)/month")
                         .textStyle(.subhead, color: Palette.secondaryText)
                     // x is the unique "YYYY-MM"; only the label is the initial, or same-letter months would merge
-                    Chart(history.months, id: \.month) { month in
-                        BarMark(x: .value("Month", month.month), y: .value("Spent", Double(month.cents) / 100))
-                            .foregroundStyle(Palette.accent)
-                            .accessibilityLabel(ReconcileMonth.title(month.month))
-                            .accessibilityValue(Money.format(month.cents))
+                    Chart(history.months, id: \.month) { bar in
+                        BarMark(x: .value("Month", bar.month), y: .value("Spent", Double(bar.cents) / 100))
+                            .foregroundStyle(Palette.accent.opacity(month == nil || month == bar.month ? 1 : 0.3))
+                            .accessibilityLabel(ReconcileMonth.title(bar.month))
+                            .accessibilityValue(month == bar.month ? "\(Money.format(bar.cents)), shown below" : Money.format(bar.cents))
+                    }
+                    .chartOverlay { proxy in
+                        GeometryReader { geo in
+                            Rectangle().fill(.clear).contentShape(Rectangle())
+                                .onTapGesture { location in
+                                    guard let plot = proxy.plotFrame, let tapped: String = proxy.value(atX: location.x - geo[plot].origin.x) else { return }
+                                    select(tapped)
+                                }
+                                .accessibilityHidden(true)
+                        }
                     }
                     .chartXAxis { AxisMarks { value in AxisValueLabel { Text(value.as(String.self).map(Self.initial) ?? "") } } }
                     .chartYAxis {
@@ -62,6 +76,16 @@ struct PayeeHistoryView: View {
                         }
                     }
                     if rows.isEmpty { Text("No charges found").textStyle(.subhead, color: Palette.secondaryText) }
+                } header: {
+                    // the same filter as tapping a bar, reachable by VoiceOver
+                    Menu {
+                        Button("All months") { if let month { select(month) } }
+                        ForEach(history.months.reversed(), id: \.month) { bar in
+                            Button(ReconcileMonth.title(bar.month)) { if month != bar.month { select(bar.month) } }
+                        }
+                    } label: {
+                        Label(month.map(ReconcileMonth.title) ?? "All months", systemImage: "line.3.horizontal.decrease")
+                    }
                 }
             }
             if loading || (lastLoad == nil && error == nil) { ProgressView().frame(maxWidth: .infinity) }
@@ -88,8 +112,15 @@ struct PayeeHistoryView: View {
     }
 
     private func subtitle(_ row: PayeeHistoryRow) -> String {
-        [DayText.display(row.date), row.upcoming ? "Upcoming" : nil, row.totalCents.map { "\(Money.format($0)) · your share" }]
+        [DayText.display(row.date), row.upcoming ? "Upcoming" : nil, row.reimbursed == true ? "Reimbursed" : nil,
+         row.totalCents.map { "\(Money.format($0)) · your share" }]
             .compactMap { $0 }.joined(separator: " · ")
+    }
+
+    /// Tapping the selected month again shows every month; if that month can't load, the list stays on the one it shows.
+    private func select(_ tapped: String) {
+        month = month == tapped ? nil : tapped
+        Task { if await !load(reset: true) { month = loadedMonth } }
     }
 
     private func sendChanges() {
@@ -99,24 +130,31 @@ struct PayeeHistoryView: View {
         Task { await onChange(ids) }
     }
 
-    private func load(reset: Bool) async {
-        guard let reader = model.reader, reset || !loading else { return }
+    /// False only when this, the latest load, failed; a load overtaken by a newer one leaves the state to it.
+    @discardableResult
+    private func load(reset: Bool) async -> Bool {
+        guard let reader = model.reader, reset || !loading else { return false }
         if reset { generation += 1 }
         let gen = generation
         loading = true
         defer { if gen == generation { loading = false } }
-        var query = [match]
+        let requested = month
+        var query = match
+        if let month { query.append(URLQueryItem(name: "month", value: month)) }
         if !reset, let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
         do {
             let page = try await reader.read("/v1/payee-history", query: query, as: PayeeHistory.self)
-            guard gen == generation, !Task.isCancelled else { return }
+            guard gen == generation, !Task.isCancelled else { return true }
             rows = reset ? page.value.rows : rows + page.value.rows
+            loadedMonth = requested
             cursor = page.value.nextCursor
             lastLoad = page
             error = nil
+            return true
         } catch {
-            guard gen == generation, !Task.isCancelled else { return }
+            guard gen == generation, !Task.isCancelled else { return true }
             self.error = errorMessage(error)
+            return false
         }
     }
 
