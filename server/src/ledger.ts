@@ -1,6 +1,8 @@
 import type { Account, Category, Home, ListTransactionsQuery, SpendingQuery, SplitLine, Transaction, TransactionPage } from '@hermes/shared';
 import type { Db } from './db.ts';
+import { countsAsSpending } from './cashflow.ts';
 import { ApiError } from './errors.ts';
+import { normalizeName } from './recurring.ts';
 
 export type TxnRow = {
   id: string; account_id: string; source: 'plaid' | 'manual' | 'actual' | 'applecard'; date: string; amount_cents: number;
@@ -12,19 +14,22 @@ export type TxnRow = {
 export const TXN_COLS = 'id, account_id, source, date, amount_cents, bank_description, merchant_name, pending, category_id, payee, notes, person_id, '
   + 'paid_by_person_id, repayment_dismissed, reconciled_at, reconciled_cents, forgiven';
 
-export function rowToTransaction(db: Db, r: TxnRow): Transaction {
+export function rowToTransaction(db: Db, r: TxnRow, spending = countsAsSpending(db, [r])): Transaction {
   const lines = db.prepare('SELECT id, amount_cents, category_id, notes, person_id, payee FROM split_lines WHERE transaction_id = ? ORDER BY id').all(r.id) as
     { id: string; amount_cents: number; category_id: string | null; notes: string | null; person_id: string | null; payee: string | null }[];
   const splitLines: SplitLine[] = lines.map((l) => ({
     id: l.id, amountCents: l.amount_cents, categoryId: l.category_id, notes: l.notes, personId: l.person_id, payee: l.payee,
   }));
+  const payee = r.payee ?? r.merchant_name ?? r.bank_description;
   return {
     id: r.id, accountId: r.account_id, source: r.source, date: r.date, amountCents: r.amount_cents,
-    payee: r.payee ?? r.merchant_name ?? r.bank_description, bankDescription: r.bank_description,
+    payee, bankDescription: r.bank_description,
     merchantName: r.merchant_name, pending: r.pending === 1, categoryId: r.category_id, notes: r.notes, personId: r.person_id, paidByPersonId: r.paid_by_person_id, repaymentDismissed: r.repayment_dismissed === 1, splitLines,
     reconciled: r.reconciled_at !== null && r.reconciled_cents === r.amount_cents,
     forgiven: r.forgiven === 1,
     hasReceipt: db.prepare('SELECT 1 FROM receipts WHERE transaction_id = ?').get(r.id) !== undefined,
+    // raw bank text alone (no merchant, no owner payee) is often generic ("POS PURCHASE") and would pool unrelated charges
+    hasHistory: normalizeName(payee) !== '' && (r.payee !== null || r.merchant_name !== null) && spending.has(r.id),
   };
 }
 
@@ -95,8 +100,9 @@ export function listTransactions(db: Db, q: ListTransactionsQuery): TransactionP
     .all(...args, q.limit + 1) as TxnRow[];
   const page = rows.slice(0, q.limit);
   const last = page[page.length - 1];
+  const spending = countsAsSpending(db, page);
   return {
-    transactions: page.map((r) => rowToTransaction(db, r)),
+    transactions: page.map((r) => rowToTransaction(db, r, spending)),
     nextCursor: rows.length > q.limit && last ? encodeCursor(last.date, last.id) : null,
   };
 }

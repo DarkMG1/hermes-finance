@@ -24,6 +24,8 @@ func json(_ value: some Encodable) throws -> String {
     let home = try decode(Home.self, "home")
     #expect(home.recent.count == 6 && home.owedToYouCents == 200 && home.youOweCents == 0 && home.repaymentSuggestions == 1)
     #expect(home.reconnect.map(\.institutionName) == ["Synthetic Credit Union"])
+    // txn-2 is a paycheck, txn-4 an unsplit charge for someone else, txn-5 only raw bank text
+    #expect(home.recent.map(\.hasHistory) == [true, false, true, false, false, true])
     let accounts = try decode([Account].self, "accounts")
     #expect(accounts.count == 3)
     let categories = try decode([Category].self, "categories")
@@ -232,8 +234,9 @@ func json(_ value: some Encodable) throws -> String {
     var old = try #require(split)
     old["reconciled"] = nil
     old["hasReceipt"] = nil
+    old["hasHistory"] = nil
     let decoded = try JSONDecoder().decode(LedgerTransaction.self, from: JSONSerialization.data(withJSONObject: old))
-    #expect(decoded.reconciled == nil && decoded.hasReceipt == nil)
+    #expect(decoded.reconciled == nil && decoded.hasReceipt == nil && decoded.hasHistory == nil)
 }
 
 @Test func reconcileMonthTitles() {

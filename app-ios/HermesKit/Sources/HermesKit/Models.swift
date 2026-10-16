@@ -63,6 +63,8 @@ public struct LedgerTransaction: Codable, Sendable, Identifiable, Hashable {
     public let hasReceipt: Bool?
     /// nil from servers before v1.7.5
     public let forgiven: Bool?
+    /// The server's say on whether History can find anything; nil from servers before v1.8.1.
+    public let hasHistory: Bool?
 }
 
 public struct TransactionPage: Codable, Sendable {
@@ -202,6 +204,34 @@ public struct ExpenseRow: Codable, Sendable, Identifiable, Hashable {
 
 public struct ExpensesPage: Codable, Sendable {
     public let rows: [ExpenseRow]
+    public let nextCursor: String?
+}
+
+public struct PayeeMonth: Codable, Sendable {
+    /// "YYYY-MM"
+    public let month: String
+    public let cents: Int
+}
+
+public struct PayeeHistoryRow: Codable, Sendable, Identifiable {
+    public let transactionId: String
+    public let date: String
+    public let name: String
+    /// Your part, spending positive.
+    public let shareCents: Int
+    /// The whole charge, only when it was split.
+    public let totalCents: Int?
+    /// Dated after today; left out of the monthly totals.
+    public let upcoming: Bool
+    public var id: String { transactionId }
+}
+
+public struct PayeeHistory: Codable, Sendable {
+    public let name: String
+    public let months: [PayeeMonth]
+    public let totalCents: Int
+    public let averageCents: Int
+    public let rows: [PayeeHistoryRow]
     public let nextCursor: String?
 }
 

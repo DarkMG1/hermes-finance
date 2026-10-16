@@ -33,5 +33,6 @@
   ],
   "reconciled": false,
   "forgiven": false,
-  "hasReceipt": false
+  "hasReceipt": false,
+  "hasHistory": true
 }

@@ -14,11 +14,11 @@ export async function refreshRecurring(deps: Deps, itemId: string, accessToken: 
     const now = deps.now().toISOString();
     deps.db.transaction(() => {
       deps.db.prepare('DELETE FROM recurring_streams WHERE item_id = ?').run(itemId);
-      const insert = deps.db.prepare(`INSERT INTO recurring_streams (stream_id, item_id, name, frequency, average_cents, last_cents, last_date, next_date, is_active, status, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+      const insert = deps.db.prepare(`INSERT INTO recurring_streams (stream_id, item_id, name, frequency, average_cents, last_cents, last_date, next_date, is_active, status, updated_at, transaction_ids)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
       for (const s of streams.filter((x) => !isTransfer(x.category))) {
         insert.run(s.streamId, itemId, s.name, s.frequency.toLowerCase(), cents(s.averageAmount), cents(s.lastAmount), s.lastDate, s.nextDate,
-          s.isActive ? 1 : 0, s.status.toLowerCase(), now);
+          s.isActive ? 1 : 0, s.status.toLowerCase(), now, JSON.stringify(s.transactionIds));
       }
     })();
   } catch (e) {

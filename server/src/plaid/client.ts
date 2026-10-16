@@ -86,7 +86,7 @@ export function createPlaidClient(config: Config): PlaidPort {
           streamId: s.stream_id, name: s.merchant_name || s.description, frequency: String(s.frequency),
           averageAmount: s.average_amount.amount ?? 0, lastAmount: s.last_amount.amount ?? 0, lastDate: s.last_date,
           nextDate: s.predicted_next_date ?? null, isActive: s.is_active, status: String(s.status),
-          category: s.personal_finance_category?.detailed ?? null,
+          category: s.personal_finance_category?.detailed ?? null, transactionIds: s.transaction_ids,
         }));
       } catch (e) { return rethrow(e); }
     },

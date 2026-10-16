@@ -18,7 +18,8 @@
       "splitLines": [],
       "reconciled": false,
       "forgiven": false,
-      "hasReceipt": false
+      "hasReceipt": false,
+      "hasHistory": false
     },
     "personId": "person-1"
   }

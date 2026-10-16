@@ -1,6 +1,7 @@
 import type { Reconcile, ReconcileMonths, Transaction } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
+import { countsAsSpending } from './cashflow.ts';
 import { getTransaction, periodRange, rowToTransaction, TXN_COLS, type TxnRow } from './ledger.ts';
 
 // Money out the owner should look at once a month, including their share of what someone else paid. Over alias `t` (transactions).
@@ -28,7 +29,8 @@ export function getReconcile(db: Db, month: string): Reconcile {
     .get(from, toExclusive) as { n: number };
   const rows = db.prepare(`SELECT ${TXN_COLS} FROM transactions t WHERE t.date >= ? AND t.date < ? AND ${NEEDS_RECONCILE} AND ${OPEN}
     ORDER BY t.date, t.created_at, t.rowid`).all(from, toExclusive) as TxnRow[];
-  return { month, total: n, open: rows.length, transactions: rows.map((r) => rowToTransaction(db, r)) };
+  const spending = countsAsSpending(db, rows);
+  return { month, total: n, open: rows.length, transactions: rows.map((r) => rowToTransaction(db, r, spending)) };
 }
 
 export function reconcileMonths(db: Db): ReconcileMonths {

@@ -76,7 +76,8 @@ struct ActivityView: View {
             }
         }
         .sheet(item: $selected) { transaction in
-            TransactionDetailSheet(transaction: transaction) { await refresh(transaction.id) }
+            TransactionDetailSheet(transaction: transaction, onOthersChange: { ids in for id in ids { await refresh(id) } },
+                                   onChange: { await refresh(transaction.id) })
         }
         .sheet(isPresented: $adding) {
             AddTransactionSheet { await load(reset: true) }

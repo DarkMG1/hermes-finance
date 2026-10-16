@@ -4,17 +4,17 @@ import { addInterval, getRecurring, normalizeName, refreshRecurring } from '../s
 import { makeTestDeps, seedAccount, seedItem, seedTxn } from './helpers.ts';
 
 const stream = (id: string, extra: object = {}) => ({ streamId: id, name: 'Synthetic Stream', frequency: 'MONTHLY', averageAmount: 15.49, lastAmount: 15.49,
-  lastDate: '2026-03-01', nextDate: '2026-04-01', isActive: true, status: 'MATURE', category: null, ...extra });
+  lastDate: '2026-03-01', nextDate: '2026-04-01', isActive: true, status: 'MATURE', category: null, transactionIds: ['t-a', 't-b'], ...extra });
 
 test('refresh replaces an item’s streams in positive cents with lowercase enums; an error keeps the old rows', async () => {
   const { deps, plaid } = makeTestDeps();
   seedItem(deps, { id: 'item-1', plaidItemId: 'p1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
   plaid.recurring = [stream('s1'), stream('s2', { frequency: 'SEMI_MONTHLY', status: 'EARLY_DETECTION', isActive: false })];
   await refreshRecurring(deps, 'item-1', 'tok');
-  const rows = deps.db.prepare('SELECT stream_id, frequency, average_cents, status, is_active FROM recurring_streams ORDER BY stream_id').all();
+  const rows = deps.db.prepare('SELECT stream_id, frequency, average_cents, status, is_active, transaction_ids FROM recurring_streams ORDER BY stream_id').all();
   assert.deepEqual(rows, [
-    { stream_id: 's1', frequency: 'monthly', average_cents: 1549, status: 'mature', is_active: 1 },
-    { stream_id: 's2', frequency: 'semi_monthly', average_cents: 1549, status: 'early_detection', is_active: 0 },
+    { stream_id: 's1', frequency: 'monthly', average_cents: 1549, status: 'mature', is_active: 1, transaction_ids: '["t-a","t-b"]' },
+    { stream_id: 's2', frequency: 'semi_monthly', average_cents: 1549, status: 'early_detection', is_active: 0, transaction_ids: '["t-a","t-b"]' },
   ]);
   plaid.recurring = [stream('s3'), stream('card', { category: 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' }), stream('xfer', { category: 'TRANSFER_OUT_ACCOUNT_TRANSFER' })];
   plaid.failNextRecurring('INTERNAL_SERVER_ERROR');
@@ -38,7 +38,7 @@ test('read model: active plaid streams with overrides, manual items, price up, m
   const { deps } = makeTestDeps();
   const { db } = deps;
   seedItem(deps, { id: 'item-1', plaidItemId: 'p1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
-  const ins = db.prepare(`INSERT INTO recurring_streams VALUES (?, 'item-1', ?, ?, ?, ?, ?, ?, ?, ?, 'x')`);
+  const ins = db.prepare(`INSERT INTO recurring_streams VALUES (?, 'item-1', ?, ?, ?, ?, ?, ?, ?, ?, 'x', '[]')`);
   ins.run('s-tv', 'Synthetic TV', 'monthly', 1500, 1700, '2026-03-05', '2026-04-05', 1, 'mature');
   ins.run('s-gym', 'Synthetic Gym', 'monthly', 4000, 4000, '2026-02-20', '2026-03-20', 1, 'early_detection');
   ins.run('s-old', 'Synthetic Old', 'monthly', 999, 999, '2025-01-01', null, 0, 'tombstoned');
@@ -80,7 +80,7 @@ test('median averages the middle two; a manual item a visible Plaid stream also 
   const { deps } = makeTestDeps();
   const { db } = deps;
   seedItem(deps, { id: 'item-1', plaidItemId: 'p1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
-  const ins = db.prepare(`INSERT INTO recurring_streams VALUES (?, 'item-1', ?, 'monthly', 999, 999, '2026-03-10', '2026-04-10', 1, 'mature', 'x')`);
+  const ins = db.prepare(`INSERT INTO recurring_streams VALUES (?, 'item-1', ?, 'monthly', 999, 999, '2026-03-10', '2026-04-10', 1, 'mature', 'x', '[]')`);
   ins.run('s1', 'SYNTHETIC CLOUD 4455');
   ins.run('s2', 'Synthetic Other');
   db.prepare("INSERT INTO recurring_overrides (stream_id, name) VALUES ('s2', 'Synthetic Box')").run();
@@ -102,7 +102,7 @@ test('past next dates roll forward by whole intervals; windows include today, +7
   const { deps } = makeTestDeps();
   const { db } = deps;
   seedItem(deps, { id: 'item-1', plaidItemId: 'p1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
-  const ins = db.prepare(`INSERT INTO recurring_streams VALUES (?, 'item-1', ?, ?, 100, 100, ?, ?, 1, 'mature', 'x')`);
+  const ins = db.prepare(`INSERT INTO recurring_streams VALUES (?, 'item-1', ?, ?, 100, 100, ?, ?, 1, 'mature', 'x', '[]')`);
   for (const [id, next] of [['d0', '2026-03-15'], ['d7', '2026-03-22'], ['d8', '2026-03-23'], ['d30', '2026-04-14'], ['d31', '2026-04-15']]) {
     ins.run(id, `Synthetic ${id}`, 'monthly', '2026-03-01', next);
   }

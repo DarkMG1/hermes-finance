@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { AppleCardImportResult, Bank, Home, Investments, Itemization, LinkSession, NetWorthHistory, Spending, SyncStatus, Transaction, TransactionPage } from '@hermes/shared';
+import { AppleCardImportResult, Bank, Home, Investments, Itemization, LinkSession, NetWorthHistory, PayeeHistory, Spending, SyncStatus, Transaction, TransactionPage } from '@hermes/shared';
 import { buildFixtures, FIXTURE_DIR } from './fixtures/generate.ts';
 
 const root = join(import.meta.dirname, '..', '..');
@@ -17,6 +17,7 @@ test('committed iOS fixtures match what the server returns today (run `npm run f
 test('fixtures satisfy the shared contract', async () => {
   const f = Object.fromEntries(Object.entries(await buildFixtures()).map(([k, v]) => [k, JSON.parse(v) as unknown]));
   Home.parse(f['home.json']);
+  PayeeHistory.parse(f['payee-history.json']);
   TransactionPage.parse(f['transactions-page.json']);
   Transaction.parse(f['transaction.json']);
   Spending.parse(f['spending.json']);

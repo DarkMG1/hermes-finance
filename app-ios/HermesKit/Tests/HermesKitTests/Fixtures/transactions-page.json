@@ -18,7 +18,8 @@
       "splitLines": [],
       "reconciled": false,
       "forgiven": false,
-      "hasReceipt": false
+      "hasReceipt": false,
+      "hasHistory": true
     },
     {
       "id": "txn-2",
@@ -38,7 +39,8 @@
       "splitLines": [],
       "reconciled": false,
       "forgiven": false,
-      "hasReceipt": false
+      "hasReceipt": false,
+      "hasHistory": false
     }
   ],
   "nextCursor": "WyIyMDI2LTAzLTEzIiwidHhuLTIiXQ"

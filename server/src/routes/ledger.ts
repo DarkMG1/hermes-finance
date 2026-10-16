@@ -1,13 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
-import { CreateTransactionBody, ExpensesQuery, ListTransactionsQuery, NetWorthQuery, PatchAccountBody, PatchSplitLineBody, PatchTransactionBody, PutSplitsBody, SpendingQuery } from '@hermes/shared';
+import { CreateTransactionBody, ExpensesQuery, ListTransactionsQuery, NetWorthQuery, PatchAccountBody, PatchSplitLineBody, PatchTransactionBody, PayeeHistoryQuery, PutSplitsBody, SpendingQuery } from '@hermes/shared';
 import type { Db } from '../db.ts';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { assertPersonTaggable, owedToYouCents, suggestions, youOweCents } from '../people.ts';
-import { getExpenses, getSpending } from '../cashflow.ts';
+import { getExpenses, getPayeeHistory, getSpending } from '../cashflow.ts';
 import { restoreToInbox } from '../inbox.ts';
 import { getNetWorth, localDay } from '../networth.ts';
 import { oldestOpenBefore } from '../reconcile.ts';
@@ -58,6 +58,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   app.get('/v1/expenses', async (req) => getExpenses(db, parseBody(ExpensesQuery, req.query)));
   app.get('/v1/spending', async (req) => getSpending(db, parseBody(SpendingQuery, req.query)));
   app.get('/v1/net-worth', async (req) => getNetWorth(db, parseBody(NetWorthQuery, req.query).range, localDay(deps.now())));
+  app.get('/v1/payee-history', async (req) => getPayeeHistory(db, parseBody(PayeeHistoryQuery, req.query), localDay(deps.now())));
 
   app.get<{ Params: { id: string } }>('/v1/transactions/:id', async (req) => {
     const t = getTransaction(db, req.params.id);

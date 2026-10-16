@@ -46,7 +46,13 @@ struct RecurringView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task(id: showHidden) { await load() }
         .refreshable { await load() }
-        .sheet(item: $editing) { item in RecurringSheet(item: item) { await load() } }
+        .sheet(item: $editing) { item in
+            RecurringSheet(item: item) {
+                await load()
+                // History edits keep the sheet open: show it the fresh item (same id, so it stays presented), unless it has closed
+                if let id = editing?.id { editing = list?.items.first(where: { $0.id == id }) ?? editing }
+            }
+        }
     }
 
     private func row(_ item: RecurringItem, subtitle: String?) -> some View {
