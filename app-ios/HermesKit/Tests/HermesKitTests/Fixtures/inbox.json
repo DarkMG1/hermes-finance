@@ -8,6 +8,7 @@
       "purchaseDate": "2026-03-15",
       "totalCents": 640,
       "tagged": false,
+      "payee": "Synthetic Grocer",
       "suggestions": []
     }
   ],

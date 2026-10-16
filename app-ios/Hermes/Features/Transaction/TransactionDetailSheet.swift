@@ -71,7 +71,9 @@ struct TransactionDetailSheet: View {
                 // the saved payee, not the text being typed
                 if showsHistory && transaction.hasHistory == true {
                     NavigationLink {
-                        PayeeHistoryView(match: URLQueryItem(name: "name", value: transaction.payee), title: transaction.payee) { ids in
+                        PayeeHistoryView(match: [URLQueryItem(name: "name", value: transaction.payee)]
+                                         + (transaction.bankDescription.isEmpty ? [] : [URLQueryItem(name: "bank", value: transaction.bankDescription)]),
+                                         title: transaction.payee) { ids in
                             othersChanged.formUnion(ids.subtracting([transaction.id]))
                             // this sheet's own charge changed there: its copy is stale, so close it rather than let it save over
                             if ids.contains(transaction.id) { busy = true; await onChange(); dismiss() } else { savedOutside = true }

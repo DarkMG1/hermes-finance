@@ -223,6 +223,8 @@ public struct PayeeHistoryRow: Codable, Sendable, Identifiable {
     public let totalCents: Int?
     /// Dated after today; left out of the monthly totals.
     public let upcoming: Bool
+    /// In the Reimbursement category: paid back, but still this payee's charge.
+    public let reimbursed: Bool
     public var id: String { transactionId }
 }
 

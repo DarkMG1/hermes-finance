@@ -195,3 +195,20 @@ test('stop-words are not merchant evidence: The Corner Store vs THE HOME DEPOT o
   assert.equal(matchInbox(deps), 0);
   assert.equal(getInboxRow(db, 'r1')!.linked_transaction_id, null);
 });
+
+test('a waiting receipt offers the payee name already used for its store: most specific, then most used', () => {
+  const { db, snap } = setup();
+  const read = (id: string, merchant: string) => { snap(id); storeRead(db, id, { ...READ, merchant }, 'now'); };
+  read('r1', 'Synthetic Grocer Wholesale #42');
+  read('r2', 'Synthetic Bakery');
+  read('r3', 'SYNTHETIC GROCERIES');
+  seedTxn(db, { id: 'k1', accountId: 'card', date: '2026-01-01', amountCents: -1, payee: 'Synthetic Grocer' });
+  seedTxn(db, { id: 'k2', accountId: 'card', date: '2026-01-02', amountCents: -1, payee: 'SYNTHETIC GROCER' });
+  seedTxn(db, { id: 'k3', accountId: 'card', date: '2026-01-03', amountCents: -1, payee: 'Synthetic Grocer' });
+  seedTxn(db, { id: 'k4', accountId: 'card', date: '2026-01-04', amountCents: -1, payee: 'Synthetic' });
+  seedTxn(db, { id: 'k5', accountId: 'card', date: '2026-01-05', amountCents: -1, payee: 'Synthetic Grocer Annex' });
+  seedTxn(db, { id: 'k6', accountId: 'card', date: '2026-01-06', amountCents: -1, payee: 'Synthetic Grocer', removedAt: 'x' });
+  seedTxn(db, { id: 'k7', accountId: 'card', date: '2026-01-07', amountCents: -1, payee: 'Synthetic Grocer', removedAt: 'x' });
+  const payees = Object.fromEntries(listInbox(db).waiting.map((w) => [w.id, w.payee]));
+  assert.deepEqual(payees, { r1: 'Synthetic Grocer', r2: 'Synthetic', r3: 'Synthetic' });
+});

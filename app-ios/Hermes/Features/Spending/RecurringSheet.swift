@@ -36,7 +36,7 @@ struct RecurringSheet: View {
                     Text("\(DayText.display(item.lastDate)) · \(Money.format(item.lastCents))")
                 }
                 NavigationLink {
-                    PayeeHistoryView(match: URLQueryItem(name: "recurringId", value: item.id), title: item.name) { _ in await onDone() }
+                    PayeeHistoryView(match: [URLQueryItem(name: "recurringId", value: item.id)], title: item.name) { _ in await onDone() }
                 } label: { Text("History") }
             }
             Section {

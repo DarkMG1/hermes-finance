@@ -51,7 +51,7 @@
     }
   ],
   "totalCents": 2500,
-  "averageCents": 208,
+  "averageCents": 2500,
   "rows": [
     {
       "transactionId": "txn-3",
@@ -59,7 +59,8 @@
       "name": "Synthetic Split",
       "shareCents": 2500,
       "totalCents": 4000,
-      "upcoming": false
+      "upcoming": false,
+      "reimbursed": false
     }
   ],
   "nextCursor": null

@@ -11,6 +11,8 @@ public struct InboxReceipt: Codable, Sendable, Identifiable {
     public let totalCents: Int?
     /// Items were tagged in the inbox; linking applies them as the split.
     public let tagged: Bool
+    /// The payee name already used for this store ("Acme" for "Acme Wholesale"), else `merchant`.
+    public let payee: String?
     public let suggestions: [LedgerTransaction]
 }
 

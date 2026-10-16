@@ -230,17 +230,23 @@ export type ExpenseRow = z.infer<typeof ExpenseRow>;
 
 export const ExpensesPage = z.object({ rows: z.array(ExpenseRow), nextCursor: z.string().nullable() });
 export type ExpensesPage = z.infer<typeof ExpensesPage>;
-/** One payee's spending, or one recurring bill's. name is matched after normalizing (case, store numbers, punctuation), as a whole-word prefix. */
+/** One payee's spending, or one recurring bill's. name is matched after normalizing (case, store numbers, punctuation), as a whole-word prefix;
+ * bank (with name) also matches that exact bank text; month (YYYY-MM) narrows the rows only, never the months or totals. */
 export const PayeeHistoryQuery = z.object({
-  name: z.string().min(1).max(2000).optional(), recurringId: Id.optional(),
+  name: z.string().min(1).max(2000).optional(), bank: z.string().max(2000).optional(), recurringId: Id.optional(),
+  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional(),
   cursor: z.string().max(400).optional(), limit: z.coerce.number().int().min(1).max(200).default(50),
 }).strict()
-  .refine((q) => (q.name === undefined) !== (q.recurringId === undefined), { message: 'give name or recurringId', path: ['name'] });
+  .refine((q) => (q.name === undefined) !== (q.recurringId === undefined), { message: 'give name or recurringId', path: ['name'] })
+  .refine((q) => q.bank === undefined || q.name !== undefined, { message: 'bank goes with name', path: ['bank'] });
 export type PayeeHistoryQuery = z.infer<typeof PayeeHistoryQuery>;
 export const PayeeMonth = z.object({ month: z.string(), cents: Cents });
 export type PayeeMonth = z.infer<typeof PayeeMonth>;
-/** shareCents: the owner's part, spending positive; totalCents: the whole charge, only when the charge itself matched and is split; upcoming: dated after today. */
-export const PayeeHistoryRow = z.object({ transactionId: Id, date: DateStr, name: z.string(), shareCents: Cents, totalCents: Cents.nullable(), upcoming: z.boolean() });
+/** shareCents: the owner's part, spending positive; totalCents: the whole charge, only when the charge itself matched and is split; upcoming: dated
+ * after today; reimbursed: in the Reimbursement category. */
+export const PayeeHistoryRow = z.object({
+  transactionId: Id, date: DateStr, name: z.string(), shareCents: Cents, totalCents: Cents.nullable(), upcoming: z.boolean(), reimbursed: z.boolean(),
+});
 export type PayeeHistoryRow = z.infer<typeof PayeeHistoryRow>;
 export const PayeeHistory = z.object({ name: z.string(), months: z.array(PayeeMonth), totalCents: Cents, averageCents: Cents, rows: z.array(PayeeHistoryRow), nextCursor: z.string().nullable() });
 export type PayeeHistory = z.infer<typeof PayeeHistory>;
@@ -316,6 +322,8 @@ export type SaveItemsBody = z.infer<typeof SaveItemsBody>;
 export const InboxReceipt = z.object({
   id: Id, capturedAt: z.string(), status: z.enum(['reading', 'read', 'failed']),
   merchant: z.string().nullable(), purchaseDate: DateStr.nullable(), totalCents: Cents.nullable(), tagged: z.boolean(),
+  /** the payee name already used for this store (Acme for "Acme Wholesale"), else merchant */
+  payee: z.string().nullable(),
   suggestions: z.array(Transaction),
 });
 export type InboxReceipt = z.infer<typeof InboxReceipt>;

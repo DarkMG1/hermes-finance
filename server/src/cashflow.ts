@@ -38,6 +38,10 @@ const OUT = `((lines.category_id IS NOT NULL AND c.is_transfer = 0 AND c.is_inco
         lines.plaid_category GLOB 'INCOME*' OR lines.plaid_category GLOB 'TRANSFER_IN*'
         OR lines.plaid_category GLOB 'TRANSFER_OUT*' OR lines.plaid_category = 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT'))))`;
 
+// Reimbursed charges (work pays them back) are money movement, not spending, but they still belong in a payee's History.
+// ponytail: found by category name, add a category flag if the owner ever renames it
+const REIMBURSED = "(c.is_transfer = 1 AND lower(c.name) LIKE 'reimburs%')";
+
 // In: income categories only; an uncategorized inflow is never income
 const IN = '(lines.category_id IS NOT NULL AND c.is_income = 1)';
 
@@ -111,19 +115,19 @@ export function getExpenses(db: Db, q: ExpensesQuery): ExpensesPage {
 
 const monthBack = (today: string, k: number) => new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1 - k, 1)).toISOString().slice(0, 7);
 
-/** Which of these transactions have a line that counts as spending, i.e. can be in a History; one query for the whole list. */
-export function countsAsSpending(db: Db, rows: { id: string; date: string }[]): Set<string> {
+/** Which of these transactions have a line that can be in a History (spending or reimbursed); one query for the whole list. */
+export function canHaveHistory(db: Db, rows: { id: string; date: string }[]): Set<string> {
   if (rows.length === 0) return new Set();
   const dates = rows.map((r) => r.date).sort();
   const day = [dates[0]!, `${dates[dates.length - 1]}~`]; // '~' sorts after the date, so the range ends with the last day
   return new Set((db.prepare(`${LINES} SELECT DISTINCT lines.transaction_id AS id FROM lines LEFT JOIN categories c ON c.id = lines.category_id
-      WHERE lines.transaction_id IN (SELECT value FROM json_each(?)) AND ${OUT}`)
+      WHERE lines.transaction_id IN (SELECT value FROM json_each(?)) AND (${OUT} OR ${REIMBURSED})`)
     .all(...day, ...day, ...day, JSON.stringify(rows.map((r) => r.id))) as { id: string }[]).map((r) => r.id));
 }
 
 /** One payee's or bill's spending, by the same rules as Expenses: twelve months ending this month, and every matching charge, newest
  * first and paged. A Plaid bill's posted Plaid charges are exactly its stream's; every other row of a bill matches its name exactly, as
- * Recurring does; a payee's name matches as a whole-word prefix. */
+ * Recurring does; a payee's name matches as a whole-word prefix, and its bank text, when given, exactly. */
 export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): PayeeHistory {
   let name = q.name ?? '';
   let keys = [normalizeName(name)];
@@ -137,6 +141,7 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
     else throw new ApiError(404, 'NOT_FOUND', 'recurring item not found');
   }
   keys = keys.filter(Boolean);
+  const bankKey = q.bank ? normalizeName(q.bank) : '';
   if (!ids.size && !keys.length) throw new ApiError(400, 'NO_NAME', 'this name has nothing to match', 'name');
   const all = ['0000-01-01', '9999-12-31'];
   // a payee's "whole foods" matches "whole foods market", not the other way round
@@ -144,26 +149,32 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
   // ponytail: full-ledger scan in JS, push the match into SQL if the ledger outgrows it
   const lines = db.prepare(`${LINES}
     SELECT lines.transaction_id, lines.date, lines.created_at, lines.row_order, lines.name, lines.amount, lines.is_split, t.amount_cents AS total,
-           t.source, t.source_id, t.pending, t.payee, t.merchant_name, t.bank_description
+           t.source, t.source_id, t.pending, t.payee, t.merchant_name, t.bank_description, COALESCE(${REIMBURSED}, 0) AS reimbursed
       FROM lines JOIN transactions t ON t.id = lines.transaction_id LEFT JOIN categories c ON c.id = lines.category_id
-     WHERE ${OUT}
+     WHERE ${OUT} OR ${REIMBURSED}
      ORDER BY lines.date DESC, lines.created_at DESC, lines.row_order DESC, COALESCE(lines.line_id, '~')`).all(...all, ...all, ...all) as {
       transaction_id: string; date: string; created_at: string; row_order: number; name: string; amount: number; is_split: number; total: number;
       source: string; source_id: string | null; pending: number; payee: string | null; merchant_name: string | null; bank_description: string;
+      reimbursed: number;
     }[];
   const rows = new Map<string, { row: PayeeHistoryRow; at: Cursor }>();
   for (const l of lines) {
     // pre-cutover imports and pending charges are never in the stream's ids
     const byId = ids.size > 0 && l.source === 'plaid' && !l.pending;
-    const whole = byId ? ids.has(l.source_id!) : [l.payee, l.merchant_name, l.bank_description].some(hit);
-    // the row is titled by the name that matched; a bill, like Recurring, never matches a split line's own payee
-    const named = byId ? whole && l.name : [q.recurringId ? null : l.name, l.payee, l.merchant_name, l.bank_description].find(hit);
+    const bankHit = !!bankKey && normalizeName(l.bank_description) === bankKey;
+    const whole = byId ? ids.has(l.source_id!) : bankHit || [l.payee, l.merchant_name, l.bank_description].some(hit);
+    // the row is titled by the name that matched (a bank-text match by its Hermes name); a bill, like Recurring, never matches a split line's own payee
+    const named = byId ? whole && l.name : [q.recurringId ? null : l.name, l.payee, l.merchant_name, l.bank_description].find(hit)
+      ?? (bankHit ? l.payee ?? l.merchant_name ?? l.bank_description : undefined);
     if (!named) continue;
     const r = rows.get(l.transaction_id);
-    if (r) r.row.shareCents -= l.amount;
+    if (r) { r.row.shareCents -= l.amount; r.row.reimbursed ||= l.reimbursed === 1; }
     else {
       rows.set(l.transaction_id, {
-        row: { transactionId: l.transaction_id, date: l.date, name: named, shareCents: -l.amount, totalCents: l.is_split && whole ? -l.total : null, upcoming: l.date > today },
+        row: {
+          transactionId: l.transaction_id, date: l.date, name: named, shareCents: -l.amount, totalCents: l.is_split && whole ? -l.total : null,
+          upcoming: l.date > today, reimbursed: l.reimbursed === 1,
+        },
         at: [l.date, l.created_at, l.row_order, l.transaction_id],
       });
     }
@@ -175,11 +186,15 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
     if (m && !row.upcoming) m.cents += row.shareCents;
   }
   const totalCents = months.reduce((s, m) => s + m.cents, 0);
+  // averaged over the months since the first charge (up to 12), so a new subscription shows its real monthly price
+  const first = [...rows.values()].at(-1)?.row.date.slice(0, 7) ?? months[11]!.month;
+  const span = Math.max(1, 12 - Math.max(0, months.findIndex((m) => m.month >= first)));
   const c = q.cursor ? decodeCursor(q.cursor) : null;
-  const after = c ? [...rows.values()].filter(({ at }) => (at[0] !== c[0] ? at[0] < c[0] : at[1] !== c[1] ? at[1] < c[1] : at[2] < c[2])) : [...rows.values()];
+  const shown = [...rows.values()].filter(({ row }) => !q.month || row.date.startsWith(q.month));
+  const after = c ? shown.filter(({ at }) => (at[0] !== c[0] ? at[0] < c[0] : at[1] !== c[1] ? at[1] < c[1] : at[2] < c[2])) : shown;
   const page = after.slice(0, q.limit);
   return {
-    name, months, totalCents, averageCents: Math.round(totalCents / 12), rows: page.map((r) => r.row),
+    name, months, totalCents, averageCents: Math.round(totalCents / span), rows: page.map((r) => r.row),
     nextCursor: after.length > q.limit ? encodeCursor(page[page.length - 1]!.at) : null,
   };
 }
