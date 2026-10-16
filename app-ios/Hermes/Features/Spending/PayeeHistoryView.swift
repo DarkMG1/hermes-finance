@@ -41,9 +41,8 @@ struct PayeeHistoryView: View {
                             .accessibilityValue(Money.format(month.cents))
                     }
                     .chartXAxis { AxisMarks { value in AxisValueLabel { Text(value.as(String.self).map(Self.initial) ?? "") } } }
-                    .chartYAxis { AxisMarks(format: .currency(code: "USD").precision(.fractionLength(0))) }
+                    .chartYAxis { AxisMarks(format: .currency(code: "USD").precision(.fractionLength(0...2))) }
                     .frame(height: Space.xxl * 4)
-                    .accessibilityLabel("Monthly spending, last 12 months")
                 }
                 Section {
                     ForEach(rows) { row in

@@ -133,3 +133,21 @@ test('hasHistory: a name to match, not an unsplit IOU, not raw bank text alone',
   assert.deepEqual(['digits', 'number', 'iou', 'split', 'raw', 'merchant', 'renamed'].map((id) => getTransaction(db, id)!.hasHistory),
     [true, false, false, true, false, true, true]);
 });
+
+test('hasHistory: only on a row that counts as spending', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'a1' });
+  seedCategory(db, { id: 'c-food', name: 'Food' });
+  seedCategory(db, { id: 'c-pay', name: 'Paycheck', isIncome: true });
+  seedCategory(db, { id: 'c-xfer', name: 'Transfer', isTransfer: true });
+  const row = (id: string, amountCents: number, more: { categoryId?: string; plaidCategory?: string }) =>
+    seedTxn(db, { id, accountId: 'a1', date: '2026-03-01', amountCents, payee: 'Synthetic Corp', ...more });
+  row('income', 50000, { categoryId: 'c-pay' });
+  row('transfer', -50000, { categoryId: 'c-xfer' });
+  row('card-payment', -50000, { plaidCategory: 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' });
+  row('inflow', 50000, {});
+  row('refund', 500, { categoryId: 'c-food' });
+  assert.deepEqual(['income', 'transfer', 'card-payment', 'inflow', 'refund'].map((id) => getTransaction(db, id)!.hasHistory),
+    [false, false, false, false, true]);
+});

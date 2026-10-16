@@ -176,6 +176,9 @@ struct TransactionDetailSheet: View {
         .onDisappear {
             let outside = savedOutside, others = othersChanged
             guard outside || !others.isEmpty else { return }
+            // a full-screen cover opening fires this too; the close mustn't refresh the same changes again
+            savedOutside = false
+            othersChanged = []
             Task {
                 if outside { await onChange() }
                 if !others.isEmpty { await onOthersChange?(others) }

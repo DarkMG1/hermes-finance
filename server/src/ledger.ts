@@ -1,5 +1,6 @@
 import type { Account, Category, Home, ListTransactionsQuery, SpendingQuery, SplitLine, Transaction, TransactionPage } from '@hermes/shared';
 import type { Db } from './db.ts';
+import { countsAsSpending } from './cashflow.ts';
 import { ApiError } from './errors.ts';
 import { normalizeName } from './recurring.ts';
 
@@ -28,7 +29,7 @@ export function rowToTransaction(db: Db, r: TxnRow): Transaction {
     forgiven: r.forgiven === 1,
     hasReceipt: db.prepare('SELECT 1 FROM receipts WHERE transaction_id = ?').get(r.id) !== undefined,
     // raw bank text alone (no merchant, no owner payee) is often generic ("POS PURCHASE") and would pool unrelated charges
-    hasHistory: normalizeName(payee) !== '' && !(lines.length === 0 && r.person_id) && (r.payee !== null || r.merchant_name !== null),
+    hasHistory: normalizeName(payee) !== '' && (r.payee !== null || r.merchant_name !== null) && countsAsSpending(db, r.id, r.date),
   };
 }
 

@@ -40,7 +40,7 @@
       "reconciled": false,
       "forgiven": false,
       "hasReceipt": false,
-      "hasHistory": true
+      "hasHistory": false
     }
   ],
   "nextCursor": "WyIyMDI2LTAzLTEzIiwidHhuLTIiXQ"
