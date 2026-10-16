@@ -328,7 +328,7 @@ export type LinkInboxBody = z.infer<typeof LinkInboxBody>;
 export const RecurringFrequency = z.enum(['weekly', 'biweekly', 'semi_monthly', 'monthly', 'annually', 'unknown']);
 const WritableFrequency = RecurringFrequency.exclude(['unknown']);
 export const RecurringItem = z.object({
-  id: z.string(), source: z.enum(['plaid', 'manual']), name: z.string(), frequency: RecurringFrequency, amountCents: Cents, variable: z.boolean(),
+  id: z.string(), source: z.enum(['plaid', 'manual']), name: z.string(), matchName: z.string(), frequency: RecurringFrequency, amountCents: Cents, variable: z.boolean(),
   lastDate: DateStr, lastCents: Cents, nextDate: DateStr.nullable(), monthlyCents: Cents.nullable(), priceUpCents: Cents, isNew: z.boolean(), hidden: z.boolean(),
 });
 export type RecurringItem = z.infer<typeof RecurringItem>;

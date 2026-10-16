@@ -63,9 +63,15 @@ struct TransactionDetailSheet: View {
             }
             Section {
                 Field(label: "Payee", error: payeeInvalid ? "Payee can't be empty" : nil) { TextField("Payee", text: $payee) }
-                // the saved payee, not the text being typed; a name with no letters has nothing to match
-                if transaction.payee.contains(where: \.isLetter) {
-                    NavigationLink { PayeeHistoryView(name: transaction.payee) } label: { Text("History") }
+                // the saved payee, not the text being typed; a name with no a-z letters has nothing to match, and an unsplit
+                // charge for someone else is left out of every history
+                if transaction.payee.contains(where: { $0.isASCII && $0.isLetter }) && !(transaction.personId != nil && transaction.splitLines.isEmpty) {
+                    NavigationLink {
+                        // this sheet's own charge changed there: its copy is stale, so close it rather than let it save over
+                        PayeeHistoryView(name: transaction.payee) { id in
+                            if id == transaction.id { await onChange(); dismiss() } else { savedOutside = true }
+                        }
+                    } label: { Text("History") }
                 }
                 if transaction.splitLines.isEmpty {
                     if paidById == nil {

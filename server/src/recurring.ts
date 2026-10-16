@@ -80,7 +80,7 @@ function manualItem(db: Db, m: ManualRow, today: string): RecurringItem | null {
   const amounts = rows.map((r) => -r.amount_cents).sort((a, b) => a - b);
   const median = Math.round((amounts[Math.floor((amounts.length - 1) / 2)]! + amounts[Math.floor(amounts.length / 2)]!) / 2);
   return {
-    id: m.id, source: 'manual', name: m.name, frequency: m.frequency as RecurringItem['frequency'], amountCents: median,
+    id: m.id, source: 'manual', name: m.name, matchName: m.match_text, frequency: m.frequency as RecurringItem['frequency'], amountCents: median,
     variable: amounts[amounts.length - 1]! - amounts[0]! > median * 0.2, lastDate: rows[0]!.date, lastCents: -rows[0]!.amount_cents,
     nextDate: rollForward(addInterval(rows[0]!.date, m.frequency), rows[0]!.date, m.frequency, today), monthlyCents: monthly(median, m.frequency), priceUpCents: priceUp(-rows[0]!.amount_cents, median),
     isNew: false, hidden: m.hidden === 1,
@@ -93,7 +93,7 @@ export function getRecurring(db: Db, today: string, includeHidden: boolean): Rec
   const all: RecurringItem[] = streams.map((s) => {
     const frequency = (s.o_frequency ?? s.frequency) as RecurringItem['frequency'];
     return {
-      id: s.stream_id, source: 'plaid', name: s.o_name ?? s.name, frequency, amountCents: s.average_cents,
+      id: s.stream_id, source: 'plaid', name: s.o_name ?? s.name, matchName: s.name, frequency, amountCents: s.average_cents,
       variable: Math.abs(s.last_cents - s.average_cents) > s.average_cents * 0.2, lastDate: s.last_date, lastCents: s.last_cents,
       nextDate: rollForward(s.o_frequency ? addInterval(s.last_date, frequency) : (s.next_date ?? addInterval(s.last_date, frequency)), s.last_date, frequency, today),
       monthlyCents: monthly(s.average_cents, frequency), priceUpCents: priceUp(s.last_cents, s.average_cents), isNew: s.status === 'early_detection',

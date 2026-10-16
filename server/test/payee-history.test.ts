@@ -27,6 +27,10 @@ function setup() {
   // renamed payee still matches on the merchant name; outside the chart window but in the list
   seedTxn(db, { id: 'h8', accountId: 'a1', date: '2024-12-01', amountCents: -999, categoryId: 'c-food', payee: 'Synthetic Old', merchantName: 'Synthetic Market' });
   seedTxn(db, { id: 'h9', accountId: 'a1', date: '2026-03-11', amountCents: -400, categoryId: 'c-food', payee: 'Synthetic Other' });
+  // the owner's line has its own payee: the row is still titled by the name that matched
+  seedTxn(db, { id: 'h10', accountId: 'a1', date: '2024-11-01', amountCents: -3000, payee: 'Synthetic Market' });
+  seedSplit(db, { id: 'h10-a', transactionId: 'h10', amountCents: -1800, categoryId: 'c-food', payee: 'Synthetic Tires' });
+  seedSplit(db, { id: 'h10-b', transactionId: 'h10', amountCents: -1200, categoryId: null, personId: 'p1' });
   const app = buildApp(deps);
   return (name: string) => app.inject({ method: 'GET', url: `/v1/payee-history?name=${encodeURIComponent(name)}`, headers: AUTH });
 }
@@ -37,8 +41,9 @@ test('payee history: owner share, refunds net, drift counts, person/transfer/rem
   const h = res.json();
   assert.equal(h.name, 'synthetic market');
   assert.deepEqual(h.rows.map((r: { transactionId: string; shareCents: number; totalCents: number | null }) => [r.transactionId, r.shareCents, r.totalCents]),
-    [['h1', 1000, null], ['h3', -300, null], ['h2', 2500, 4000], ['h7', 2300, 2300], ['h8', 999, null]]);
+    [['h1', 1000, null], ['h3', -300, null], ['h2', 2500, 4000], ['h7', 2300, null], ['h8', 999, null], ['h10', 1800, 3000]]);
   assert.equal(h.rows[0].name, 'Synthetic Market #123');
+  assert.equal(h.rows[5].name, 'Synthetic Market');
   assert.equal(h.months.length, 12);
   assert.deepEqual(h.months[0], { month: '2025-04', cents: 0 });
   assert.deepEqual(h.months.slice(9), [{ month: '2026-01', cents: 2300 }, { month: '2026-02', cents: 2200 }, { month: '2026-03', cents: 1000 }]);

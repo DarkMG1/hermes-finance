@@ -60,3 +60,12 @@ test('already recurring also matches a renamed manual item and a renamed Plaid s
   assert.equal((await send('POST', '/v1/recurring', { transactionId: 'tv', frequency: 'monthly' })).statusCode, 409);
   assert.equal((await get('/v1/recurring')).items.filter((i: { source: string }) => i.source === 'manual').length, 1);
 });
+
+test('matchName is the stream name or match text, so a renamed bill still finds its charges', async () => {
+  const { get, send } = setup();
+  const id = (await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly', name: 'Synthetic Tunes' })).json().id as string;
+  await send('PATCH', '/v1/recurring/s-tv', { name: 'Synthetic Telly' });
+  const items = (await get('/v1/recurring')).items as { id: string; name: string; matchName: string }[];
+  assert.deepEqual(items.map((i) => [i.id, i.name, i.matchName]), [['s-tv', 'Synthetic Telly', 'Synthetic TV'], [id, 'Synthetic Tunes', 'synthetic music']]);
+  assert.deepEqual((await get(`/v1/payee-history?name=${encodeURIComponent(items[1]!.matchName)}`)).rows.map((r: { transactionId: string }) => r.transactionId), ['sub']);
+});

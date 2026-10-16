@@ -6,16 +6,21 @@ import SwiftUI
 struct PayeeHistoryView: View {
     @Environment(AppModel.self) private var model
     let name: String
+    var title: String?
+    /// The id of a transaction edited or deleted here, after this list reloads.
+    let onChange: (String) async -> Void
 
-    @State private var history: PayeeHistory?
+    @State private var lastLoad: Loaded<PayeeHistory>?
     @State private var error: String?
     @State private var opened: LedgerTransaction?
     @State private var openGeneration = 0
 
     var body: some View {
         List {
-            if let history {
+            if let lastLoad {
+                let history = lastLoad.value
                 Section {
+                    LastUpdated(loaded: lastLoad)
                     LabeledContent("Last 12 months") { MoneyText(cents: history.totalCents, colored: false) }
                     Text("About \(Money.format(history.averageCents))/month").textStyle(.subhead, color: Palette.secondaryText)
                     // x is the unique "YYYY-MM"; only the label is the initial, or same-letter months would merge
@@ -41,11 +46,11 @@ struct PayeeHistoryView: View {
             InlineError(message: error)
         }
         .themedForm()
-        .navigationTitle(name)
+        .navigationTitle(title ?? name)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
         .refreshable { await load() }
-        .sheet(item: $opened) { TransactionDetailSheet(transaction: $0) { await load() } }
+        .sheet(item: $opened) { transaction in TransactionDetailSheet(transaction: transaction) { await load(); await onChange(transaction.id) } }
     }
 
     static func initial(_ month: String) -> String {
@@ -59,7 +64,7 @@ struct PayeeHistoryView: View {
     private func load() async {
         guard let reader = model.reader else { return }
         do {
-            history = try await reader.read("/v1/payee-history", query: [URLQueryItem(name: "name", value: name)], as: PayeeHistory.self).value
+            lastLoad = try await reader.read("/v1/payee-history", query: [URLQueryItem(name: "name", value: name)], as: PayeeHistory.self)
             error = nil
         } catch {
             guard !Task.isCancelled else { return }

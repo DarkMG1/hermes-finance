@@ -116,6 +116,9 @@ export function getPayeeHistory(db: Db, name: string, today: string): PayeeHisto
   const key = normalizeName(name);
   if (!key) throw new ApiError(400, 'NO_NAME', 'this name has nothing to match', 'name');
   const all = ['0000-01-01', '9999-12-31'];
+  // the row is titled by the name that matched, not a split line's own payee
+  const matched = (l: { name: string; payee: string | null; merchant_name: string | null; bank_description: string }) =>
+    [l.name, l.payee, l.merchant_name, l.bank_description].find((s) => s && normalizeName(s) === key);
   // ponytail: full-ledger scan in JS, push the match into SQL if the ledger outgrows it
   const lines = (db.prepare(`${LINES}
     SELECT lines.transaction_id, lines.date, lines.name, lines.amount, lines.is_split, t.amount_cents AS total, t.payee, t.merchant_name, t.bank_description
@@ -124,15 +127,16 @@ export function getPayeeHistory(db: Db, name: string, today: string): PayeeHisto
      ORDER BY lines.date DESC, lines.created_at DESC, lines.row_order DESC`).all(...all, ...all, ...all) as {
       transaction_id: string; date: string; name: string; amount: number; is_split: number; total: number;
       payee: string | null; merchant_name: string | null; bank_description: string;
-    }[]).filter((l) => [l.name, l.payee, l.merchant_name, l.bank_description].some((s) => s && normalizeName(s) === key));
+    }[]).filter(matched);
   const rows = new Map<string, PayeeHistoryRow>();
   for (const l of lines) {
     const row = rows.get(l.transaction_id);
     if (row) row.shareCents -= l.amount;
-    else rows.set(l.transaction_id, { transactionId: l.transaction_id, date: l.date, name: l.name, shareCents: -l.amount, totalCents: l.is_split ? -l.total : null });
+    else rows.set(l.transaction_id, { transactionId: l.transaction_id, date: l.date, name: matched(l)!, shareCents: -l.amount, totalCents: l.is_split ? -l.total : null });
   }
   const months = Array.from({ length: 12 }, (_, i) => ({ month: monthBack(today, 11 - i), cents: 0 }));
   for (const r of rows.values()) {
+    if (r.totalCents === r.shareCents) r.totalCents = null; // a self-only split reads as a plain charge
     const m = months.find((x) => x.month === r.date.slice(0, 7));
     if (m) m.cents += r.shareCents;
   }
