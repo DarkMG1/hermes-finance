@@ -205,6 +205,31 @@ public struct ExpensesPage: Codable, Sendable {
     public let nextCursor: String?
 }
 
+public struct PayeeMonth: Codable, Sendable, Hashable {
+    /// "YYYY-MM"
+    public let month: String
+    public let cents: Int
+}
+
+public struct PayeeHistoryRow: Codable, Sendable, Identifiable, Hashable {
+    public let transactionId: String
+    public let date: String
+    public let name: String
+    /// Your part, spending positive.
+    public let shareCents: Int
+    /// The whole charge, only when it was split.
+    public let totalCents: Int?
+    public var id: String { transactionId }
+}
+
+public struct PayeeHistory: Codable, Sendable {
+    public let name: String
+    public let months: [PayeeMonth]
+    public let totalCents: Int
+    public let averageCents: Int
+    public let rows: [PayeeHistoryRow]
+}
+
 public struct Bank: Codable, Sendable, Identifiable, Hashable {
     public let itemId: String
     public let institutionName: String
