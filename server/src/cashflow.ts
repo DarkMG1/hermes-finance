@@ -111,11 +111,14 @@ export function getExpenses(db: Db, q: ExpensesQuery): ExpensesPage {
 
 const monthBack = (today: string, k: number) => new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1 - k, 1)).toISOString().slice(0, 7);
 
-/** Whether any of a transaction's lines counts as spending, i.e. it can be in a History. */
-export function countsAsSpending(db: Db, id: string, date: string): boolean {
-  const day = [date, `${date}~`]; // '~' sorts after the date, so the range is that one day
-  return db.prepare(`${LINES} SELECT 1 FROM lines LEFT JOIN categories c ON c.id = lines.category_id WHERE lines.transaction_id = ? AND ${OUT}`)
-    .get(...day, ...day, ...day, id) !== undefined;
+/** Which of these transactions have a line that counts as spending, i.e. can be in a History; one query for the whole list. */
+export function countsAsSpending(db: Db, rows: { id: string; date: string }[]): Set<string> {
+  if (rows.length === 0) return new Set();
+  const dates = rows.map((r) => r.date).sort();
+  const day = [dates[0]!, `${dates[dates.length - 1]}~`]; // '~' sorts after the date, so the range ends with the last day
+  return new Set((db.prepare(`${LINES} SELECT DISTINCT lines.transaction_id AS id FROM lines LEFT JOIN categories c ON c.id = lines.category_id
+      WHERE lines.transaction_id IN (SELECT value FROM json_each(?)) AND ${OUT}`)
+    .all(...day, ...day, ...day, JSON.stringify(rows.map((r) => r.id))) as { id: string }[]).map((r) => r.id));
 }
 
 /** One payee's or bill's spending, by the same rules as Expenses: twelve months ending this month, and every matching charge, newest

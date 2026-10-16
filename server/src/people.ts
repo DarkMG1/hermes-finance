@@ -1,6 +1,7 @@
 import type { HistoryEntry, PeopleSettings, Person, PersonDetail, RepaymentSuggestion } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
+import { countsAsSpending } from './cashflow.ts';
 import { TXN_COLS, rowToTransaction, type TxnRow } from './ledger.ts';
 
 // Every live amount between the owner and a person: split lines and unsplit transactions tagged with them, and manual rows they paid.
@@ -88,6 +89,7 @@ export function suggestions(db: Db, now: Date): RepaymentSuggestion[] {
                                                                          WHERE s.key = 'repayment_account_id' AND a.hidden = 0 AND a.type = 'depository'),
                                                                  subtype = 'checking'))
      ORDER BY date DESC, id DESC`).all(since) as (TxnRow & { plaid_category: string | null })[];
+  const spending = countsAsSpending(db, rows);
   const out: RepaymentSuggestion[] = [];
   for (const r of rows) {
     const desc = r.bank_description.toLowerCase();
@@ -99,7 +101,7 @@ export function suggestions(db: Db, now: Date): RepaymentSuggestion[] {
     });
     const byAmount = people.filter((p) => p.balanceCents === r.amount_cents);
     const person = byMatch ?? byName ?? (byAmount.length === 1 ? byAmount[0] : undefined);
-    out.push({ transaction: rowToTransaction(db, r), personId: person?.id ?? null });
+    out.push({ transaction: rowToTransaction(db, r, spending), personId: person?.id ?? null });
   }
   return out;
 }

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { PayeeHistory } from '@hermes/shared';
 import { buildApp } from '../src/app.ts';
-import { getTransaction } from '../src/ledger.ts';
+import { getTransaction, listTransactions } from '../src/ledger.ts';
 import { AUTH, makeTestDeps, seedAccount, seedCategory, seedPerson, seedSplit, seedTxn } from './helpers.ts';
 
 // Test clock is 2026-03-15, so the window is 2025-04 … 2026-03.
@@ -150,4 +150,20 @@ test('hasHistory: only on a row that counts as spending', () => {
   row('refund', 500, { categoryId: 'c-food' });
   assert.deepEqual(['income', 'transfer', 'card-payment', 'inflow', 'refund'].map((id) => getTransaction(db, id)!.hasHistory),
     [false, false, false, false, true]);
+});
+
+test('hasHistory: a listed page matches the per-transaction values', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'a1' });
+  seedCategory(db, { id: 'c-food', name: 'Food' });
+  seedCategory(db, { id: 'c-xfer', name: 'Transfer', isTransfer: true });
+  seedTxn(db, { id: 'x1', accountId: 'a1', date: '2026-03-01', amountCents: -100, categoryId: 'c-food', payee: 'Synthetic Cafe' });
+  seedTxn(db, { id: 'x2', accountId: 'a1', date: '2026-03-05', amountCents: -100, categoryId: 'c-xfer', payee: 'Synthetic Cafe' });
+  seedTxn(db, { id: 'x3', accountId: 'a1', date: '2026-03-09', amountCents: -100, categoryId: 'c-food', payee: 'Synthetic Cafe' });
+  seedTxn(db, { id: 'x4', accountId: 'a1', date: '2026-03-09', amountCents: -100, bankDescription: 'SYNTHETIC POS PURCHASE' });
+  const page = listTransactions(db, { limit: 50 }).transactions;
+  assert.equal(page.length, 4);
+  assert.deepEqual(page.map((t) => t.hasHistory), page.map((t) => getTransaction(db, t.id)!.hasHistory));
+  assert.deepEqual(page.filter((t) => t.hasHistory).map((t) => t.id).sort(), ['x1', 'x3']);
 });
