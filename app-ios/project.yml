@@ -7,8 +7,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "6.0"
-    MARKETING_VERSION: "1.8.0"
-    CURRENT_PROJECT_VERSION: "180"
+    MARKETING_VERSION: "1.8.1"
+    CURRENT_PROJECT_VERSION: "181"
 packages:
   HermesKit:
     path: HermesKit

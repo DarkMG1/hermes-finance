@@ -63,6 +63,10 @@ struct TransactionDetailSheet: View {
             }
             Section {
                 Field(label: "Payee", error: payeeInvalid ? "Payee can't be empty" : nil) { TextField("Payee", text: $payee) }
+                // the saved payee, not the text being typed; a name with no letters has nothing to match
+                if transaction.payee.contains(where: \.isLetter) {
+                    NavigationLink { PayeeHistoryView(name: transaction.payee) } label: { Text("History") }
+                }
                 if transaction.splitLines.isEmpty {
                     if paidById == nil {
                         NavigationLink { PersonPicker(selection: $personId, noneTitle: noneTitle) } label: {

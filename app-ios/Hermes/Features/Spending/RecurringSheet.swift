@@ -35,6 +35,7 @@ struct RecurringSheet: View {
                 LabeledContent("Last charge") {
                     Text("\(DayText.display(item.lastDate)) · \(Money.format(item.lastCents))")
                 }
+                NavigationLink { PayeeHistoryView(name: item.name) } label: { Text("History") }
             }
             Section {
                 InlineError(message: error)
