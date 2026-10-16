@@ -22,6 +22,8 @@ struct PayeeHistoryView: View {
     @State private var changed: Set<String> = []
     /// A tapped bar's "YYYY-MM": the list shows only that month.
     @State private var month: String?
+    /// The month the shown rows and cursor belong to.
+    @State private var loadedMonth: String?
 
     var body: some View {
         List {
@@ -117,9 +119,8 @@ struct PayeeHistoryView: View {
 
     /// Tapping the selected month again shows every month; if that month can't load, the list stays on the one it shows.
     private func select(_ tapped: String) {
-        let shown = month
         month = month == tapped ? nil : tapped
-        Task { if await !load(reset: true) { month = shown } }
+        Task { if await !load(reset: true) { month = loadedMonth } }
     }
 
     private func sendChanges() {
@@ -137,6 +138,7 @@ struct PayeeHistoryView: View {
         let gen = generation
         loading = true
         defer { if gen == generation { loading = false } }
+        let requested = month
         var query = match
         if let month { query.append(URLQueryItem(name: "month", value: month)) }
         if !reset, let cursor { query.append(URLQueryItem(name: "cursor", value: cursor)) }
@@ -144,6 +146,7 @@ struct PayeeHistoryView: View {
             let page = try await reader.read("/v1/payee-history", query: query, as: PayeeHistory.self)
             guard gen == generation, !Task.isCancelled else { return true }
             rows = reset ? page.value.rows : rows + page.value.rows
+            loadedMonth = requested
             cursor = page.value.nextCursor
             lastLoad = page
             error = nil

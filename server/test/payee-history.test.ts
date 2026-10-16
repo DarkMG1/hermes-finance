@@ -241,13 +241,18 @@ test('payee history: a manual bill whose charge was renamed falls back to that c
   const { db } = deps;
   seedAccount(db, { id: 'a1' });
   seedCategory(db, { id: 'c-soft', name: 'Software' });
+  seedCategory(db, { id: 'c-reimb', name: 'Reimbursement', isTransfer: true });
+  seedCategory(db, { id: 'c-xfer', name: 'Transfer', isTransfer: true });
   seedTxn(db, { id: 'src', accountId: 'a1', date: '2026-03-01', amountCents: -2500, categoryId: 'c-soft', payee: 'Synthetic New Cloud' });
   db.prepare("INSERT INTO recurring_manual VALUES ('man-1', 'Synthetic Hosting', 'synthetic cloud', 'monthly', 'src', 0, 'x')").run();
   const app = buildApp(deps);
   const h = (await app.inject({ method: 'GET', url: '/v1/payee-history?recurringId=man-1', headers: AUTH })).json() as PayeeHistory;
   assert.deepEqual(h.rows.map((r) => [r.transactionId, r.shareCents]), [['src', 2500]]);
-  // once a charge matches the bill's name, the fallback is gone, as in Recurring
-  seedTxn(db, { id: 'm2', accountId: 'a1', date: '2026-02-01', amountCents: -2500, categoryId: 'c-soft', payee: 'Synthetic Cloud' });
-  const again = (await app.inject({ method: 'GET', url: '/v1/payee-history?recurringId=man-1', headers: AUTH })).json() as PayeeHistory;
-  assert.deepEqual(again.rows.map((r) => r.transactionId), ['m2']);
+  const bill = async () => (await app.inject({ method: 'GET', url: '/v1/payee-history?recurringId=man-1', headers: AUTH })).json() as PayeeHistory;
+  // a transfer with the bill's name ends the fallback in Recurring, so here too
+  seedTxn(db, { id: 'x1', accountId: 'a1', date: '2026-02-15', amountCents: -2500, categoryId: 'c-xfer', payee: 'Synthetic Cloud' });
+  assert.deepEqual((await bill()).rows.map((r) => r.transactionId), []);
+  // a reimbursed charge with the bill's name is in the bill's History, marked
+  seedTxn(db, { id: 'm2', accountId: 'a1', date: '2026-02-01', amountCents: -2500, categoryId: 'c-reimb', payee: 'Synthetic Cloud' });
+  assert.deepEqual((await bill()).rows.map((r) => [r.transactionId, r.reimbursed]), [['m2', true]]);
 });

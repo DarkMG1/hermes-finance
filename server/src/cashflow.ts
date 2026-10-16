@@ -190,7 +190,11 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
       ?? (bankHit ? l.name : undefined);
     return { named, whole };
   });
-  if (!rows.size && source) collect((l) => ({ named: l.transaction_id === source && l.name, whole: true }));
+  // Recurring's trigger exactly: no money-out charge of any category carries the bill's name
+  if (source && !(db.prepare('SELECT payee, merchant_name, bank_description FROM transactions WHERE removed_at IS NULL AND amount_cents < 0').all() as
+    { payee: string | null; merchant_name: string | null; bank_description: string }[]).some((t) => [t.payee, t.merchant_name, t.bank_description].some(hit))) {
+    collect((l) => ({ named: l.transaction_id === source && l.name, whole: true }));
+  }
   const months = Array.from({ length: 12 }, (_, i) => ({ month: monthBack(today, 11 - i), cents: 0 }));
   for (const { row } of rows.values()) {
     if (row.totalCents === row.shareCents) row.totalCents = null; // a self-only split reads as a plain charge
