@@ -41,10 +41,12 @@ struct PayeeHistoryView: View {
                             .accessibilityValue(Money.format(month.cents))
                     }
                     .chartXAxis { AxisMarks { value in AxisValueLabel { Text(value.as(String.self).map(Self.initial) ?? "") } } }
-                    // whole dollars, or cents when the biggest bar is small, so ticks are never mixed like $0.5 and $1
                     .chartYAxis {
-                        let small = (history.months.map { abs($0.cents) }.max() ?? 0) < 500
-                        AxisMarks(format: .currency(code: "USD").precision(.fractionLength(small ? 2 : 0)))
+                        AxisMarks { value in
+                            AxisGridLine()
+                            AxisTick()
+                            AxisValueLabel { Text(Money.format(Int(((value.as(Double.self) ?? 0) * 100).rounded()))) }
+                        }
                     }
                     .frame(height: Space.xxl * 4)
                 }
