@@ -1,0 +1,64 @@
+{
+  "name": "Synthetic Split",
+  "months": [
+    {
+      "month": "2025-04",
+      "cents": 0
+    },
+    {
+      "month": "2025-05",
+      "cents": 0
+    },
+    {
+      "month": "2025-06",
+      "cents": 0
+    },
+    {
+      "month": "2025-07",
+      "cents": 0
+    },
+    {
+      "month": "2025-08",
+      "cents": 0
+    },
+    {
+      "month": "2025-09",
+      "cents": 0
+    },
+    {
+      "month": "2025-10",
+      "cents": 0
+    },
+    {
+      "month": "2025-11",
+      "cents": 0
+    },
+    {
+      "month": "2025-12",
+      "cents": 0
+    },
+    {
+      "month": "2026-01",
+      "cents": 0
+    },
+    {
+      "month": "2026-02",
+      "cents": 0
+    },
+    {
+      "month": "2026-03",
+      "cents": 2500
+    }
+  ],
+  "totalCents": 2500,
+  "averageCents": 208,
+  "rows": [
+    {
+      "transactionId": "txn-3",
+      "date": "2026-03-12",
+      "name": "Synthetic Lamp",
+      "shareCents": 2500,
+      "totalCents": 4000
+    }
+  ]
+}

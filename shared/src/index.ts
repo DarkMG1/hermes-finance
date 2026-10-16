@@ -228,6 +228,16 @@ export type ExpenseRow = z.infer<typeof ExpenseRow>;
 
 export const ExpensesPage = z.object({ rows: z.array(ExpenseRow), nextCursor: z.string().nullable() });
 export type ExpensesPage = z.infer<typeof ExpensesPage>;
+/** One payee's spending. name is matched after normalizing (case, store numbers, punctuation). */
+export const PayeeHistoryQuery = z.object({ name: z.string().min(1).max(200) }).strict();
+export type PayeeHistoryQuery = z.infer<typeof PayeeHistoryQuery>;
+export const PayeeMonth = z.object({ month: z.string(), cents: Cents });
+export type PayeeMonth = z.infer<typeof PayeeMonth>;
+/** shareCents: the owner's part, spending positive; totalCents: the whole charge, only when split. */
+export const PayeeHistoryRow = z.object({ transactionId: Id, date: DateStr, name: z.string(), shareCents: Cents, totalCents: Cents.nullable() });
+export type PayeeHistoryRow = z.infer<typeof PayeeHistoryRow>;
+export const PayeeHistory = z.object({ name: z.string(), months: z.array(PayeeMonth), totalCents: Cents, averageCents: Cents, rows: z.array(PayeeHistoryRow) });
+export type PayeeHistory = z.infer<typeof PayeeHistory>;
 
 export const Bank = z.object({
   itemId: Id, institutionName: z.string(), status: z.enum(['ok', 'login_required', 'error']),

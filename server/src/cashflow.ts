@@ -1,7 +1,8 @@
-import type { ExpenseRow, ExpensesPage, ExpensesQuery, Spending, SpendingQuery } from '@hermes/shared';
+import type { ExpenseRow, ExpensesPage, ExpensesQuery, PayeeHistory, PayeeHistoryRow, Spending, SpendingQuery } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
 import { periodRange } from './ledger.ts';
+import { normalizeName } from './recurring.ts';
 
 // Every amount that can count toward Out or In, one row each: the owner's split lines, unsplit untagged transactions, and
 // split differences. Bound with (from, toExclusive) three times.
@@ -106,4 +107,35 @@ export function getExpenses(db: Db, q: ExpensesQuery): ExpensesPage {
     })),
     nextCursor: rows.length > q.limit && last ? encodeCursor([last.date, last.created_at, last.row_order, last.line_key]) : null,
   };
+}
+
+const monthBack = (today: string, k: number) => new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1 - k, 1)).toISOString().slice(0, 7);
+
+/** One payee's spending, by the same rules as Expenses: twelve months ending this month, and every matching charge, newest first. */
+export function getPayeeHistory(db: Db, name: string, today: string): PayeeHistory {
+  const key = normalizeName(name);
+  if (!key) throw new ApiError(400, 'NO_NAME', 'this name has nothing to match', 'name');
+  const all = ['0000-01-01', '9999-12-31'];
+  // ponytail: full-ledger scan in JS, push the match into SQL if the ledger outgrows it
+  const lines = (db.prepare(`${LINES}
+    SELECT lines.transaction_id, lines.date, lines.name, lines.amount, lines.is_split, t.amount_cents AS total, t.payee, t.merchant_name, t.bank_description
+      FROM lines JOIN transactions t ON t.id = lines.transaction_id LEFT JOIN categories c ON c.id = lines.category_id
+     WHERE ${OUT}
+     ORDER BY lines.date DESC, lines.created_at DESC, lines.row_order DESC`).all(...all, ...all, ...all) as {
+      transaction_id: string; date: string; name: string; amount: number; is_split: number; total: number;
+      payee: string | null; merchant_name: string | null; bank_description: string;
+    }[]).filter((l) => [l.name, l.payee, l.merchant_name, l.bank_description].some((s) => s && normalizeName(s) === key));
+  const rows = new Map<string, PayeeHistoryRow>();
+  for (const l of lines) {
+    const row = rows.get(l.transaction_id);
+    if (row) row.shareCents -= l.amount;
+    else rows.set(l.transaction_id, { transactionId: l.transaction_id, date: l.date, name: l.name, shareCents: -l.amount, totalCents: l.is_split ? -l.total : null });
+  }
+  const months = Array.from({ length: 12 }, (_, i) => ({ month: monthBack(today, 11 - i), cents: 0 }));
+  for (const r of rows.values()) {
+    const m = months.find((x) => x.month === r.date.slice(0, 7));
+    if (m) m.cents += r.shareCents;
+  }
+  const totalCents = months.reduce((s, m) => s + m.cents, 0);
+  return { name, months, totalCents, averageCents: Math.round(totalCents / 12), rows: [...rows.values()] };
 }
