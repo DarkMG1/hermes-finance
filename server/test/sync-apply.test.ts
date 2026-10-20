@@ -472,3 +472,22 @@ test('merchant memory: a new row takes the category of the newest unsplit, untag
   apply([page({ modified: [txn({ transactionId: 'p1', merchantName: 'Synthetic Gym' }), txn({ transactionId: 'p4', merchantName: 'Synthetic Gym' })] })]);
   assert.deepEqual([row('p1')?.category_id, row('p4')?.category_id], ['other', null]);
 });
+
+test('merchant memory fills stored uncategorized bank rows on every sync, never an owner-cleared, tagged or Apple Card payment row', () => {
+  const { deps, apply } = setup();
+  const { db } = deps;
+  seedAccount(db, { id: 'a1' });
+  seedPerson(db, { id: 'pp', name: 'Synthetic Quill' });
+  seedCategory(db, { id: 'gym', name: 'gym' });
+  seedTxn(db, { id: 'old', accountId: 'a1', date: '2026-01-01', amountCents: -100, categoryId: 'gym', payee: 'Synthetic Gym' });
+  // stored before memory existed, and Plaid never sends them again
+  seedTxn(db, { id: 'stored', accountId: 'a1', date: '2026-03-01', amountCents: -100, merchantName: 'Synthetic Gym', source: 'plaid', sourceId: 's1' });
+  seedTxn(db, { id: 'cleared', accountId: 'a1', date: '2026-03-01', amountCents: -100, merchantName: 'Synthetic Gym', source: 'plaid', sourceId: 's2' });
+  db.prepare("UPDATE transactions SET category_owner_set = 1 WHERE id = 'cleared'").run();
+  seedTxn(db, { id: 'tagged', accountId: 'a1', date: '2026-03-01', amountCents: -100, merchantName: 'Synthetic Gym', personId: 'pp', source: 'plaid', sourceId: 's3' });
+  seedTxn(db, { id: 'payment', accountId: 'a1', date: '2026-03-01', amountCents: 100, merchantName: 'Synthetic Gym', source: 'applecard', sourceId: 's4' });
+  db.prepare("UPDATE transactions SET plaid_category = 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' WHERE id = 'payment'").run();
+  apply([page({})]);
+  const cat = (id: string) => (db.prepare('SELECT category_id AS c FROM transactions WHERE id = ?').get(id) as { c: string | null }).c;
+  assert.deepEqual(['stored', 'cleared', 'tagged', 'payment'].map(cat), ['gym', null, null, null]);
+});

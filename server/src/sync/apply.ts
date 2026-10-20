@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Db } from '../db.ts';
 import type { PlaidAccount, PlaidTxn, SyncPage } from '../plaid/port.ts';
 import { plaidAmountToCents } from '../money.ts';
-import { fitSplitToAmount, merchantMemory } from '../ledger.ts';
+import { fillFromMemory, fitSplitToAmount, merchantMemory } from '../ledger.ts';
 import { nameZellePayees } from '../zelle.ts';
 
 export type ApplyCounts = { added: number; modified: number; removed: number };
@@ -151,5 +151,6 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
   }
   // new rows get their name, and history is backfilled on the first sync after deploy
   nameZellePayees(db, opts.nowIso);
+  fillFromMemory(db, opts.nowIso);
   return counts;
 }

@@ -165,6 +165,20 @@ export function merchantMemory(db: Db): (merchant: string | null, bank: string) 
   return (merchant, bank) => (merchant ? byName.get(normalizeName(merchant)) : byBank.get(bankText(bank))) ?? null;
 }
 
+/** Stored bank rows still uncategorized take memory too: Plaid never resends an unchanged row, and memory grows as the owner categorizes.
+ *  Same rules as a new row: never an owner-cleared, tagged, split or Apple Card payment row. */
+export function fillFromMemory(db: Db, nowIso: string): void {
+  const remembered = merchantMemory(db);
+  const update = db.prepare('UPDATE transactions SET category_id = ?, updated_at = ? WHERE id = ?');
+  for (const r of db.prepare(`SELECT id, merchant_name, bank_description FROM transactions t
+      WHERE source IN ('plaid', 'applecard') AND removed_at IS NULL AND category_id IS NULL AND category_owner_set = 0 AND person_id IS NULL
+        AND NOT (source = 'applecard' AND plaid_category IS 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT')
+        AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)`).all() as { id: string; merchant_name: string | null; bank_description: string }[]) {
+    const c = remembered(r.merchant_name, r.bank_description);
+    if (c) update.run(c, nowIso, r.id);
+  }
+}
+
 /**
  * Keeps a split adding up after the bank changes the amount (a pending row posting with a tip, a correction). Every line keeps its
  * share of the new amount, so a tip is split the way the bill was; leftover cents go to the largest remainders, and a line that
