@@ -15,6 +15,10 @@ public struct RecurringItem: Codable, Sendable, Identifiable {
     public let priceUpCents: Int
     public let isNew: Bool
     public let hidden: Bool
+    /// Two charges missed, or marked cancelled. nil from servers before 1.8.1 (183).
+    public let ended: Bool?
+    /// Marked cancelled by the owner (one way to be ended). nil from servers before 1.8.1 (183).
+    public let cancelled: Bool?
 }
 
 public struct RecurringList: Codable, Sendable {
@@ -29,11 +33,13 @@ public struct PatchRecurringBody: Codable, Sendable {
     public var hidden: Bool?
     public var name: String?
     public var frequency: String?
+    public var ended: Bool?
 
-    public init(hidden: Bool? = nil, name: String? = nil, frequency: String? = nil) {
+    public init(hidden: Bool? = nil, name: String? = nil, frequency: String? = nil, ended: Bool? = nil) {
         self.hidden = hidden
         self.name = name
         self.frequency = frequency
+        self.ended = ended
     }
 }
 
