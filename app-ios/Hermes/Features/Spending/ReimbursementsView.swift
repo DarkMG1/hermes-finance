@@ -9,14 +9,19 @@ struct ReimbursementsView: View {
     @State private var error: String?
     @State private var opened: LedgerTransaction?
     @State private var openGeneration = 0
+    @State private var showsEarlier = false
 
     var body: some View {
         List {
             if let lastLoad {
-                Section("Last 12 months") {
+                Section {
                     LastUpdated(loaded: lastLoad)
-                    ForEach(lastLoad.value.months, id: \.month) { month in
+                    // older months never netted to $0, so only this month shows until asked
+                    ForEach(lastLoad.value.months.prefix(showsEarlier ? 12 : 1), id: \.month) { month in
                         monthRow(month, rows: lastLoad.value.rows.filter { $0.date.hasPrefix(month.month) })
+                    }
+                    if lastLoad.value.months.count > 1 {
+                        Button(showsEarlier ? "Hide earlier months" : "Show earlier months") { showsEarlier.toggle() }
                     }
                 }
             } else if error == nil {
