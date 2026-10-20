@@ -34,5 +34,6 @@
   "reconciled": false,
   "forgiven": false,
   "hasReceipt": false,
-  "hasHistory": true
+  "hasHistory": true,
+  "recurring": null
 }

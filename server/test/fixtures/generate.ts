@@ -87,7 +87,16 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   out['inbox-linked'] = (out.inbox as { recentlyLinked: unknown[] }).recentlyLinked[0];
   db.prepare("INSERT INTO recurring_streams VALUES ('fx-stream', 'item-1', 'Synthetic TV', 'monthly', 1500, 1700, '2026-03-05', '2026-04-05', 1, 'mature', '2026-03-15T11:00:00.000Z', '[]')").run();
   out.recurring = await get('/v1/recurring');
+  // a longer name the owner left out of Synthetic Split's History: listed in names, not in rows
+  seedTxn(db, { id: 'txn-7', accountId: 'acct-card', date: '2026-03-08', amountCents: -900, source: 'plaid', sourceId: 'ps-7', categoryId: 'cat-food', merchantName: 'Synthetic TV' });
+  seedTxn(db, { id: 'txn-8', accountId: 'acct-card', date: '2026-03-07', amountCents: -600, categoryId: 'cat-food', payee: 'Synthetic Split Extra' });
+  db.prepare("INSERT INTO history_exclusions VALUES ('synthetic split', 'synthetic split extra')").run();
   out['payee-history'] = await get('/v1/payee-history?name=Synthetic%20Split');
+  out['transaction-recurring'] = await get('/v1/transactions/txn-7');
+  seedCategory(db, { id: 'cat-reimb', name: 'Reimbursement', isTransfer: true });
+  seedTxn(db, { id: 'txn-9', accountId: 'acct-card', date: '2026-03-04', amountCents: -2000, categoryId: 'cat-reimb', payee: 'Synthetic Airline' });
+  seedTxn(db, { id: 'txn-10', accountId: 'acct-checking', date: '2026-03-06', amountCents: 1500, categoryId: 'cat-reimb', payee: 'Synthetic Employer' });
+  out.reimbursements = await get('/v1/reimbursements');
   // investments use their own database so the accounts, home and net worth fixtures stay as they are
   const inv = makeTestDeps().deps;
   seedAccount(inv.db, { id: 'acct-brokerage', type: 'investment', subtype: 'brokerage', balanceCents: 150000 });

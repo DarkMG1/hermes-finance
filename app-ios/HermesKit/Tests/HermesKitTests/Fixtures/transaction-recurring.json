@@ -1,0 +1,26 @@
+{
+  "id": "txn-7",
+  "accountId": "acct-card",
+  "source": "plaid",
+  "date": "2026-03-08",
+  "amountCents": -900,
+  "payee": "Synthetic TV",
+  "bankDescription": "SYNTHETIC",
+  "merchantName": "Synthetic TV",
+  "pending": false,
+  "categoryId": "cat-food",
+  "notes": null,
+  "personId": null,
+  "paidByPersonId": null,
+  "repaymentDismissed": false,
+  "splitLines": [],
+  "reconciled": false,
+  "forgiven": false,
+  "hasReceipt": false,
+  "hasHistory": true,
+  "recurring": {
+    "id": "fx-stream",
+    "name": "Synthetic TV",
+    "frequency": "monthly"
+  }
+}

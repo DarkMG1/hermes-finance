@@ -1,4 +1,4 @@
-import type { ExpenseRow, ExpensesPage, ExpensesQuery, PayeeHistory, PayeeHistoryQuery, PayeeHistoryRow, Spending, SpendingQuery } from '@hermes/shared';
+import type { ExpenseRow, ExpensesPage, ExpensesQuery, PayeeHistory, PayeeHistoryQuery, PayeeHistoryRow, Reimbursements, Spending, SpendingQuery } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
 import { periodRange } from './ledger.ts';
@@ -41,7 +41,8 @@ const OUT = `((lines.category_id IS NOT NULL AND c.is_transfer = 0 AND c.is_inco
 // Reimbursed charges (work pays them back) are money movement, not spending, but they still belong in a payee's History: an unsplit
 // charge only, never the payback deposit or a split line fronted for someone else.
 // ponytail: found by category name, add a category flag if the owner ever renames it
-const REIMBURSED = "(c.is_transfer = 1 AND lower(c.name) LIKE 'reimburs%' AND lines.is_split = 0 AND lines.amount < 0)";
+const REIMBURSEMENT = "(c.is_transfer = 1 AND lower(c.name) LIKE 'reimburs%')";
+const REIMBURSED = `(${REIMBURSEMENT} AND lines.is_split = 0 AND lines.amount < 0)`;
 
 // In: income categories only; an uncategorized inflow is never income
 const IN = '(lines.category_id IS NOT NULL AND c.is_income = 1)';
@@ -149,6 +150,9 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
   const bankText = (b: string) => b.toLowerCase().replace(/\s+/g, ' ').trim();
   const bankKey = q.bank ? bankText(q.bank) : '';
   if (!ids.size && !keys.length) throw new ApiError(400, 'NO_NAME', 'this name has nothing to match', 'name');
+  // names the owner left out of this payee's History
+  const excluded = new Set(q.recurringId ? [] : (db.prepare('SELECT excluded_key AS k FROM history_exclusions WHERE payee_key = ?').all(keys[0]) as { k: string }[]).map((r) => r.k));
+  const names = new Map<string, { name: string; excluded: boolean }>();
   const all = ['0000-01-01', '9999-12-31'];
   // a payee's "whole foods" matches "whole foods market", not the other way round
   const hit = (s: string | null) => !!s && (q.recurringId ? keys.includes(normalizeName(s)) : `${normalizeName(s)} `.startsWith(`${keys[0]} `));
@@ -157,7 +161,8 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
     SELECT lines.transaction_id, lines.date, lines.created_at, lines.row_order, lines.name, lines.amount, lines.is_split, t.amount_cents AS total,
            t.source, t.source_id, t.pending, t.payee, t.merchant_name, t.bank_description, COALESCE(${REIMBURSED}, 0) AS reimbursed
       FROM lines JOIN transactions t ON t.id = lines.transaction_id LEFT JOIN categories c ON c.id = lines.category_id
-     WHERE ${OUT} OR ${REIMBURSED}
+     -- a bill counts every charge for it, transfers too (a monthly investment)
+     WHERE ${OUT} OR ${REIMBURSED}${q.recurringId ? ' OR (lines.amount < 0 AND c.is_transfer = 1)' : ''}
      ORDER BY lines.date DESC, lines.created_at DESC, lines.row_order DESC, COALESCE(lines.line_id, '~')`).all(...all, ...all, ...all) as {
       transaction_id: string; date: string; created_at: string; row_order: number; name: string; amount: number; is_split: number; total: number;
       source: string; source_id: string | null; pending: number; payee: string | null; merchant_name: string | null; bank_description: string;
@@ -167,6 +172,9 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
   const collect = (match: (l: (typeof lines)[number]) => { named: string | false | undefined; whole: boolean }) => { for (const l of lines) {
     const { named, whole } = match(l);
     if (!named) continue;
+    const key = normalizeName(named);
+    if (!q.recurringId && key !== keys[0] && !names.has(key)) names.set(key, { name: named, excluded: excluded.has(key) });
+    if (excluded.has(key)) continue;
     const r = rows.get(l.transaction_id);
     if (r) { r.row.shareCents -= l.amount; r.row.reimbursed ||= l.reimbursed === 1; }
     else {
@@ -196,8 +204,15 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
     collect((l) => ({ named: l.transaction_id === source && l.name, whole: true }));
   }
   const months = Array.from({ length: 12 }, (_, i) => ({ month: monthBack(today, 11 - i), cents: 0 }));
+  // a row someone else paid stores the owner's share; its receipt shows the whole charge
+  const paidBy = new Map((db.prepare(`SELECT ri.transaction_id AS id, SUM(ri.amount_cents) + COALESCE(MAX(r.tax_cents), 0) + COALESCE(MAX(r.tip_cents), 0)
+      + COALESCE(MAX(r.fees_cents), 0) AS whole
+    FROM receipt_items ri JOIN transactions t ON t.id = ri.transaction_id LEFT JOIN receipts r ON r.transaction_id = ri.transaction_id
+    WHERE t.paid_by_person_id IS NOT NULL GROUP BY ri.transaction_id`).all() as { id: string; whole: number }[]).map((r) => [r.id, r.whole]));
   for (const { row } of rows.values()) {
     if (row.totalCents === row.shareCents) row.totalCents = null; // a self-only split reads as a plain charge
+    const whole = paidBy.get(row.transactionId);
+    if (whole !== undefined && whole > row.shareCents) row.totalCents = whole;
     const m = months.find((x) => x.month === row.date.slice(0, 7));
     if (m && !row.upcoming) m.cents += row.shareCents;
   }
@@ -213,6 +228,24 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
   const page = after.slice(0, q.limit);
   return {
     name, months, totalCents, averageCents: Math.round(totalCents / span), rows: page.map((r) => r.row),
-    nextCursor: after.length > q.limit ? encodeCursor(page[page.length - 1]!.at) : null,
+    nextCursor: after.length > q.limit ? encodeCursor(page[page.length - 1]!.at) : null, names: [...names.values()],
   };
+}
+
+/** Reimbursement lines (the owner's own, both signs) for twelve months ending this month, newest first, and each month's charges, paybacks and gap. */
+export function getReimbursements(db: Db, today: string): Reimbursements {
+  const range = [`${monthBack(today, 11)}-01`, `${monthBack(today, -1)}-01`];
+  const lines = db.prepare(`${LINES}
+    SELECT lines.transaction_id AS transactionId, lines.line_id AS lineId, lines.date, lines.name, lines.amount AS amountCents
+      FROM lines JOIN categories c ON c.id = lines.category_id WHERE ${REIMBURSEMENT}
+     ORDER BY lines.date DESC, lines.created_at DESC, lines.row_order DESC, COALESCE(lines.line_id, '~')`)
+    .all(...range, ...range, ...range) as Reimbursements['rows'];
+  const months = Array.from({ length: 12 }, (_, i) => {
+    const month = monthBack(today, i);
+    const of = lines.filter((l) => l.date.startsWith(month));
+    const outCents = of.reduce((s, l) => s - Math.min(l.amountCents, 0), 0);
+    const inCents = of.reduce((s, l) => s + Math.max(l.amountCents, 0), 0);
+    return { month, outCents, inCents, unpaidCents: outCents - inCents };
+  });
+  return { months, rows: lines };
 }

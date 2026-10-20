@@ -48,7 +48,7 @@ test('read model: active plaid streams with overrides, manual items, price up, m
   seedAccount(db, { id: 'a2', type: 'credit' });
   seedTxn(db, { id: 'm1', accountId: 'a1', date: '2026-02-10', amountCents: -999, payee: 'Synthetic Cloud #22', source: 'plaid', sourceId: 'm1' });
   seedTxn(db, { id: 'm2', accountId: 'a2', date: '2026-03-10', amountCents: -999, payee: 'SYNTHETIC CLOUD #23', source: 'plaid', sourceId: 'm2' });
-  db.prepare("INSERT INTO recurring_manual VALUES ('man-1', 'Synthetic Cloud', 'synthetic cloud', 'monthly', 'm1', 0, 'x')").run();
+  db.prepare("INSERT INTO recurring_manual (id, name, match_text, frequency, source_transaction_id, hidden, created_at) VALUES ('man-1', 'Synthetic Cloud', 'synthetic cloud', 'monthly', 'm1', 0, 'x')").run();
   const r = getRecurring(db, '2026-03-15', false);
   assert.deepEqual(r.items.map((i) => [i.id, i.name]), [['man-1', 'Synthetic Cloud'], ['s-gym', 'Synthetic Gym'], ['s-yr', 'Synthetic Renamed'], ['s-tv', 'Synthetic TV']]);
   const tv = r.items.find((i) => i.id === 's-tv')!;
@@ -69,7 +69,7 @@ test('a manual item whose text no longer matches falls back to its source transa
   const { db } = deps;
   seedAccount(db, { id: 'a1', type: 'credit' });
   seedTxn(db, { id: 'src', accountId: 'a1', date: '2026-03-02', amountCents: -1234, payee: 'Synthetic Renamed Shop' });
-  db.prepare("INSERT INTO recurring_manual VALUES ('man-1', 'Synthetic Shop', 'synthetic shop', 'monthly', 'src', 0, 'x')").run();
+  db.prepare("INSERT INTO recurring_manual (id, name, match_text, frequency, source_transaction_id, hidden, created_at) VALUES ('man-1', 'Synthetic Shop', 'synthetic shop', 'monthly', 'src', 0, 'x')").run();
   const item = getRecurring(db, '2026-03-15', false).items[0]!;
   assert.deepEqual([item.id, item.lastDate, item.amountCents, item.nextDate], ['man-1', '2026-03-02', 1234, '2026-04-02']);
   db.prepare("UPDATE transactions SET removed_at = 'x' WHERE id = 'src'").run();
@@ -88,8 +88,8 @@ test('median averages the middle two; a manual item a visible Plaid stream also 
   seedTxn(db, { id: 't1', accountId: 'a1', date: '2026-02-10', amountCents: -1000, payee: 'Synthetic Cloud' });
   seedTxn(db, { id: 't2', accountId: 'a1', date: '2026-03-10', amountCents: -1200, payee: 'Synthetic Cloud' });
   seedTxn(db, { id: 't3', accountId: 'a1', date: '2026-03-10', amountCents: -500, payee: 'Synthetic Box' });
-  db.prepare("INSERT INTO recurring_manual VALUES ('man-1', 'Synthetic Cloud', 'synthetic cloud', 'monthly', 't1', 0, 'x')").run();
-  db.prepare("INSERT INTO recurring_manual VALUES ('man-2', 'Synthetic Box', 'synthetic box', 'monthly', 't3', 0, 'x')").run();
+  db.prepare("INSERT INTO recurring_manual (id, name, match_text, frequency, source_transaction_id, hidden, created_at) VALUES ('man-1', 'Synthetic Cloud', 'synthetic cloud', 'monthly', 't1', 0, 'x')").run();
+  db.prepare("INSERT INTO recurring_manual (id, name, match_text, frequency, source_transaction_id, hidden, created_at) VALUES ('man-2', 'Synthetic Box', 'synthetic box', 'monthly', 't3', 0, 'x')").run();
   const r = getRecurring(db, '2026-03-15', true);
   assert.deepEqual(r.items.map((i) => i.id), ['s2', 's1']);
   assert.equal(r.monthlyTotalCents, 999 * 2);
@@ -106,15 +106,34 @@ test('past next dates roll forward by whole intervals; windows include today, +7
   for (const [id, next] of [['d0', '2026-03-15'], ['d7', '2026-03-22'], ['d8', '2026-03-23'], ['d30', '2026-04-14'], ['d31', '2026-04-15']]) {
     ins.run(id, `Synthetic ${id}`, 'monthly', '2026-03-01', next);
   }
-  ins.run('past', 'Synthetic Past', 'monthly', '2026-01-10', '2026-02-10');
+  ins.run('past', 'Synthetic Past', 'monthly', '2026-02-10', '2026-02-10'); // a stale prediction, one charge missed
   ins.run('unk', 'Synthetic Unknown', 'unknown', '2026-03-01', null);
   seedAccount(db, { id: 'a1', type: 'credit' });
   seedTxn(db, { id: 't1', accountId: 'a1', date: '2026-01-31', amountCents: -100, payee: 'Synthetic Gym' });
-  db.prepare("INSERT INTO recurring_manual VALUES ('man', 'Synthetic Gym', 'synthetic gym', 'monthly', 't1', 0, 'x')").run();
+  db.prepare("INSERT INTO recurring_manual (id, name, match_text, frequency, source_transaction_id, hidden, created_at) VALUES ('man', 'Synthetic Gym', 'synthetic gym', 'monthly', 't1', 0, 'x')").run();
   const r = getRecurring(db, '2026-03-15', false);
   assert.deepEqual(r.upcoming.map((i) => [i.id, i.nextDate]), [['d0', '2026-03-15'], ['d7', '2026-03-22'], ['d8', '2026-03-23'],
     ['man', '2026-03-31'], ['past', '2026-04-10'], ['d30', '2026-04-14']]);
   assert.equal(r.dueThisWeek, 2);
   assert.equal(r.items.find((i) => i.id === 'unk')!.monthlyCents, null);
   assert.equal(r.monthlyTotalCents, 700);
+});
+
+test('a bill two expected charges behind has ended: no next date, out of upcoming and the totals; unknown never ends', () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedItem(deps, { id: 'item-1', plaidItemId: 'p1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
+  const ins = db.prepare(`INSERT INTO recurring_streams VALUES (?, 'item-1', ?, ?, 1000, 1000, ?, ?, 1, 'mature', 'x', '[]')`);
+  ins.run('gone', 'Synthetic Gone', 'monthly', '2026-01-10', '2026-02-10'); // 03-10 was the second missed charge
+  ins.run('late', 'Synthetic Late', 'monthly', '2026-01-15', '2026-02-15'); // the second is due today
+  ins.run('unk', 'Synthetic Unknown', 'unknown', '2025-01-01', null);
+  seedAccount(db, { id: 'a1', type: 'credit' });
+  seedTxn(db, { id: 't1', accountId: 'a1', date: '2026-02-28', amountCents: -500, payee: 'Synthetic Weekly' });
+  db.prepare("INSERT INTO recurring_manual (id, name, match_text, frequency, source_transaction_id, created_at) VALUES ('man', 'Synthetic Weekly', 'synthetic weekly', 'weekly', 't1', 'x')").run();
+  const r = getRecurring(db, '2026-03-15', false);
+  assert.deepEqual(r.items.map((i) => [i.id, i.ended, i.cancelled, i.nextDate]),
+    [['gone', true, false, null], ['late', false, false, '2026-03-15'], ['unk', false, false, null], ['man', true, false, null]]);
+  assert.deepEqual(r.upcoming.map((i) => i.id), ['late']);
+  assert.equal(r.monthlyTotalCents, 1000);
+  assert.equal(r.dueThisWeek, 1);
 });

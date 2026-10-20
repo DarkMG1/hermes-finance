@@ -26,6 +26,8 @@ export const SplitLine = z.object({
 });
 export type SplitLine = z.infer<typeof SplitLine>;
 
+export const RecurringFrequency = z.enum(['weekly', 'biweekly', 'semi_monthly', 'monthly', 'annually', 'unknown']);
+
 export const Transaction = z.object({
   id: Id, accountId: Id, source: z.enum(['plaid', 'manual', 'actual', 'applecard']), date: DateStr,
   amountCents: Cents, payee: z.string(), bankDescription: z.string(), merchantName: z.string().nullable(),
@@ -36,6 +38,8 @@ export const Transaction = z.object({
   forgiven: z.boolean(),
   /** The payee has a History to open: a name to match, not an unsplit IOU, and not only the bank's raw text. */
   hasHistory: z.boolean(),
+  /** The visible Recurring item this charge belongs to (ended ones too). */
+  recurring: z.object({ id: z.string(), name: z.string(), frequency: RecurringFrequency }).nullable(),
 });
 export type Transaction = z.infer<typeof Transaction>;
 
@@ -248,8 +252,22 @@ export const PayeeHistoryRow = z.object({
   transactionId: Id, date: DateStr, name: z.string(), shareCents: Cents, totalCents: Cents.nullable(), upcoming: z.boolean(), reimbursed: z.boolean(),
 });
 export type PayeeHistoryRow = z.infer<typeof PayeeHistoryRow>;
-export const PayeeHistory = z.object({ name: z.string(), months: z.array(PayeeMonth), totalCents: Cents, averageCents: Cents, rows: z.array(PayeeHistoryRow), nextCursor: z.string().nullable() });
+/** names: payee mode only, every other name its rows matched (first-seen spelling) and whether the owner left it out; excluded rows aren't counted. */
+export const PayeeHistory = z.object({
+  name: z.string(), months: z.array(PayeeMonth), totalCents: Cents, averageCents: Cents, rows: z.array(PayeeHistoryRow), nextCursor: z.string().nullable(),
+  names: z.array(z.object({ name: z.string(), excluded: z.boolean() })),
+});
 export type PayeeHistory = z.infer<typeof PayeeHistory>;
+/** Leaves a longer name out of a payee's History (excluded: false puts it back). */
+export const HistoryExclusionBody = z.object({ name: z.string().min(1).max(2000), excludedName: z.string().min(1).max(2000), excluded: z.boolean() }).strict();
+export type HistoryExclusionBody = z.infer<typeof HistoryExclusionBody>;
+
+/** The last 12 months of Reimbursement lines, newest first: charges out, paybacks in, and what's still unpaid. amountCents is signed as stored. */
+export const Reimbursements = z.object({
+  months: z.array(z.object({ month: Month, outCents: Cents, inCents: Cents, unpaidCents: Cents })),
+  rows: z.array(z.object({ transactionId: Id, lineId: Id.nullable(), date: DateStr, name: z.string(), amountCents: Cents })),
+});
+export type Reimbursements = z.infer<typeof Reimbursements>;
 
 export const Bank = z.object({
   itemId: Id, institutionName: z.string(), status: z.enum(['ok', 'login_required', 'error']),
@@ -339,16 +357,21 @@ export type InboxList = z.infer<typeof InboxList>;
 export const LinkInboxBody = z.object({ transactionId: Id }).strict();
 export type LinkInboxBody = z.infer<typeof LinkInboxBody>;
 
-export const RecurringFrequency = z.enum(['weekly', 'biweekly', 'semi_monthly', 'monthly', 'annually', 'unknown']);
 const WritableFrequency = RecurringFrequency.exclude(['unknown']);
 export const RecurringItem = z.object({
   id: z.string(), source: z.enum(['plaid', 'manual']), name: z.string(), frequency: RecurringFrequency, amountCents: Cents, variable: z.boolean(),
   lastDate: DateStr, lastCents: Cents, nextDate: DateStr.nullable(), monthlyCents: Cents.nullable(), priceUpCents: Cents, isNew: z.boolean(), hidden: z.boolean(),
+  /** Two expected charges missed, or cancelled by hand with no charge since: no next date, out of upcoming and the monthly total. */
+  ended: z.boolean(),
+  /** Ended because the owner marked it cancelled (always also ended). */
+  cancelled: z.boolean(),
 });
 export type RecurringItem = z.infer<typeof RecurringItem>;
 export const RecurringList = z.object({ upcoming: z.array(RecurringItem), items: z.array(RecurringItem), monthlyTotalCents: Cents, dueThisWeek: z.number().int() });
 export type RecurringList = z.infer<typeof RecurringList>;
-export const PatchRecurringBody = z.object({ hidden: z.boolean().optional(), name: z.string().trim().min(1).max(100).nullable().optional(), frequency: WritableFrequency.optional() })
+export const PatchRecurringBody = z.object({ hidden: z.boolean().optional(), name: z.string().trim().min(1).max(100).nullable().optional(), frequency: WritableFrequency.optional(),
+  /** true: cancelled as of its last charge (a newer charge brings it back); false: not cancelled. */
+  ended: z.boolean().optional() })
   .strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
 export type PatchRecurringBody = z.infer<typeof PatchRecurringBody>;
 export const CreateRecurringBody = z.object({ transactionId: Id, frequency: WritableFrequency, name: z.string().trim().min(1).max(100).optional() }).strict();

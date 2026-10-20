@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Db } from '../db.ts';
 import type { PlaidAccount, PlaidTxn, SyncPage } from '../plaid/port.ts';
 import { plaidAmountToCents } from '../money.ts';
-import { fitSplitToAmount } from '../ledger.ts';
+import { fitSplitToAmount, merchantMemory } from '../ledger.ts';
 import { nameZellePayees } from '../zelle.ts';
 
 export type ApplyCounts = { added: number; modified: number; removed: number };
@@ -65,6 +65,7 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
   const moveReceipt = db.prepare('UPDATE receipts SET transaction_id = ? WHERE transaction_id = ? AND NOT EXISTS (SELECT 1 FROM receipts WHERE transaction_id = ?)');
   const moveInboxLink = db.prepare('UPDATE inbox_receipts SET linked_transaction_id = ? WHERE linked_transaction_id = ?');
   const mappedCategory = db.prepare('SELECT category_id FROM plaid_category_map WHERE plaid_category = ?');
+  const remembered = merchantMemory(db);
   const checkSuperseded = db.prepare("SELECT id FROM transactions WHERE source = 'plaid' AND pending_source_id = ?");
   const getRow = db.prepare("SELECT id, date, date_owner_set, category_id, category_owner_set, payee, notes, person_id, repayment_dismissed FROM transactions WHERE source = 'plaid' AND source_id = ?");
   const upsert = db.prepare(`
@@ -95,11 +96,13 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
         return false;
       }
     }
-    const mapped = t.category ? (mappedCategory.get(t.category) as { category_id: string } | undefined) : undefined;
+    // what the same merchant was categorized as last time comes before the Plaid category's mapping
+    const learned = remembered(t.merchantName, t.name)
+      ?? (t.category ? (mappedCategory.get(t.category) as { category_id: string } | undefined)?.category_id : undefined) ?? null;
     // Check if row exists
     const exists = getRow.get(t.transactionId) as { id: string } | undefined;
     // When inserting new row with a pending predecessor, carry over owner fields
-    let categoryId = mapped?.category_id ?? null;
+    let categoryId = learned;
     let ownerSet = 0;
     let payee: string | null = null;
     let notes: string | null = null;
@@ -114,7 +117,7 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
           notes: string | null; person_id: string | null; repayment_dismissed: number } | undefined;
       if (pending) {
         ownerSet = pending.category_owner_set;
-        categoryId = pending.category_id !== null || ownerSet ? pending.category_id : mapped?.category_id ?? null;
+        categoryId = pending.category_id !== null || ownerSet ? pending.category_id : learned;
         payee = pending.payee;
         notes = pending.notes;
         personId = pending.person_id;

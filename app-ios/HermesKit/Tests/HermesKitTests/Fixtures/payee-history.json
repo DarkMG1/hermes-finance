@@ -63,5 +63,11 @@
       "reimbursed": false
     }
   ],
-  "nextCursor": null
+  "nextCursor": null,
+  "names": [
+    {
+      "name": "Synthetic Split Extra",
+      "excluded": true
+    }
+  ]
 }

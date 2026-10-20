@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { parseAppleCardCsv, parseCsv, sourceIds } from '../src/applecard.ts';
 import { buildApp } from '../src/app.ts';
 import { getSpending } from '../src/cashflow.ts';
-import { AUTH, makeTestDeps, seedCategory } from './helpers.ts';
+import { AUTH, makeTestDeps, seedAccount, seedCategory, seedTxn } from './helpers.ts';
 
 const HEADER = 'Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD),Purchased By';
 const SEPT = [
@@ -210,4 +210,19 @@ test('re-import keeps a date the owner changed', async () => {
   await post(app, SEPT, 'k2');
   const dates = deps.db.prepare("SELECT date FROM transactions WHERE source = 'applecard' AND amount_cents IN (-1234, -105000) ORDER BY amount_cents").all();
   assert.deepEqual(dates, [{ date: '2026-09-03' }, { date: '2026-10-01' }]);
+});
+
+test('new rows take the category of the newest row with their merchant name ahead of the mapping', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  seedAccount(deps.db, { id: 'a1' });
+  seedCategory(deps.db, { id: 'dining', name: 'Dining' });
+  seedCategory(deps.db, { id: 'coffee', name: 'Coffee' });
+  seedCategory(deps.db, { id: 'grocery', name: 'Grocery' });
+  deps.db.prepare("INSERT INTO plaid_category_map (plaid_category, category_id) VALUES ('Restaurants', 'dining')").run();
+  seedTxn(deps.db, { id: 'old', accountId: 'a1', date: '2026-08-01', amountCents: -500, categoryId: 'coffee', payee: 'Synthetic Cafe' });
+  seedTxn(deps.db, { id: 'old2', accountId: 'a1', date: '2026-08-01', amountCents: -500, categoryId: 'grocery', bankDescription: 'SYNTHETIC GROCER' });
+  await post(app, SEPT, 'k1');
+  const cat = (cents: number) => (deps.db.prepare("SELECT category_id FROM transactions WHERE source = 'applecard' AND amount_cents = ?").get(cents) as { category_id: string | null }).category_id;
+  assert.deepEqual([cat(-1234), cat(-105000)], ['coffee', 'grocery']);
 });

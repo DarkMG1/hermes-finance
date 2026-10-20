@@ -13,7 +13,9 @@
       "monthlyCents": 1500,
       "priceUpCents": 200,
       "isNew": false,
-      "hidden": false
+      "hidden": false,
+      "ended": false,
+      "cancelled": false
     }
   ],
   "items": [
@@ -30,7 +32,9 @@
       "monthlyCents": 1500,
       "priceUpCents": 200,
       "isNew": false,
-      "hidden": false
+      "hidden": false,
+      "ended": false,
+      "cancelled": false
     }
   ],
   "monthlyTotalCents": 1500,

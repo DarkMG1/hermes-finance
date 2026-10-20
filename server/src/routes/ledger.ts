@@ -1,14 +1,15 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
-import { CreateTransactionBody, ExpensesQuery, ListTransactionsQuery, NetWorthQuery, PatchAccountBody, PatchSplitLineBody, PatchTransactionBody, PayeeHistoryQuery, PutSplitsBody, SpendingQuery } from '@hermes/shared';
+import { CreateTransactionBody, ExpensesQuery, HistoryExclusionBody, ListTransactionsQuery, NetWorthQuery, PatchAccountBody, PatchSplitLineBody, PatchTransactionBody, PayeeHistoryQuery, PutSplitsBody, SpendingQuery } from '@hermes/shared';
 import type { Db } from '../db.ts';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { assertPersonTaggable, owedToYouCents, suggestions, youOweCents } from '../people.ts';
-import { getExpenses, getPayeeHistory, getSpending } from '../cashflow.ts';
+import { getExpenses, getPayeeHistory, getReimbursements, getSpending } from '../cashflow.ts';
 import { restoreToInbox } from '../inbox.ts';
+import { normalizeName } from '../recurring.ts';
 import { getNetWorth, localDay } from '../networth.ts';
 import { oldestOpenBefore } from '../reconcile.ts';
 import { assertCategoryExists, getHome, getTransaction, learnCategory, listAccounts, listCategories, listTransactions } from '../ledger.ts';
@@ -59,6 +60,17 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   app.get('/v1/spending', async (req) => getSpending(db, parseBody(SpendingQuery, req.query)));
   app.get('/v1/net-worth', async (req) => getNetWorth(db, parseBody(NetWorthQuery, req.query).range, localDay(deps.now())));
   app.get('/v1/payee-history', async (req) => getPayeeHistory(db, parseBody(PayeeHistoryQuery, req.query), localDay(deps.now())));
+  // an upsert or delete: replaying it changes nothing, so no idempotency key
+  app.put('/v1/payee-history/exclusions', async (req, reply) => {
+    const body = parseBody(HistoryExclusionBody, req.body);
+    const [payee, name] = [body.name, body.excludedName].map(normalizeName) as [string, string];
+    if (!payee || !name) throw new ApiError(400, 'NO_NAME', 'this name has nothing to match', payee ? 'excludedName' : 'name');
+    if (payee === name) throw new ApiError(400, 'INVALID_REQUEST', "excludedName: a payee's own name can't be left out", 'excludedName');
+    db.prepare(body.excluded ? 'INSERT OR IGNORE INTO history_exclusions (payee_key, excluded_key) VALUES (?, ?)'
+      : 'DELETE FROM history_exclusions WHERE payee_key = ? AND excluded_key = ?').run(payee, name);
+    return reply.code(204).send();
+  });
+  app.get('/v1/reimbursements', async () => getReimbursements(db, localDay(deps.now())));
 
   app.get<{ Params: { id: string } }>('/v1/transactions/:id', async (req) => {
     const t = getTransaction(db, req.params.id);

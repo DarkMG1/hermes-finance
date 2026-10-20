@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.ts';
-import { AUTH, makeTestDeps, seedAccount, seedItem, seedSplit, seedTxn } from './helpers.ts';
+import { AUTH, makeTestDeps, seedAccount, seedCategory, seedItem, seedSplit, seedTxn } from './helpers.ts';
 
 function setup() {
   const { deps } = makeTestDeps();
@@ -92,4 +92,56 @@ test('bill history: a Plaid stream lists its posted charges, other rows by exact
   assert.equal((await get('/v1/payee-history?recurringId=nope')).code, 'NOT_FOUND');
   assert.equal((await get('/v1/payee-history?recurringId=s-tv&name=Synthetic%20TV')).code, 'INVALID_REQUEST');
   assert.equal((await get('/v1/payee-history')).code, 'INVALID_REQUEST');
+});
+
+test('mark a bill cancelled as of its last charge; a newer charge brings it back; unmark clears it', async () => {
+  const { get, send, db } = setup();
+  const tv = (await send('PATCH', '/v1/recurring/s-tv', { ended: true })).json();
+  assert.deepEqual([tv.ended, tv.cancelled, tv.nextDate], [true, true, null]);
+  assert.equal((db.prepare("SELECT ended_on FROM recurring_overrides WHERE stream_id = 's-tv'").get() as { ended_on: string }).ended_on, '2026-03-05');
+  const list = await get('/v1/recurring');
+  assert.deepEqual([list.upcoming.length, list.monthlyTotalCents, list.items.find((i: { id: string }) => i.id === 's-tv').ended], [0, 0, true]);
+  db.prepare("UPDATE recurring_streams SET last_date = '2026-03-12' WHERE stream_id = 's-tv'").run();
+  const revived = (await get('/v1/recurring')).items.find((i: { id: string }) => i.id === 's-tv');
+  assert.deepEqual([revived.ended, revived.cancelled], [false, false]);
+  // an auto-ended bill is ended but not cancelled; unmarking a cancelled one leaves it ended by its missed charges
+  db.prepare("UPDATE recurring_streams SET last_date = '2026-01-05' WHERE stream_id = 's-tv'").run();
+  const old = (await send('PATCH', '/v1/recurring/s-tv', { ended: true })).json();
+  assert.deepEqual([old.ended, old.cancelled], [true, true]);
+  const unmarked = (await send('PATCH', '/v1/recurring/s-tv', { ended: false })).json();
+  assert.deepEqual([unmarked.ended, unmarked.cancelled], [true, false]);
+  assert.equal((db.prepare("SELECT ended_on FROM recurring_overrides WHERE stream_id = 's-tv'").get() as { ended_on: string | null }).ended_on, null);
+  const id = (await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly' })).json().id as string;
+  assert.equal((await send('PATCH', `/v1/recurring/${id}`, { ended: true })).json().ended, true);
+  seedTxn(db, { id: 'sub-2', accountId: 'a1', date: '2026-03-12', amountCents: -1099, payee: 'Synthetic Music' });
+  assert.deepEqual((await get('/v1/recurring')).items.filter((i: { id: string }) => i.id === id).map((i: { ended: boolean; lastDate: string }) => [i.ended, i.lastDate]),
+    [[false, '2026-03-12']]);
+  assert.equal((await send('PATCH', `/v1/recurring/${id}`, { ended: false })).json().ended, false);
+});
+
+test('a charge carries the visible bill it belongs to: by stream id or name, by manual name or source; hidden bills none', async () => {
+  const { get, send, db } = setup();
+  seedCategory(db, { id: 'c-invest', name: 'Investment', isTransfer: true });
+  seedTxn(db, { id: 'tv-xfer', accountId: 'a1', date: '2026-03-01', amountCents: -1500, categoryId: 'c-invest', payee: 'Synthetic TV' });
+  const rec = async (id: string) => (await get(`/v1/transactions/${id}`)).recurring;
+  const tv = { id: 's-tv', name: 'Synthetic TV', frequency: 'monthly' };
+  assert.deepEqual(await rec('tv'), tv);
+  assert.deepEqual(await rec('tv-ach'), tv);
+  assert.deepEqual(await rec('tv-other'), tv);
+  assert.equal(await rec('tv-card'), null);
+  assert.equal(await rec('sub'), null);
+  // a transfer has no payee History, but its bill's History counts it
+  assert.deepEqual([(await get('/v1/transactions/tv-xfer')).hasHistory, await rec('tv-xfer')], [true, tv]);
+  const id = (await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly', name: 'Synthetic Tunes' })).json().id as string;
+  const tunes = { id, name: 'Synthetic Tunes', frequency: 'monthly' };
+  assert.deepEqual(await rec('sub'), tunes);
+  const page = (await get('/v1/transactions')).transactions as { id: string; recurring: unknown }[];
+  assert.deepEqual(page.find((t) => t.id === 'sub')!.recurring, tunes);
+  assert.deepEqual(page.find((t) => t.id === 'tv-ach')!.recurring, tv);
+  // ended still counts; renamed away from the bill's text, the charge it was made from still belongs
+  await send('PATCH', `/v1/recurring/${id}`, { ended: true });
+  db.prepare("UPDATE transactions SET payee = 'Synthetic Renamed' WHERE id = 'sub'").run();
+  assert.deepEqual(await rec('sub'), tunes);
+  await send('PATCH', '/v1/recurring/s-tv', { hidden: true });
+  assert.equal(await rec('tv'), null);
 });

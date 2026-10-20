@@ -2,19 +2,22 @@ import type { Account, Category, Home, ListTransactionsQuery, SpendingQuery, Spl
 import type { Db } from './db.ts';
 import { canHaveHistory } from './cashflow.ts';
 import { ApiError } from './errors.ts';
-import { normalizeName } from './recurring.ts';
+import { normalizeName, recurringOf } from './recurring.ts';
 
 export type TxnRow = {
-  id: string; account_id: string; source: 'plaid' | 'manual' | 'actual' | 'applecard'; date: string; amount_cents: number;
+  id: string; account_id: string; source: 'plaid' | 'manual' | 'actual' | 'applecard'; source_id: string | null; date: string; amount_cents: number;
   bank_description: string; merchant_name: string | null; pending: number; category_id: string | null;
   payee: string | null; notes: string | null; person_id: string | null; paid_by_person_id: string | null; repayment_dismissed: number;
   reconciled_at: string | null; reconciled_cents: number | null; forgiven: number;
 };
 
-export const TXN_COLS = 'id, account_id, source, date, amount_cents, bank_description, merchant_name, pending, category_id, payee, notes, person_id, '
+export const TXN_COLS = 'id, account_id, source, source_id, date, amount_cents, bank_description, merchant_name, pending, category_id, payee, notes, person_id, '
   + 'paid_by_person_id, repayment_dismissed, reconciled_at, reconciled_cents, forgiven';
 
-export function rowToTransaction(db: Db, r: TxnRow, spending = canHaveHistory(db, [r])): Transaction {
+/** What a list of rows needs from the rest of the ledger, read once for the whole list. */
+export const lookups = (db: Db, rows: TxnRow[]) => ({ spending: canHaveHistory(db, rows), recurring: recurringOf(db, rows) });
+
+export function rowToTransaction(db: Db, r: TxnRow, { spending, recurring } = lookups(db, [r])): Transaction {
   const lines = db.prepare('SELECT id, amount_cents, category_id, notes, person_id, payee FROM split_lines WHERE transaction_id = ? ORDER BY id').all(r.id) as
     { id: string; amount_cents: number; category_id: string | null; notes: string | null; person_id: string | null; payee: string | null }[];
   const splitLines: SplitLine[] = lines.map((l) => ({
@@ -29,7 +32,9 @@ export function rowToTransaction(db: Db, r: TxnRow, spending = canHaveHistory(db
     forgiven: r.forgiven === 1,
     hasReceipt: db.prepare('SELECT 1 FROM receipts WHERE transaction_id = ?').get(r.id) !== undefined,
     // raw bank text alone (no merchant, no owner payee) is often generic ("POS PURCHASE") and would pool unrelated charges
-    hasHistory: normalizeName(payee) !== '' && (r.payee !== null || r.merchant_name !== null) && spending.has(r.id),
+    // a bill's charge always opens the bill's History
+    hasHistory: (normalizeName(payee) !== '' && (r.payee !== null || r.merchant_name !== null) && spending.has(r.id)) || recurring.has(r.id),
+    recurring: recurring.get(r.id) ?? null,
   };
 }
 
@@ -100,9 +105,9 @@ export function listTransactions(db: Db, q: ListTransactionsQuery): TransactionP
     .all(...args, q.limit + 1) as TxnRow[];
   const page = rows.slice(0, q.limit);
   const last = page[page.length - 1];
-  const spending = canHaveHistory(db, page);
+  const l = lookups(db, page);
   return {
-    transactions: page.map((r) => rowToTransaction(db, r, spending)),
+    transactions: page.map((r) => rowToTransaction(db, r, l)),
     nextCursor: rows.length > q.limit && last ? encodeCursor(last.date, last.id) : null,
   };
 }
@@ -136,6 +141,17 @@ export function learnCategory(db: Db, transactionId: string, categoryId: string,
      WHERE source IN ('plaid', 'applecard') AND plaid_category = ? AND category_id IS NULL AND category_owner_set = 0 AND removed_at IS NULL
        AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = transactions.id)`)
     .run(categoryId, nowIso, row.plaid_category);
+}
+
+/** Merchant memory: the category of the newest live, unsplit, untagged categorized row by each name, looked up by a new bank row's
+ *  merchant name, else its bank text. Read once per sync or import. */
+export function merchantMemory(db: Db): (merchant: string | null, bank: string) => string | null {
+  const memory = new Map<string, string>();
+  for (const r of db.prepare(`SELECT COALESCE(payee, merchant_name, bank_description) AS name, category_id FROM transactions t
+      WHERE removed_at IS NULL AND category_id IS NOT NULL AND person_id IS NULL AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
+      ORDER BY date, created_at, rowid`).all() as { name: string; category_id: string }[]) memory.set(normalizeName(r.name), r.category_id);
+  memory.delete('');
+  return (merchant, bank) => (merchant ? memory.get(normalizeName(merchant)) : undefined) ?? memory.get(normalizeName(bank)) ?? null;
 }
 
 /**

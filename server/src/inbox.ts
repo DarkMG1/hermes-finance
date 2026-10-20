@@ -3,7 +3,7 @@ import type { Db } from './db.ts';
 import type { Deps } from './deps.ts';
 import { ApiError } from './errors.ts';
 import { applyItems, computeShares, ME, replaceItems, ShareError } from './itemize.ts';
-import { getTransaction } from './ledger.ts';
+import { getTransaction, lookups, rowToTransaction, TXN_COLS, type TxnRow } from './ledger.ts';
 import { assertPersonTaggable } from './people.ts';
 import type { ReadResult } from './receipt-reader.ts';
 import { normalizeName } from './recurring.ts';
@@ -42,11 +42,12 @@ const sharesWord = (t: Transaction, store: Set<string>) => [t.payee, t.merchantN
 function candidates(db: Db, row: InboxRow): { exact: Transaction[]; near: Transaction[] } {
   if (row.total_cents === null || row.total_cents <= 0) return { exact: [], near: [] };
   const day = row.purchase_date ?? row.captured_at.slice(0, 10);
-  const ids = (db.prepare(`SELECT t.id FROM transactions t
+  const rows = db.prepare(`SELECT ${TXN_COLS} FROM transactions t
       WHERE t.amount_cents < 0 AND t.removed_at IS NULL AND t.paid_by_person_id IS NULL AND t.date BETWEEN ? AND ?
         AND NOT EXISTS (SELECT 1 FROM receipts r WHERE r.transaction_id = t.id)
-      ORDER BY t.date DESC, t.created_at DESC, t.id DESC`).all(addDays(day, -1), addDays(day, 5)) as { id: string }[]).map((r) => r.id);
-  const txns = ids.map((id) => getTransaction(db, id)!);
+      ORDER BY t.date DESC, t.created_at DESC, t.id DESC`).all(addDays(day, -1), addDays(day, 5)) as TxnRow[];
+  const l = lookups(db, rows);
+  const txns = rows.map((r) => rowToTransaction(db, r, l));
   const total = row.total_cents;
   const store = words(row.merchant);
   const exact = txns.filter((t) => -t.amountCents === total);

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { AppleCardImportResult, Bank, Home, Investments, Itemization, LinkSession, NetWorthHistory, PayeeHistory, Spending, SyncStatus, Transaction, TransactionPage } from '@hermes/shared';
+import { AppleCardImportResult, Bank, Home, Investments, Itemization, LinkSession, NetWorthHistory, PayeeHistory, RecurringList, Reimbursements, Spending, SyncStatus, Transaction, TransactionPage } from '@hermes/shared';
 import { buildFixtures, FIXTURE_DIR } from './fixtures/generate.ts';
 
 const root = join(import.meta.dirname, '..', '..');
@@ -32,4 +32,9 @@ test('fixtures satisfy the shared contract', async () => {
   LinkSession.parse(f['link-session.json']);
   Bank.parse(f['link-complete.json']);
   AppleCardImportResult.parse(f['apple-card-import.json']);
+  RecurringList.parse(f['recurring.json']);
+  Transaction.parse(f['transaction-recurring.json']);
+  Reimbursements.parse(f['reimbursements.json']);
+  assert.ok(Transaction.parse(f['transaction-recurring.json']).recurring);
+  assert.deepEqual(PayeeHistory.parse(f['payee-history.json']).names, [{ name: 'Synthetic Split Extra', excluded: true }]);
 });
