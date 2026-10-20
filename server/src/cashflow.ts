@@ -133,6 +133,14 @@ export function historyLines(db: Db, rows: { id: string; date: string }[]): { sp
   return { spending: new Set(hits.filter((h) => h.spending).map((h) => h.id)), billable: new Set(hits.filter((h) => h.billable).map((h) => h.id)) };
 }
 
+/** Whether a payee's History leaves a name out: the longest rule that is a whole-word prefix of it decides ("acme gas" takes "acme gas
+ * station" unless that has its own rule), and no rule keeps it in. skip ignores that name's own rule. */
+export function excludedBy(db: Db, payee: string): (key: string, skip?: string) => boolean {
+  const rules = db.prepare('SELECT excluded_key AS k, excluded FROM history_exclusions WHERE payee_key = ? ORDER BY length(excluded_key) DESC')
+    .all(payee) as { k: string; excluded: number }[];
+  return (key, skip) => rules.find((r) => r.k !== skip && `${key} `.startsWith(`${r.k} `))?.excluded === 1;
+}
+
 /** One payee's or bill's spending, by the same rules as Expenses: twelve months ending this month, and every matching charge, newest
  * first and paged. A Plaid bill's posted Plaid charges are exactly its stream's; every other row of a bill matches its name exactly, as
  * Recurring does (and, like Recurring, falls back to the charge a manual bill was made from); a payee's name matches as a whole-word
@@ -154,9 +162,7 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
   keys = keys.filter(Boolean);
   const bankKey = q.bank ? bankText(q.bank) : '';
   if (!ids.size && !keys.length) throw new ApiError(400, 'NO_NAME', 'this name has nothing to match', 'name');
-  // names the owner left out of this payee's History, each with every longer name it starts ("acme gas" takes "acme gas station")
-  const excluded = q.recurringId ? [] : (db.prepare('SELECT excluded_key AS k FROM history_exclusions WHERE payee_key = ?').all(keys[0]) as { k: string }[]).map((r) => r.k);
-  const covered = (key: string) => excluded.some((ex) => `${key} `.startsWith(`${ex} `));
+  const covered = q.recurringId ? () => false : excludedBy(db, keys[0]!);
   const names = new Map<string, { name: string; excluded: boolean }>();
   const all = ['0000-01-01', '9999-12-31'];
   // a payee's "whole foods" matches "whole foods market", not the other way round
@@ -234,8 +240,7 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
   return {
     name, months, totalCents, averageCents: Math.round(totalCents / span), rows: page.map((r) => r.row),
     nextCursor: after.length > q.limit ? encodeCursor(page[page.length - 1]!.at) : null,
-    // a name under another listed exclusion goes with it
-    names: [...names].filter(([k]) => !excluded.some((ex) => ex !== k && names.has(ex) && `${k} `.startsWith(`${ex} `))).map(([, n]) => n),
+    names: [...names.values()],
   };
 }
 

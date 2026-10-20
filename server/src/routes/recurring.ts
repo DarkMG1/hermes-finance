@@ -12,7 +12,7 @@ import { parseBody } from '../validate.ts';
 export function recurringRoutes(app: FastifyInstance, deps: Deps): void {
   const { db } = deps;
   const today = () => localDay(deps.now());
-  // inside the write, so a stream that went inactive (or a manual item with no live charge) rolls back as 404
+  // inside the write, so a tombstoned stream (or a manual item with no live charge) rolls back as 404
   const find = (id: string) => {
     const item = getRecurring(db, today(), true).items.find((i) => i.id === id);
     if (!item) throw new ApiError(404, 'NOT_FOUND', 'recurring item not found');

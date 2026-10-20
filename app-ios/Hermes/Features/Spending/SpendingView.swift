@@ -99,10 +99,9 @@ struct SpendingView: View {
         if let list = try? await model.client?.recurring() { dueThisWeek = list.dueThisWeek }
     }
 
-    /// A payback often lands the month after its charge, so what's still owed is the 12 months' sum.
     private func loadUnpaid() async {
         if let loaded = try? await model.reader?.read("/v1/reimbursements", as: Reimbursements.self) {
-            unpaid = loaded.value.months.reduce(0) { $0 + $1.unpaidCents }
+            unpaid = loaded.value.unpaidCents
         }
     }
 

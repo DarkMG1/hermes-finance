@@ -298,7 +298,7 @@ test('payee history: a row someone else paid shows the whole receipt when that i
   assert.equal(h.totalCents, 7300);
 });
 
-test('payee history: the owner leaves a longer name out of a payee; it and the names it starts go, the name stays listed', async () => {
+test('payee history: the owner leaves a longer name out of a payee; it and the names it starts go, every name stays listed', async () => {
   const { deps } = makeTestDeps();
   const { db } = deps;
   seedAccount(db, { id: 'a1' });
@@ -309,16 +309,19 @@ test('payee history: the owner leaves a longer name out of a payee; it and the n
   row('e3', '2026-02-03', -500, 'Synthetic Club Gas');
   row('e4', '2026-03-04', -700, 'Synthetic Club Deli');
   row('e5', '2026-03-05', -300, 'Synthetic Club Gas Station');
+  row('e6', '2026-03-06', -200, 'Synthetic Club Gas Pump');
   const app = buildApp(deps);
   const get = async (extra = '') => (await app.inject({ method: 'GET', url: `/v1/payee-history?name=synthetic%20club${extra}`, headers: AUTH })).json() as PayeeHistory;
   const put = (payload: object) => app.inject({ method: 'PUT', url: '/v1/payee-history/exclusions', headers: AUTH, payload });
-  const gas = { name: 'Synthetic Club Gas Station', excluded: false };
-  assert.deepEqual((await get()).names, [gas, { name: 'Synthetic Club Deli', excluded: false }, { name: 'SYNTHETIC CLUB GAS #12', excluded: false }]);
+  const rules = () => db.prepare('SELECT excluded_key, excluded FROM history_exclusions ORDER BY excluded_key').all().map((r) => Object.values(r as object));
+  const names = (gas: boolean, station = gas, pump = gas) => [{ name: 'Synthetic Club Gas Pump', excluded: pump }, { name: 'Synthetic Club Gas Station', excluded: station },
+    { name: 'Synthetic Club Deli', excluded: false }, { name: 'SYNTHETIC CLUB GAS #12', excluded: gas }];
+  assert.deepEqual((await get()).names, names(false));
   for (let i = 0; i < 2; i += 1) assert.equal((await put({ name: 'Synthetic Club', excludedName: 'synthetic club gas', excluded: true })).statusCode, 204);
   const h = await get();
-  // "club gas" takes "club gas station" with it, out of the rows and the names
+  // "club gas" takes "club gas station" and "club gas pump" with it, out of the rows; every name stays listed
   assert.deepEqual([h.rows.map((r) => r.transactionId), h.totalCents], [['e4', 'e1'], 1700]);
-  assert.deepEqual(h.names, [{ name: 'Synthetic Club Deli', excluded: false }, { name: 'SYNTHETIC CLUB GAS #12', excluded: true }]);
+  assert.deepEqual(h.names, names(true));
   // names ignore the month; rows and paging follow it
   const feb = await get('&month=2026-02');
   assert.deepEqual([feb.rows, feb.names], [[], h.names]);
@@ -326,10 +329,21 @@ test('payee history: the owner leaves a longer name out of a payee; it and the n
   assert.deepEqual([first.rows.map((r) => r.transactionId), first.names], [['e4'], h.names]);
   assert.deepEqual((await get(`&month=2026-03&limit=1&cursor=${first.nextCursor}`)).rows.map((r) => r.transactionId), ['e1']);
   // a longer payee is its own History: the exclusion belongs to Synthetic Club only
-  assert.equal((await (await app.inject({ method: 'GET', url: '/v1/payee-history?name=Synthetic%20Club%20Gas', headers: AUTH })).json()).rows.length, 3);
-  // putting back a longer name lifts the shorter exclusion that hid it
+  assert.equal((await (await app.inject({ method: 'GET', url: '/v1/payee-history?name=Synthetic%20Club%20Gas', headers: AUTH })).json()).rows.length, 4);
+  // putting back one longer name is a rule of its own: its sibling under "club gas" stays out
   assert.equal((await put({ name: 'Synthetic Club', excludedName: 'Synthetic Club Gas Station', excluded: false })).statusCode, 204);
-  assert.equal((await get()).rows.length, 5);
+  assert.deepEqual([(await get()).rows.map((r) => r.transactionId), (await get()).names], [['e5', 'e4', 'e1'], names(true, false)]);
+  assert.deepEqual(rules(), [['synthetic club gas', 1], ['synthetic club gas station', 0]]);
+  // leaving it out again matches what "club gas" gives it, so its own rule goes
+  assert.equal((await put({ name: 'Synthetic Club', excludedName: 'Synthetic Club Gas Station', excluded: true })).statusCode, 204);
+  assert.deepEqual([(await get()).names, rules()], [names(true), [['synthetic club gas', 1]]]);
+  // the other way: a longer name left out under an included shorter one, and the shorter one put back with no redundant rule
+  assert.equal((await put({ name: 'Synthetic Club', excludedName: 'Synthetic Club Gas', excluded: false })).statusCode, 204);
+  assert.equal((await put({ name: 'Synthetic Club', excludedName: 'Synthetic Club Gas Pump', excluded: true })).statusCode, 204);
+  assert.deepEqual([(await get()).rows.map((r) => r.transactionId), (await get()).names], [['e5', 'e4', 'e2', 'e1', 'e3'], names(false, false, true)]);
+  assert.deepEqual(rules(), [['synthetic club gas pump', 1]]);
+  assert.equal((await put({ name: 'Synthetic Club', excludedName: 'Synthetic Club Gas Pump', excluded: false })).statusCode, 204);
+  assert.deepEqual([(await get()).rows.length, rules()], [6, []]);
   assert.equal((await put({ name: '#123456', excludedName: 'Synthetic Club Gas', excluded: true })).json().code, 'NO_NAME');
   assert.equal((await put({ name: 'Synthetic Club', excludedName: '***', excluded: true })).json().code, 'NO_NAME');
   const own = await put({ name: 'Synthetic Club', excludedName: 'SYNTHETIC CLUB #9', excluded: true });
@@ -347,7 +361,7 @@ test('payee history: names list only longer spellings of the payee, never bank-t
   // matched only by its bank text, titled by text with nothing to match
   seedTxn(db, { id: 'n2', accountId: 'a1', date: '2026-03-02', amountCents: -1000, categoryId: 'c-soft', bankDescription: '#12345' });
   seedTxn(db, { id: 'n3', accountId: 'a1', date: '2026-03-03', amountCents: -1000, categoryId: 'c-soft', merchantName: 'Synthetic Vendor', bankDescription: '#12345' });
-  db.prepare("INSERT INTO history_exclusions VALUES ('synthetic cloud', 'synthetic cloud plus')").run();
+  db.prepare("INSERT INTO history_exclusions VALUES ('synthetic cloud', 'synthetic cloud plus', 1)").run();
   db.prepare("INSERT INTO recurring_manual (id, name, match_text, frequency, source_transaction_id, created_at) VALUES ('man', 'Synthetic Cloud Plus', 'synthetic cloud plus', 'monthly', 'n1', 'x')").run();
   const app = buildApp(deps);
   const get = async (q: string) => (await app.inject({ method: 'GET', url: `/v1/payee-history?${q}`, headers: AUTH })).json() as PayeeHistory;

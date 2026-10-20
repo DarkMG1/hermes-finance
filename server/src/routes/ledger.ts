@@ -7,7 +7,7 @@ import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { assertPersonTaggable, owedToYouCents, suggestionCount, youOweCents } from '../people.ts';
-import { getExpenses, getPayeeHistory, getReimbursements, getSpending } from '../cashflow.ts';
+import { excludedBy, getExpenses, getPayeeHistory, getReimbursements, getSpending } from '../cashflow.ts';
 import { restoreToInbox } from '../inbox.ts';
 import { normalizeName } from '../recurring.ts';
 import { getNetWorth, localDay } from '../networth.ts';
@@ -66,9 +66,12 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
     const [payee, name] = [body.name, body.excludedName].map(normalizeName) as [string, string];
     if (!payee || !name) throw new ApiError(400, 'NO_NAME', 'this name has nothing to match', payee ? 'excludedName' : 'name');
     if (payee === name) throw new ApiError(400, 'INVALID_REQUEST', "excludedName: a payee's own name can't be left out", 'excludedName');
-    // putting a name back also lifts any shorter exclusion that hid it
-    db.prepare(body.excluded ? 'INSERT OR IGNORE INTO history_exclusions (payee_key, excluded_key) VALUES (?, ?)'
-      : "DELETE FROM history_exclusions WHERE payee_key = ? AND substr(? || ' ', 1, length(excluded_key) + 1) = excluded_key || ' '").run(payee, name);
+    // the name's own rule, only while it says something shorter rules don't
+    if (excludedBy(db, payee)(name, name) === body.excluded) db.prepare('DELETE FROM history_exclusions WHERE payee_key = ? AND excluded_key = ?').run(payee, name);
+    else {
+      db.prepare(`INSERT INTO history_exclusions (payee_key, excluded_key, excluded) VALUES (?, ?, ?)
+        ON CONFLICT (payee_key, excluded_key) DO UPDATE SET excluded = excluded.excluded`).run(payee, name, body.excluded ? 1 : 0);
+    }
     return reply.code(204).send();
   });
   app.get('/v1/reimbursements', async () => getReimbursements(db, localDay(deps.now())));

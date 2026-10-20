@@ -365,6 +365,8 @@ export const RecurringItem = z.object({
   ended: z.boolean(),
   /** Ended because the owner marked it cancelled (always also ended). */
   cancelled: z.boolean(),
+  /** Ended because Plaid stopped tracking the stream (always also ended); a new charge alone doesn't bring it back. */
+  stopped: z.boolean(),
 });
 export type RecurringItem = z.infer<typeof RecurringItem>;
 export const RecurringList = z.object({ upcoming: z.array(RecurringItem), items: z.array(RecurringItem), monthlyTotalCents: Cents, dueThisWeek: z.number().int() });

@@ -175,7 +175,7 @@ test('a stream Plaid stops listing stays as ended, still holding its charges; a 
   const { get, send, db } = setup();
   db.prepare("UPDATE recurring_streams SET is_active = 0 WHERE stream_id = 's-tv'").run();
   const item = (await get('/v1/recurring')).items.find((i: { id: string }) => i.id === 's-tv');
-  assert.deepEqual([item.ended, item.cancelled, item.nextDate], [true, false, null]);
+  assert.deepEqual([item.ended, item.cancelled, item.stopped, item.nextDate], [true, false, true, null]);
   assert.equal((await get('/v1/recurring')).upcoming.length, 0);
   assert.equal((await get('/v1/transactions/tv')).recurring.id, 's-tv');
   db.prepare("INSERT INTO recurring_manual (id, name, match_text, frequency, source_transaction_id, created_at) VALUES ('man-tv', 'Synthetic TV', 'synthetic tv', 'monthly', 'tv-other', 'x')").run();

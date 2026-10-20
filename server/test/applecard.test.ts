@@ -138,6 +138,22 @@ test('re-import fills an uncategorized row from a mapping learned since the firs
   assert.equal(cat(), null);
 });
 
+test('re-import fills an uncategorized row from merchant memory learned since, never one the owner cleared', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  seedAccount(deps.db, { id: 'a1' });
+  seedCategory(deps.db, { id: 'coffee', name: 'Coffee' });
+  seedCategory(deps.db, { id: 'grocery', name: 'Grocery' });
+  await post(app, SEPT, 'k1');
+  const cat = (cents: number) => (deps.db.prepare("SELECT category_id FROM transactions WHERE source = 'applecard' AND amount_cents = ?").get(cents) as { category_id: string | null }).category_id;
+  assert.deepEqual([cat(-1234), cat(-105000)], [null, null]);
+  seedTxn(deps.db, { id: 'old', accountId: 'a1', date: '2026-09-20', amountCents: -500, categoryId: 'coffee', payee: 'Synthetic Cafe' });
+  seedTxn(deps.db, { id: 'old2', accountId: 'a1', date: '2026-09-20', amountCents: -500, categoryId: 'grocery', payee: 'Synthetic Grocer' });
+  deps.db.prepare("UPDATE transactions SET category_owner_set = 1 WHERE source = 'applecard' AND amount_cents = -105000").run();
+  await post(app, SEPT, 'k2');
+  assert.deepEqual([cat(-1234), cat(-105000)], ['coffee', null]);
+});
+
 const statement = (clearing: string) => `${HEADER}\n09/30/2026,${clearing},SYNTHETIC COFFEE,Synthetic Coffee,Restaurants,Purchase,5.00,Synthetic Person`;
 
 test('identical same-day purchases that clear on different days are two charges, across statements', async () => {

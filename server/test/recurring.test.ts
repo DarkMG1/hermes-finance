@@ -131,8 +131,8 @@ test('a bill two expected charges (and three days) behind has ended: no next dat
   seedTxn(db, { id: 't1', accountId: 'a1', date: '2026-02-25', amountCents: -500, payee: 'Synthetic Weekly' });
   db.prepare("INSERT INTO recurring_manual (id, name, match_text, frequency, source_transaction_id, created_at) VALUES ('man', 'Synthetic Weekly', 'synthetic weekly', 'weekly', 't1', 'x')").run();
   const r = getRecurring(db, '2026-03-15', false);
-  assert.deepEqual(r.items.map((i) => [i.id, i.ended, i.cancelled, i.nextDate]),
-    [['gone', true, false, null], ['late', false, false, '2026-04-12'], ['unk', false, false, null], ['man', true, false, null]]);
+  assert.deepEqual(r.items.map((i) => [i.id, i.ended, i.cancelled, i.stopped, i.nextDate]),
+    [['gone', true, false, false, null], ['late', false, false, false, '2026-04-12'], ['unk', false, false, false, null], ['man', true, false, false, null]]);
   assert.deepEqual(r.upcoming.map((i) => i.id), ['late']);
   assert.equal(r.monthlyTotalCents, 1000);
   assert.equal(r.dueThisWeek, 0);

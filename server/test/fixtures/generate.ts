@@ -90,7 +90,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   // a longer name the owner left out of Synthetic Split's History: listed in names, not in rows
   seedTxn(db, { id: 'txn-7', accountId: 'acct-card', date: '2026-03-08', amountCents: -900, source: 'plaid', sourceId: 'ps-7', categoryId: 'cat-food', merchantName: 'Synthetic TV' });
   seedTxn(db, { id: 'txn-8', accountId: 'acct-card', date: '2026-03-07', amountCents: -600, categoryId: 'cat-food', payee: 'Synthetic Split Extra' });
-  db.prepare("INSERT INTO history_exclusions VALUES ('synthetic split', 'synthetic split extra')").run();
+  db.prepare("INSERT INTO history_exclusions VALUES ('synthetic split', 'synthetic split extra', 1)").run();
   out['payee-history'] = await get('/v1/payee-history?name=Synthetic%20Split');
   out['transaction-recurring'] = await get('/v1/transactions/txn-7');
   seedCategory(db, { id: 'cat-reimb', name: 'Reimbursement', isTransfer: true });

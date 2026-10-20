@@ -19,6 +19,8 @@ public struct RecurringItem: Codable, Sendable, Identifiable {
     public let ended: Bool?
     /// Marked cancelled by the owner (one way to be ended). nil from servers before 1.8.1 (183).
     public let cancelled: Bool?
+    /// Plaid stopped tracking the stream (one way to be ended). nil, read as false, from servers before 1.8.1 (183).
+    public let stopped: Bool?
 }
 
 public struct RecurringList: Codable, Sendable {

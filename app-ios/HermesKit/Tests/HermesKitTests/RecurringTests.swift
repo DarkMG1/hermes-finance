@@ -44,12 +44,14 @@ private func itemJSON() throws -> Data {
     var json = try #require(JSONSerialization.jsonObject(with: try itemJSON()) as? [String: Any])
     json["ended"] = nil
     json["cancelled"] = nil
+    json["stopped"] = nil
     let old = try JSONDecoder().decode(RecurringItem.self, from: JSONSerialization.data(withJSONObject: json))
-    #expect(old.ended == nil && old.cancelled == nil)
+    #expect(old.ended == nil && old.cancelled == nil && old.stopped == nil)
     json["ended"] = true
     json["cancelled"] = false
+    json["stopped"] = true
     let item = try JSONDecoder().decode(RecurringItem.self, from: JSONSerialization.data(withJSONObject: json))
-    #expect(item.ended == true && item.cancelled == false)
+    #expect(item.ended == true && item.cancelled == false && item.stopped == true)
     let body = try JSONEncoder().encode(PatchRecurringBody(ended: false))
     #expect(String(bytes: body, encoding: .utf8) == #"{"ended":false}"#)
 }

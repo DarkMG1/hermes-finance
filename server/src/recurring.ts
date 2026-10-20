@@ -103,7 +103,7 @@ function manualItem(db: Db, m: ManualRow, out: OutRow[], today: string): { item:
     id: m.id, source: 'manual', name: m.name, frequency: m.frequency as RecurringItem['frequency'], amountCents: median,
     variable: amounts[amounts.length - 1]! - amounts[0]! > median * 0.2, lastDate: rows[0]!.date, lastCents: -rows[0]!.amount_cents,
     nextDate: ended ? null : rollForward(addInterval(rows[0]!.date, m.frequency), rows[0]!.date, m.frequency, today), monthlyCents: monthly(median, m.frequency),
-    priceUpCents: priceUp(-rows[0]!.amount_cents, median), isNew: false, hidden: m.hidden === 1, ended, cancelled,
+    priceUpCents: priceUp(-rows[0]!.amount_cents, median), isNew: false, hidden: m.hidden === 1, ended, cancelled, stopped: false,
   } };
 }
 
@@ -124,7 +124,7 @@ function bills(db: Db, today: string): Bill[] {
       variable: Math.abs(s.last_cents - s.average_cents) > s.average_cents * 0.2, lastDate: s.last_date, lastCents: s.last_cents,
       nextDate: ended ? null : rollForward(s.o_frequency ? addInterval(s.last_date, frequency) : (s.next_date ?? addInterval(s.last_date, frequency)), s.last_date, frequency, today),
       monthlyCents: monthly(s.average_cents, frequency), priceUpCents: priceUp(s.last_cents, s.average_cents), isNew: s.status === 'early_detection',
-      hidden: s.o_hidden === 1, ended, cancelled,
+      hidden: s.o_hidden === 1, ended, cancelled, stopped: s.is_active === 0,
     };
     return { item, keys: [s.name, item.name].map(normalizeName), ids: new Set(JSON.parse(s.transaction_ids) as string[]), source: null, active: s.is_active === 1 };
   });

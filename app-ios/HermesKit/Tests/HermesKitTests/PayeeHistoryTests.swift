@@ -49,6 +49,12 @@ import Testing
     """#
     let loaded = try JSONDecoder().decode(Reimbursements.self, from: Data(json.utf8))
     #expect(loaded.months.first?.unpaidCents == 3000 && loaded.rows.map(\.id) == ["t/", "t/l"] && loaded.rows[0].amountCents == -5000)
+    let paidLater = #"""
+    {"months":[{"month":"2026-11","outCents":0,"inCents":2000,"unpaidCents":-2000},
+               {"month":"2026-10","outCents":5000,"inCents":0,"unpaidCents":5000}],"rows":[]}
+    """#
+    // a payback in the month after its charge nets against it
+    #expect(try JSONDecoder().decode(Reimbursements.self, from: Data(paidLater.utf8)).unpaidCents == 3000)
     let served = try JSONDecoder().decode(Reimbursements.self, from: try fixture("reimbursements"))
     #expect(served.months.count == 12 && !served.rows.isEmpty)
 }

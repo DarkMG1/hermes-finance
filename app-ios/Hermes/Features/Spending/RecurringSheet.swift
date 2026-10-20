@@ -25,7 +25,8 @@ struct RecurringSheet: View {
 
     var body: some View {
         Sheet(title: "Recurring", canSave: dirty, busy: busy, unresolved: writes.unresolved || cancelWrites.unresolved, dirty: dirty,
-              onCancel: { dismiss() }, onSave: { Task { await send(patch, guard: $writes) } }
+              onCancel: { if writes.unresolved || cancelWrites.unresolved { Task { await onDone() } }; dismiss() },
+              onSave: { Task { await send(patch, guard: $writes) } }
         ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
                 Field(label: "Name") { TextField("Name", text: $name) }
@@ -45,6 +46,8 @@ struct RecurringSheet: View {
                 InlineError(message: error)
                 if item.cancelled == true {
                     Text("Cancelled. A new charge brings it back.").textStyle(.caption, color: Palette.secondaryText)
+                } else if item.stopped == true {
+                    Text("Ended: your bank stopped tracking this bill.").textStyle(.caption, color: Palette.secondaryText)
                 } else if item.ended == true {
                     Text("Ended: no charge for two periods. A new charge brings it back.").textStyle(.caption, color: Palette.secondaryText)
                 }
