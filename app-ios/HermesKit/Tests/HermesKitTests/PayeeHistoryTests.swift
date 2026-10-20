@@ -49,4 +49,6 @@ import Testing
     """#
     let loaded = try JSONDecoder().decode(Reimbursements.self, from: Data(json.utf8))
     #expect(loaded.months.first?.unpaidCents == 3000 && loaded.rows.map(\.id) == ["t/", "t/l"] && loaded.rows[0].amountCents == -5000)
+    let served = try JSONDecoder().decode(Reimbursements.self, from: try fixture("reimbursements"))
+    #expect(served.months.count == 12 && !served.rows.isEmpty)
 }

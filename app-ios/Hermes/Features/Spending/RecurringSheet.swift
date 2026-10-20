@@ -10,6 +10,7 @@ struct RecurringSheet: View {
     @State private var name = ""
     @State private var frequency = "monthly"
     @State private var writes = WriteGuard()
+    @State private var cancelWrites = WriteGuard()
     @State private var busy = false
     @State private var error: String?
     @State private var loaded = false
@@ -23,8 +24,9 @@ struct RecurringSheet: View {
     private var dirty: Bool { patch.name != nil || patch.frequency != nil }
 
     var body: some View {
-        Sheet(title: "Recurring", canSave: dirty, busy: busy, unresolved: writes.unresolved, dirty: dirty,
-              onCancel: { dismiss() }, onSave: { Task { await send(patch) } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
+        Sheet(title: "Recurring", canSave: dirty, busy: busy, unresolved: writes.unresolved || cancelWrites.unresolved, dirty: dirty,
+              onCancel: { dismiss() }, onSave: { Task { await send(patch, guard: $writes) } }
+        ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
                 Field(label: "Name") { TextField("Name", text: $name) }
                     .disabled(busy || writes.unresolved)
@@ -41,21 +43,25 @@ struct RecurringSheet: View {
             }
             Section {
                 InlineError(message: error)
-                // an auto-ended bill comes back only with a new charge
-                if item.ended == true && item.cancelled != true {
-                    Text("Ended: no charge for two periods").textStyle(.caption, color: Palette.secondaryText)
+                if item.cancelled == true {
+                    Text("Cancelled. A new charge brings it back.").textStyle(.caption, color: Palette.secondaryText)
+                } else if item.ended == true {
+                    Text("Ended: no charge for two periods. A new charge brings it back.").textStyle(.caption, color: Palette.secondaryText)
                 }
-                HButton(title: item.cancelled == true ? "Not cancelled" : "Mark as cancelled", kind: .secondary, busy: busy) {
-                    Task { await send(PatchRecurringBody(ended: item.cancelled != true), guarded: false) }
+                // older servers don't send `ended` and reject it in a PATCH
+                if item.ended != nil {
+                    HButton(title: item.cancelled == true ? "Not cancelled" : "Mark as cancelled", kind: .secondary, busy: busy) {
+                        Task { await send(PatchRecurringBody(ended: item.cancelled != true), guard: $cancelWrites) }
+                    }
                 }
                 if item.source == "plaid" {
                     HButton(title: item.hidden ? "Show again" : "Not recurring", kind: .destructive, busy: busy) {
-                        Task { await send(PatchRecurringBody(hidden: !item.hidden), guarded: false) }
+                        Task { await send(PatchRecurringBody(hidden: !item.hidden)) }
                     }
                 } else {
                     HButton(title: "Delete", kind: .destructive, busy: busy) { confirmDelete = true }
                         .confirmationDialog("Delete this recurring item?", isPresented: $confirmDelete, titleVisibility: .visible) {
-                            Button("Delete", role: .destructive) { Task { await run(guarded: false) { try await $0.deleteRecurring(id: item.id) } } }
+                            Button("Delete", role: .destructive) { Task { await run(nil) { try await $0.deleteRecurring(id: item.id) } } }
                         }
                 }
             }
@@ -68,24 +74,25 @@ struct RecurringSheet: View {
         }
     }
 
-    /// Hide/show and cancel set the state outright, so it takes a fresh key and leaves Save's guard alone.
-    private func send(_ body: PatchRecurringBody, guarded: Bool = true) async {
-        let key = guarded ? writes.key : UUID().uuidString
-        await run(guarded: guarded) { _ = try await $0.patchRecurring(id: item.id, body: body, idempotencyKey: key) }
+    /// Hide/show sets the state outright, so it takes a fresh key. Cancel stamps a date on the server, so an uncertain retry
+    /// replays the first attempt: a fresh key would re-cancel a bill that a newer charge has since brought back.
+    private func send(_ body: PatchRecurringBody, guard writeGuard: Binding<WriteGuard>? = nil) async {
+        let key = writeGuard?.wrappedValue.key ?? UUID().uuidString
+        await run(writeGuard) { _ = try await $0.patchRecurring(id: item.id, body: body, idempotencyKey: key) }
     }
 
-    private func run(guarded: Bool = true, _ write: (APIClient) async throws -> Void) async {
+    private func run(_ writeGuard: Binding<WriteGuard>?, _ write: (APIClient) async throws -> Void) async {
         guard !busy, let client = model.client else { return }
         busy = true
         defer { busy = false }
         do {
             try await write(client)
-            if guarded { writes.didSucceed() }
+            writeGuard?.wrappedValue.didSucceed()
             await onDone()
             dismiss()
         } catch {
-            if guarded { writes.didFail(error) }
-            self.error = guarded && writes.unresolved ? "Couldn't confirm the save. Try again." : errorMessage(error)
+            writeGuard?.wrappedValue.didFail(error)
+            self.error = writeGuard?.wrappedValue.unresolved == true ? "Couldn't confirm the save. Try again." : errorMessage(error)
         }
     }
 }

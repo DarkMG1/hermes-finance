@@ -157,7 +157,7 @@ struct ActivityView: View {
 
 /// With an inline title the List opens with the search drawer already shown, and UIKit only collapses it on a scroll.
 /// Nudging the list once on first appearance tucks it away; pull-down and scroll then behave natively.
-/// iOS 26 also draws the field at the top of its 60pt drawer, flush against the bar, so it's shifted down to sit a little below centre.
+/// iOS 26 also draws the field at the top of its 60pt drawer, flush against the bar, so it's shifted down, never past 4pt above the bar's bottom.
 private struct HideSearchOnOpen: UIViewRepresentable {
     func makeUIView(context: Context) -> Nudge { Nudge() }
     func updateUIView(_ uiView: Nudge, context: Context) {}
@@ -180,8 +180,10 @@ private struct HideSearchOnOpen: UIViewRepresentable {
             if let bar = controller.navigationItem.searchController?.searchBar {
                 // UIKit re-sets the bar's frame on every layout, which cancels a view transform; a sublayer transform sticks
                 // the field's bottom stays 4pt inside the bar: past it, the field covers the pull-to-refresh spinner
+                // convert sees the sublayer transform, so clear it before measuring or a re-run measures its own shift
+                bar.layer.sublayerTransform = CATransform3DIdentity
                 let spare = bar.bounds.height - bar.convert(bar.searchTextField.bounds, from: bar.searchTextField).maxY
-                bar.layer.sublayerTransform = CATransform3DMakeTranslation(0, spare - 4, 0)
+                bar.layer.sublayerTransform = CATransform3DMakeTranslation(0, max(0, spare - 4), 0)
             }
             scroll.contentOffset.y += 100
             DispatchQueue.main.async { scroll.contentOffset.y = -scroll.adjustedContentInset.top }

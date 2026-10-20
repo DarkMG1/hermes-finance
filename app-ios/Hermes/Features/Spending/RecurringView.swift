@@ -70,6 +70,8 @@ struct RecurringView: View {
 
     private func subtitle(_ item: RecurringItem) -> String {
         var text = RecurringFrequency.label(item.frequency)
+        // an ended bill's price change or newness is stale; when it last charged is what matters
+        if item.ended == true { return text + " · Last charge \(DayText.display(item.lastDate))" }
         if item.priceUpCents > 0 { text += " · ↑ \(Money.format(item.priceUpCents))" }
         if item.isNew { text += " · New" }
         return text

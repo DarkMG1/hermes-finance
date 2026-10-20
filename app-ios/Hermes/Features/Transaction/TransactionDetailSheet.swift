@@ -32,6 +32,9 @@ struct TransactionDetailSheet: View {
     /// Set by a mark here, so the sheet shows the new bill without reopening.
     @State private var marked: TransactionRecurring?
     @State private var recurringBusy = false
+    @State private var recurringWrites = WriteGuard()
+    /// The frequency an unconfirmed mark sent: the retry resends it under the same key.
+    @State private var markFrequency = ""
     @State private var recurringError: String?
     @State private var reconciled = false
     @State private var reconciling = false
@@ -45,10 +48,10 @@ struct TransactionDetailSheet: View {
 
     var body: some View {
         Sheet(
-            title: "Transaction", canSave: !patch.isEmpty && !payeeInvalid && !deleteWrites.unresolved, busy: busy || reconciling || receiptBusy,
-            unresolved: writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved, dirty: !patch.isEmpty,
+            title: "Transaction", canSave: !patch.isEmpty && !payeeInvalid && !deleteWrites.unresolved,
+            busy: busy || reconciling || receiptBusy || recurringBusy, unresolved: unresolved, dirty: !patch.isEmpty,
             onCancel: {
-                if writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved { Task { await onChange() } }
+                if unresolved { Task { await onChange() } }
                 dismiss()
             },
             onSave: { Task { await save() } }
@@ -140,7 +143,9 @@ struct TransactionDetailSheet: View {
             } else if transaction.amountCents < 0 && !forgiven {
                 Section {
                     // dialog on its button: on the Form it floats mid-screen
-                    Button("Mark as recurring…") { markingRecurring = true }
+                    Button("Mark as recurring…") {
+                        if recurringWrites.unresolved { Task { await markRecurring(markFrequency) } } else { markingRecurring = true }
+                    }
                         .disabled(recurringBusy)
                         .confirmationDialog("How often?", isPresented: $markingRecurring, titleVisibility: .visible) {
                             ForEach(RecurringFrequency.writable, id: \.self) { frequency in
@@ -221,6 +226,7 @@ struct TransactionDetailSheet: View {
 
     private var forgiven: Bool { transaction.forgiven == true }
     private var bill: TransactionRecurring? { marked ?? transaction.recurring }
+    private var unresolved: Bool { writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved || recurringWrites.unresolved }
     private var canSplit: Bool { transaction.paidByPersonId == nil && paidById == nil && !forgiven }
     private var trimmedPayee: String { payee.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -297,14 +303,17 @@ struct TransactionDetailSheet: View {
         recurringBusy = true
         defer { recurringBusy = false }
         recurringError = nil
+        markFrequency = frequency
         do {
             let item = try await client.createRecurring(body: CreateRecurringBody(transactionId: transaction.id, frequency: frequency, name: nil),
-                                                        idempotencyKey: UUID().uuidString)
+                                                        idempotencyKey: recurringWrites.key)
+            recurringWrites.didSucceed()
             marked = TransactionRecurring(id: item.id, name: item.name, frequency: item.frequency)
             // the row behind now belongs to a bill; it refreshes when this sheet closes, like a reconcile
             savedOutside = true
         } catch {
-            recurringError = errorMessage(error)
+            recurringWrites.didFail(error)
+            recurringError = recurringWrites.unresolved ? "Couldn't confirm the save. Try again." : errorMessage(error)
         }
     }
 

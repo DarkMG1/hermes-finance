@@ -55,8 +55,10 @@ private func itemJSON() throws -> Data {
 }
 
 @Test func transactionRecurringDecodesOrIsAbsent() throws {
-    #expect(try JSONDecoder().decode(LedgerTransaction.self, from: try fixture("transaction")).recurring == nil)
     var json = try #require(JSONSerialization.jsonObject(with: try fixture("transaction")) as? [String: Any])
+    json["recurring"] = nil
+    #expect(try JSONDecoder().decode(LedgerTransaction.self, from: JSONSerialization.data(withJSONObject: json)).recurring == nil)
+    #expect(try JSONDecoder().decode(LedgerTransaction.self, from: try fixture("transaction-recurring")).recurring != nil)
     json["recurring"] = ["id": "r1", "name": "Synthetic Gym", "frequency": "monthly"]
     let transaction = try JSONDecoder().decode(LedgerTransaction.self, from: JSONSerialization.data(withJSONObject: json))
     #expect(transaction.recurring == TransactionRecurring(id: "r1", name: "Synthetic Gym", frequency: "monthly"))
