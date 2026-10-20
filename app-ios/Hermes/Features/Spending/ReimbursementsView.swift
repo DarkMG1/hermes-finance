@@ -5,6 +5,7 @@ import SwiftUI
 struct ReimbursementsView: View {
     @Environment(AppModel.self) private var model
     @State private var lastLoad: Loaded<Reimbursements>?
+    @State private var generation = 0
     @State private var error: String?
     @State private var opened: LedgerTransaction?
     @State private var openGeneration = 0
@@ -62,15 +63,18 @@ struct ReimbursementsView: View {
         return "\(month.unpaidCents > 0 ? "Unpaid" : "Paid back extra") · \(detail)"
     }
 
+    /// Appearance, pull-to-refresh and a sheet's close can overlap: only the latest load lands.
     private func load() async {
         guard let reader = model.reader else { return }
+        generation += 1
+        let gen = generation
         do {
             let loaded = try await reader.read("/v1/reimbursements", as: Reimbursements.self)
-            guard !Task.isCancelled else { return }
+            guard gen == generation, !Task.isCancelled else { return }
             lastLoad = loaded
             error = nil
         } catch {
-            guard !Task.isCancelled else { return }
+            guard gen == generation, !Task.isCancelled else { return }
             self.error = errorMessage(error)
         }
     }
