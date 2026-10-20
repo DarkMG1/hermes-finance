@@ -39,3 +39,20 @@ private func itemJSON() throws -> Data {
     let json = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
     #expect(json.keys.sorted() == ["hidden"])
 }
+
+@Test func endedDecodesAndIsSent() async throws {
+    #expect(try JSONDecoder().decode(RecurringItem.self, from: try itemJSON()).ended == nil)
+    var json = try #require(JSONSerialization.jsonObject(with: try itemJSON()) as? [String: Any])
+    json["ended"] = true
+    #expect(try JSONDecoder().decode(RecurringItem.self, from: JSONSerialization.data(withJSONObject: json)).ended == true)
+    let body = try JSONEncoder().encode(PatchRecurringBody(ended: false))
+    #expect(String(bytes: body, encoding: .utf8) == #"{"ended":false}"#)
+}
+
+@Test func transactionRecurringDecodesOrIsAbsent() throws {
+    #expect(try JSONDecoder().decode(LedgerTransaction.self, from: try fixture("transaction")).recurring == nil)
+    var json = try #require(JSONSerialization.jsonObject(with: try fixture("transaction")) as? [String: Any])
+    json["recurring"] = ["id": "r1", "name": "Synthetic Gym", "frequency": "monthly"]
+    let transaction = try JSONDecoder().decode(LedgerTransaction.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(transaction.recurring == TransactionRecurring(id: "r1", name: "Synthetic Gym", frequency: "monthly"))
+}

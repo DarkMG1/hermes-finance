@@ -41,6 +41,9 @@ struct RecurringSheet: View {
             }
             Section {
                 InlineError(message: error)
+                HButton(title: item.ended == true ? "Not cancelled" : "Mark as cancelled", kind: .secondary, busy: busy) {
+                    Task { await send(PatchRecurringBody(ended: item.ended != true), guarded: false) }
+                }
                 if item.source == "plaid" {
                     HButton(title: item.hidden ? "Show again" : "Not recurring", kind: .destructive, busy: busy) {
                         Task { await send(PatchRecurringBody(hidden: !item.hidden), guarded: false) }
@@ -61,7 +64,7 @@ struct RecurringSheet: View {
         }
     }
 
-    /// Hide/show sets the state outright, so it takes a fresh key and leaves Save's guard alone.
+    /// Hide/show and cancel set the state outright, so it takes a fresh key and leaves Save's guard alone.
     private func send(_ body: PatchRecurringBody, guarded: Bool = true) async {
         let key = guarded ? writes.key : UUID().uuidString
         await run(guarded: guarded) { _ = try await $0.patchRecurring(id: item.id, body: body, idempotencyKey: key) }

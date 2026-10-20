@@ -31,7 +31,15 @@ struct RecurringView: View {
                     if list.upcoming.isEmpty { Text("Nothing due in the next 30 days").textStyle(.subhead, color: Palette.secondaryText) }
                 }
                 Section("All recurring · \(Money.format(list.monthlyTotalCents))/month") {
-                    ForEach(list.items) { item in row(item, subtitle: subtitle(item)).opacity(item.hidden ? 0.5 : 1) }
+                    ForEach(list.items.filter { !$0.hidden && $0.ended != true }) { item in row(item, subtitle: subtitle(item)) }
+                }
+                let ended = list.items.filter { !$0.hidden && $0.ended == true }
+                if !ended.isEmpty {
+                    Section("Ended") { ForEach(ended) { item in row(item, subtitle: subtitle(item)) } }
+                }
+                let hidden = list.items.filter(\.hidden)
+                if !hidden.isEmpty {
+                    Section("Hidden") { ForEach(hidden) { item in row(item, subtitle: subtitle(item)).opacity(0.5) } }
                 }
             } else if error == nil {
                 ProgressView().frame(maxWidth: .infinity)
@@ -64,7 +72,6 @@ struct RecurringView: View {
         var text = RecurringFrequency.label(item.frequency)
         if item.priceUpCents > 0 { text += " · ↑ \(Money.format(item.priceUpCents))" }
         if item.isNew { text += " · New" }
-        if item.hidden { text += " · Hidden" }
         return text
     }
 

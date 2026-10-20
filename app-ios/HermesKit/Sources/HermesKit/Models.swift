@@ -65,6 +65,20 @@ public struct LedgerTransaction: Codable, Sendable, Identifiable, Hashable {
     public let forgiven: Bool?
     /// The server's say on whether History can find anything; nil from servers before v1.8.1.
     public let hasHistory: Bool?
+    /// The bill this charge belongs to; nil when none, and from servers before 1.8.1 (183).
+    public let recurring: TransactionRecurring?
+}
+
+public struct TransactionRecurring: Codable, Sendable, Hashable {
+    public let id: String
+    public let name: String
+    public let frequency: String
+
+    public init(id: String, name: String, frequency: String) {
+        self.id = id
+        self.name = name
+        self.frequency = frequency
+    }
 }
 
 public struct TransactionPage: Codable, Sendable {
@@ -235,6 +249,42 @@ public struct PayeeHistory: Codable, Sendable {
     public let averageCents: Int
     public let rows: [PayeeHistoryRow]
     public let nextCursor: String?
+    /// Payee mode: the longer names the prefix match also found, and whether each is left out. nil before 1.8.1 (183).
+    public let names: [HistoryName]?
+}
+
+public struct HistoryName: Codable, Sendable, Hashable {
+    public let name: String
+    public let excluded: Bool
+}
+
+public struct HistoryExclusionBody: Codable, Sendable {
+    public let name: String
+    public let excludedName: String
+    public let excluded: Bool
+}
+
+public struct ReimbursementMonth: Codable, Sendable {
+    public let month: String
+    public let outCents: Int
+    public let inCents: Int
+    public let unpaidCents: Int
+}
+
+public struct ReimbursementRow: Codable, Sendable, Identifiable {
+    public let transactionId: String
+    public let lineId: String?
+    public let date: String
+    public let name: String
+    /// As stored: a charge negative, a payback positive.
+    public let amountCents: Int
+    public var id: String { "\(transactionId)/\(lineId ?? "")" }
+}
+
+/// The last 12 months of the Reimbursement category, newest first.
+public struct Reimbursements: Codable, Sendable {
+    public let months: [ReimbursementMonth]
+    public let rows: [ReimbursementRow]
 }
 
 public struct Bank: Codable, Sendable, Identifiable, Hashable {
