@@ -41,9 +41,11 @@ private func itemJSON() throws -> Data {
 }
 
 @Test func endedDecodesAndIsSent() async throws {
-    let old = try JSONDecoder().decode(RecurringItem.self, from: try itemJSON())
-    #expect(old.ended == nil && old.cancelled == nil)
     var json = try #require(JSONSerialization.jsonObject(with: try itemJSON()) as? [String: Any])
+    json["ended"] = nil
+    json["cancelled"] = nil
+    let old = try JSONDecoder().decode(RecurringItem.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(old.ended == nil && old.cancelled == nil)
     json["ended"] = true
     json["cancelled"] = false
     let item = try JSONDecoder().decode(RecurringItem.self, from: JSONSerialization.data(withJSONObject: json))

@@ -22,8 +22,9 @@ import Testing
 }
 
 @Test func historyNamesDecodeOrAreAbsent() throws {
-    #expect(try JSONDecoder().decode(PayeeHistory.self, from: try fixture("payee-history")).names == nil)
     var json = try #require(JSONSerialization.jsonObject(with: try fixture("payee-history")) as? [String: Any])
+    json["names"] = nil
+    #expect(try JSONDecoder().decode(PayeeHistory.self, from: JSONSerialization.data(withJSONObject: json)).names == nil)
     json["names"] = [["name": "Acme Gas", "excluded": true]]
     let history = try JSONDecoder().decode(PayeeHistory.self, from: JSONSerialization.data(withJSONObject: json))
     #expect(history.names?.first?.name == "Acme Gas" && history.names?.first?.excluded == true)
