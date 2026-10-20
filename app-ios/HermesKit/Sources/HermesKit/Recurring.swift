@@ -17,6 +17,8 @@ public struct RecurringItem: Codable, Sendable, Identifiable {
     public let hidden: Bool
     /// Two charges missed, or marked cancelled. nil from servers before 1.8.1 (183).
     public let ended: Bool?
+    /// Marked cancelled by the owner (one way to be ended). nil from servers before 1.8.1 (183).
+    public let cancelled: Bool?
 }
 
 public struct RecurringList: Codable, Sendable {

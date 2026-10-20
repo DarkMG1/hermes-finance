@@ -41,8 +41,12 @@ struct RecurringSheet: View {
             }
             Section {
                 InlineError(message: error)
-                HButton(title: item.ended == true ? "Not cancelled" : "Mark as cancelled", kind: .secondary, busy: busy) {
-                    Task { await send(PatchRecurringBody(ended: item.ended != true), guarded: false) }
+                // an auto-ended bill comes back only with a new charge
+                if item.ended == true && item.cancelled != true {
+                    Text("Ended: no charge for two periods").textStyle(.caption, color: Palette.secondaryText)
+                }
+                HButton(title: item.cancelled == true ? "Not cancelled" : "Mark as cancelled", kind: .secondary, busy: busy) {
+                    Task { await send(PatchRecurringBody(ended: item.cancelled != true), guarded: false) }
                 }
                 if item.source == "plaid" {
                     HButton(title: item.hidden ? "Show again" : "Not recurring", kind: .destructive, busy: busy) {
