@@ -29,6 +29,9 @@ export async function refreshRecurring(deps: Deps, itemId: string, accessToken: 
 export const normalizeName = (s: string) => s.toLowerCase().replace(/#\d+/g, ' ').replace(/\d{3,}/g, ' ').replace(/\*/g, ' ')
   .replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
 
+// bank text compares whole (digits kept), so "CHECK 1234" never pools every check
+export const bankText = (b: string) => b.toLowerCase().replace(/\s+/g, ' ').trim();
+
 const DAYS: Record<string, number> = { weekly: 7, biweekly: 14, semi_monthly: 15 };
 const MONTHS: Record<string, number> = { monthly: 1, annually: 12 };
 const FACTOR: Record<string, number> = { weekly: 52 / 12, biweekly: 26 / 12, semi_monthly: 2, monthly: 1, annually: 1 / 12 };
@@ -59,10 +62,12 @@ function rollForward(next: string | null, last: string, frequency: string, today
   return next;
 }
 
-// cancelled by hand with no charge since, or ended with two expected charges missed; an unknown interval never ends on its own
+// cancelled by hand with no charge since, or ended with two expected charges missed (three days' grace for posting and month ends); an
+// unknown interval never ends on its own
 const endState = (last: string, frequency: string, endedOn: string | null, today: string) => {
   const cancelled = endedOn !== null && last <= endedOn;
-  return { cancelled, ended: cancelled || (addInterval(last, frequency, 2) ?? today) < today };
+  const missed = addInterval(last, frequency, 2);
+  return { cancelled, ended: cancelled || (missed !== null && addDays(missed, 3) < today) };
 };
 
 const monthly = (cents: number, frequency: string) => (FACTOR[frequency] ? Math.round(cents * FACTOR[frequency]!) : null);
@@ -71,36 +76,49 @@ const priceUp = (last: number, avg: number) => (last - avg > Math.max(avg * 0.05
 type StreamRow = { stream_id: string; name: string; frequency: string; average_cents: number; last_cents: number; last_date: string; next_date: string | null;
   status: string; transaction_ids: string; o_hidden: number | null; o_name: string | null; o_frequency: string | null; o_ended_on: string | null };
 type ManualRow = { id: string; name: string; match_text: string; frequency: string; source_transaction_id: string | null; hidden: number; ended_on: string | null };
-type OutRow = { date: string; amount_cents: number; payee: string | null; merchant_name: string | null; bank_description: string };
+type OutRow = { date: string; amount_cents: number; names: Set<string> };
 
-function manualItem(db: Db, m: ManualRow, today: string): RecurringItem | null {
-  // ponytail: scans every money-out row per manual item; filter in SQL or index a normalized column if it gets slow
-  let rows = (db.prepare(`SELECT date, amount_cents, payee, merchant_name, bank_description FROM transactions
-      WHERE removed_at IS NULL AND amount_cents < 0 ORDER BY date DESC, id DESC`).all() as OutRow[])
-    .filter((t) => [t.payee, t.merchant_name, t.bank_description].some((s) => s && normalizeName(s) === m.match_text)).slice(0, 6);
-  if (!rows.length && m.source_transaction_id) {
-    rows = db.prepare('SELECT date, amount_cents, payee, merchant_name, bank_description FROM transactions WHERE id = ? AND removed_at IS NULL')
+/** Every live money-out row, newest first, with its names normalized once. */
+// ponytail: one full scan of money-out rows per call; filter in SQL or index a normalized column if it gets slow
+function moneyOut(db: Db): OutRow[] {
+  return (db.prepare(`SELECT date, amount_cents, payee, merchant_name, bank_description FROM transactions
+      WHERE removed_at IS NULL AND amount_cents < 0 ORDER BY date DESC, id DESC`).all() as
+    { date: string; amount_cents: number; payee: string | null; merchant_name: string | null; bank_description: string }[])
+    .map((t) => ({ date: t.date, amount_cents: t.amount_cents, names: new Set([t.payee, t.merchant_name, t.bank_description].map((n) => (n ? normalizeName(n) : ''))) }));
+}
+
+/** fallback: no money-out row carries the item's text, so it goes by the charge it was made from (History does the same). */
+function manualItem(db: Db, m: ManualRow, out: OutRow[], today: string): { item: RecurringItem; fallback: boolean } | null {
+  let rows = out.filter((t) => t.names.has(m.match_text)).slice(0, 6);
+  const fallback = !rows.length;
+  if (fallback && m.source_transaction_id) {
+    rows = db.prepare('SELECT date, amount_cents FROM transactions WHERE id = ? AND removed_at IS NULL')
       .all(m.source_transaction_id) as OutRow[];
   }
   if (!rows.length) return null;
   const amounts = rows.map((r) => -r.amount_cents).sort((a, b) => a - b);
   const median = Math.round((amounts[Math.floor((amounts.length - 1) / 2)]! + amounts[Math.floor(amounts.length / 2)]!) / 2);
   const { cancelled, ended } = endState(rows[0]!.date, m.frequency, m.ended_on, today);
-  return {
+  return { fallback, item: {
     id: m.id, source: 'manual', name: m.name, frequency: m.frequency as RecurringItem['frequency'], amountCents: median,
     variable: amounts[amounts.length - 1]! - amounts[0]! > median * 0.2, lastDate: rows[0]!.date, lastCents: -rows[0]!.amount_cents,
     nextDate: ended ? null : rollForward(addInterval(rows[0]!.date, m.frequency), rows[0]!.date, m.frequency, today), monthlyCents: monthly(median, m.frequency),
     priceUpCents: priceUp(-rows[0]!.amount_cents, median), isNew: false, hidden: m.hidden === 1, ended, cancelled,
-  };
+  } };
 }
 
-/** Every Recurring item with what its charges match: a Plaid stream's charge ids and names, a manual item's text and source charge. */
-function bills(db: Db, today: string): { item: RecurringItem; keys: string[]; ids: Set<string>; source: string | null }[] {
+type Bill = { item: RecurringItem; keys: string[]; ids: Set<string>; source: string | null; active: boolean };
+
+/** Every Recurring item with what its charges match, as History matches them: a Plaid stream's charge ids and names, a manual item's text,
+ * and its source charge only while no money-out row carries that text. */
+function bills(db: Db, today: string): Bill[] {
+  // a stream Plaid stopped (inactive, not tombstoned) stays listed as ended
   const streams = db.prepare(`SELECT s.*, o.hidden AS o_hidden, o.name AS o_name, o.frequency AS o_frequency, o.ended_on AS o_ended_on FROM recurring_streams s
-      LEFT JOIN recurring_overrides o ON o.stream_id = s.stream_id WHERE s.is_active = 1 AND s.status != 'tombstoned'`).all() as StreamRow[];
-  const all = streams.map((s) => {
+      LEFT JOIN recurring_overrides o ON o.stream_id = s.stream_id WHERE s.status != 'tombstoned'`).all() as (StreamRow & { is_active: number })[];
+  const all: Bill[] = streams.map((s) => {
     const frequency = (s.o_frequency ?? s.frequency) as RecurringItem['frequency'];
-    const { cancelled, ended } = endState(s.last_date, frequency, s.o_ended_on, today);
+    const { cancelled, ended: missed } = endState(s.last_date, frequency, s.o_ended_on, today);
+    const ended = missed || s.is_active === 0;
     const item: RecurringItem = {
       id: s.stream_id, source: 'plaid', name: s.o_name ?? s.name, frequency, amountCents: s.average_cents,
       variable: Math.abs(s.last_cents - s.average_cents) > s.average_cents * 0.2, lastDate: s.last_date, lastCents: s.last_cents,
@@ -108,31 +126,41 @@ function bills(db: Db, today: string): { item: RecurringItem; keys: string[]; id
       monthlyCents: monthly(s.average_cents, frequency), priceUpCents: priceUp(s.last_cents, s.average_cents), isNew: s.status === 'early_detection',
       hidden: s.o_hidden === 1, ended, cancelled,
     };
-    return { item, keys: [s.name, item.name].map(normalizeName), ids: new Set(JSON.parse(s.transaction_ids) as string[]), source: null as string | null };
+    return { item, keys: [s.name, item.name].map(normalizeName), ids: new Set(JSON.parse(s.transaction_ids) as string[]), source: null, active: s.is_active === 1 };
   });
-  // a bill Plaid also finds shows once, as Plaid's; the manual row comes back if that stream is hidden or gone
-  const plaidKeys = new Set(all.filter((b) => !b.item.hidden).flatMap((b) => b.keys));
-  for (const m of db.prepare('SELECT * FROM recurring_manual').all() as ManualRow[]) {
-    const item = plaidKeys.has(m.match_text) ? null : manualItem(db, m, today);
-    if (item) all.push({ item, keys: [m.match_text], ids: new Set(), source: m.source_transaction_id });
+  // a bill Plaid also finds shows once, as Plaid's; the manual row comes back if that stream is hidden, stopped or gone
+  const plaidKeys = new Set(all.filter((b) => !b.item.hidden && b.active).flatMap((b) => b.keys));
+  const manual = db.prepare('SELECT * FROM recurring_manual').all() as ManualRow[];
+  const out = manual.length ? moneyOut(db) : [];
+  for (const m of manual) {
+    const made = plaidKeys.has(m.match_text) ? null : manualItem(db, m, out, today);
+    if (made) all.push({ item: made.item, keys: [m.match_text], ids: new Set(), source: made.fallback ? m.source_transaction_id : null, active: true });
   }
   return all;
 }
 
-/** Each row's visible Recurring item, ended ones included: a Plaid stream by charge id first, then any item by name or by the charge it was made from. */
-export function recurringOf(db: Db, rows: { id: string; source: string; source_id: string | null; payee: string | null; merchant_name: string | null;
-  bank_description: string }[]): Map<string, NonNullable<Transaction['recurring']>> {
-  const out = new Map<string, NonNullable<Transaction['recurring']>>();
-  if (!rows.length) return out;
-  // ponytail: reads every item (and each manual item's charges) once per call; cache per sync if pages get slow
-  const visible = bills(db, '0000-01-01').filter((b) => !b.item.hidden); // which item a row belongs to doesn't depend on the day
-  for (const r of rows) {
-    const names = [r.payee, r.merchant_name, r.bank_description].map((s) => (s ? normalizeName(s) : '')).filter(Boolean);
-    const b = visible.find((v) => r.source === 'plaid' && r.source_id !== null && v.ids.has(r.source_id))
-      ?? visible.find((v) => v.source === r.id || v.keys.some((k) => names.includes(k)));
-    if (b) out.set(r.id, { id: b.item.id, name: b.item.name, frequency: b.item.frequency });
-  }
-  return out;
+export type MemberRow = { id: string; source: string; source_id: string | null; pending: number; payee: string | null; merchant_name: string | null;
+  bank_description: string };
+
+/** Reads the visible Recurring items once (ended ones included) and returns which one each row's charge is in the History of: a posted Plaid
+ * charge belongs to a stream with ids by id alone; any other row by exact name, or as a manual item's source charge while History falls back
+ * to it. Callers pass only rows History can list (owner money out). */
+export function memberships(db: Db): (rows: MemberRow[]) => Map<string, NonNullable<Transaction['recurring']>> {
+  let visible: Bill[] | null = null;
+  return (rows) => {
+    const out = new Map<string, NonNullable<Transaction['recurring']>>();
+    if (!rows.length) return out;
+    // which item a row belongs to doesn't depend on the day; a charge's own stream id comes first, and an ended twin yields to a live one
+    visible ??= bills(db, '0000-01-01').filter((b) => !b.item.hidden).sort((a, b) => Number(a.item.ended) - Number(b.item.ended));
+    for (const r of rows) {
+      const posted = r.source === 'plaid' && r.pending === 0 && r.source_id !== null;
+      const names = [r.payee, r.merchant_name, r.bank_description].map((s) => (s ? normalizeName(s) : '')).filter(Boolean);
+      const b = (posted ? visible.find((v) => v.ids.has(r.source_id!)) : undefined)
+        ?? visible.find((v) => !(posted && v.ids.size) && (v.source === r.id || v.keys.some((k) => names.includes(k))));
+      if (b) out.set(r.id, { id: b.item.id, name: b.item.name, frequency: b.item.frequency });
+    }
+    return out;
+  };
 }
 
 export function getRecurring(db: Db, today: string, includeHidden: boolean): RecurringList {

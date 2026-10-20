@@ -1,8 +1,8 @@
 import type { Account, Category, Home, ListTransactionsQuery, SpendingQuery, SplitLine, Transaction, TransactionPage } from '@hermes/shared';
 import type { Db } from './db.ts';
-import { canHaveHistory } from './cashflow.ts';
+import { historyLines } from './cashflow.ts';
 import { ApiError } from './errors.ts';
-import { normalizeName, recurringOf } from './recurring.ts';
+import { bankText, memberships, normalizeName } from './recurring.ts';
 
 export type TxnRow = {
   id: string; account_id: string; source: 'plaid' | 'manual' | 'actual' | 'applecard'; source_id: string | null; date: string; amount_cents: number;
@@ -15,7 +15,12 @@ export const TXN_COLS = 'id, account_id, source, source_id, date, amount_cents, 
   + 'paid_by_person_id, repayment_dismissed, reconciled_at, reconciled_cents, forgiven';
 
 /** What a list of rows needs from the rest of the ledger, read once for the whole list. */
-export const lookups = (db: Db, rows: TxnRow[]) => ({ spending: canHaveHistory(db, rows), recurring: recurringOf(db, rows) });
+// member: pass one memberships(db) to share the Recurring read across several lists
+export function lookups(db: Db, rows: TxnRow[], member = memberships(db)) {
+  const { spending, billable } = historyLines(db, rows);
+  // a bill holds only the charges its History lists: owner money out (a refund or someone's IOU never opens the bill)
+  return { spending, recurring: member(rows.filter((r) => r.amount_cents < 0 && r.person_id === null && r.forgiven === 0 && billable.has(r.id))) };
+}
 
 export function rowToTransaction(db: Db, r: TxnRow, { spending, recurring } = lookups(db, [r])): Transaction {
   const lines = db.prepare('SELECT id, amount_cents, category_id, notes, person_id, payee FROM split_lines WHERE transaction_id = ? ORDER BY id').all(r.id) as
@@ -143,15 +148,21 @@ export function learnCategory(db: Db, transactionId: string, categoryId: string,
     .run(categoryId, nowIso, row.plaid_category);
 }
 
-/** Merchant memory: the category of the newest live, unsplit, untagged categorized row by each name, looked up by a new bank row's
- *  merchant name, else its bank text. Read once per sync or import. */
+/** Merchant memory: the category of the newest live, unsplit, untagged categorized row by each name. A new bank row with a merchant name looks
+ *  up that name (learned from rows' payee or merchant); one without looks up its exact bank text, digits kept so "CHECK 1234" never takes
+ *  "CHECK 5678"'s category. Read once per sync or import. */
 export function merchantMemory(db: Db): (merchant: string | null, bank: string) => string | null {
-  const memory = new Map<string, string>();
-  for (const r of db.prepare(`SELECT COALESCE(payee, merchant_name, bank_description) AS name, category_id FROM transactions t
+  const byName = new Map<string, string>();
+  const byBank = new Map<string, string>();
+  for (const r of db.prepare(`SELECT COALESCE(payee, merchant_name) AS name, bank_description AS bank, category_id FROM transactions t
       WHERE removed_at IS NULL AND category_id IS NOT NULL AND person_id IS NULL AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
-      ORDER BY date, created_at, rowid`).all() as { name: string; category_id: string }[]) memory.set(normalizeName(r.name), r.category_id);
-  memory.delete('');
-  return (merchant, bank) => (merchant ? memory.get(normalizeName(merchant)) : undefined) ?? memory.get(normalizeName(bank)) ?? null;
+      ORDER BY date, created_at, rowid`).all() as { name: string | null; bank: string; category_id: string }[]) {
+    if (r.name) byName.set(normalizeName(r.name), r.category_id);
+    byBank.set(bankText(r.bank), r.category_id);
+  }
+  byName.delete('');
+  byBank.delete('');
+  return (merchant, bank) => (merchant ? byName.get(normalizeName(merchant)) : byBank.get(bankText(bank))) ?? null;
 }
 
 /**

@@ -159,10 +159,11 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
     const row = found[i];
     if (cutover && r.transactionDate < cutover) { result.skippedBeforeCutover += 1; return; }
     if (row) result.updated += 1; else result.added += 1;
-    // payments must never count as spending; other rows keep Apple's category so refunds net against purchases
+    // payments must never count as spending (so never take a remembered category); other rows keep Apple's category so refunds net against purchases
     const plaidCategory = r.type.toLowerCase() === 'payment' ? 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' : r.category;
     upsert.run({ id: randomUUID(), accountId, sourceId, date: r.transactionDate, clearing: r.clearingDate, amount: r.amountCents, desc: r.description,
-      merchant: r.merchant, plaidCategory, remembered: remembered(r.merchant, r.description), now: nowIso });
+      merchant: r.merchant, plaidCategory,
+      remembered: plaidCategory === 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' ? null : remembered(r.merchant, r.description), now: nowIso });
   });
   const sum = (db.prepare("SELECT COALESCE(SUM(amount_cents), 0) AS s FROM transactions WHERE account_id = ? AND source = 'applecard' AND removed_at IS NULL")
     .get(accountId) as { s: number }).s;

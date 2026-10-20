@@ -25,8 +25,8 @@ export function recurringRoutes(app: FastifyInstance, deps: Deps): void {
     const body = parseBody(PatchRecurringBody, req.body);
     const r = idempotentWrite(deps, req, () => {
       const id = req.params.id;
-      // cancelled as of the last charge, so a newer one brings the bill back
-      const endedOn = body.ended ? find(id).lastDate : null;
+      // cancelled as of today (or a later last charge): only a charge dated after the cancel brings the bill back, never a pending one posting
+      const endedOn = body.ended ? [find(id).lastDate, today()].sort()[1]! : null;
       if (db.prepare('SELECT 1 FROM recurring_streams WHERE stream_id = ?').get(id)) {
         db.prepare('INSERT OR IGNORE INTO recurring_overrides (stream_id) VALUES (?)').run(id);
         if (body.hidden !== undefined) db.prepare('UPDATE recurring_overrides SET hidden = ? WHERE stream_id = ?').run(body.hidden ? 1 : 0, id);

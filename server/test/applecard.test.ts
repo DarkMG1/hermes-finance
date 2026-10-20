@@ -221,8 +221,17 @@ test('new rows take the category of the newest row with their merchant name ahea
   seedCategory(deps.db, { id: 'grocery', name: 'Grocery' });
   deps.db.prepare("INSERT INTO plaid_category_map (plaid_category, category_id) VALUES ('Restaurants', 'dining')").run();
   seedTxn(deps.db, { id: 'old', accountId: 'a1', date: '2026-08-01', amountCents: -500, categoryId: 'coffee', payee: 'Synthetic Cafe' });
-  seedTxn(deps.db, { id: 'old2', accountId: 'a1', date: '2026-08-01', amountCents: -500, categoryId: 'grocery', bankDescription: 'SYNTHETIC GROCER' });
+  seedTxn(deps.db, { id: 'old2', accountId: 'a1', date: '2026-08-01', amountCents: -500, categoryId: 'grocery', payee: 'Synthetic Grocer' });
+  // a payment's text was once categorized: payments still keep the card-payment category
+  seedTxn(deps.db, { id: 'old3', accountId: 'a1', date: '2026-08-01', amountCents: 500, categoryId: 'grocery', merchantName: 'Synthetic Bank' });
+  seedCategory(deps.db, { id: 'card', name: 'Card Payment', isTransfer: true });
+  deps.db.prepare("INSERT INTO plaid_category_map (plaid_category, category_id) VALUES ('LOAN_PAYMENTS_CREDIT_CARD_PAYMENT', 'card')").run();
   await post(app, SEPT, 'k1');
   const cat = (cents: number) => (deps.db.prepare("SELECT category_id FROM transactions WHERE source = 'applecard' AND amount_cents = ?").get(cents) as { category_id: string | null }).category_id;
-  assert.deepEqual([cat(-1234), cat(-105000)], ['coffee', 'grocery']);
+  assert.deepEqual([cat(-1234), cat(-105000), cat(50000)], ['coffee', 'grocery', 'card']);
+  // re-import never overwrites the owner's category, nor fills one the owner cleared
+  deps.db.prepare("UPDATE transactions SET category_id = 'dining' WHERE source = 'applecard' AND amount_cents = -1234").run();
+  deps.db.prepare("UPDATE transactions SET category_id = NULL, category_owner_set = 1 WHERE source = 'applecard' AND amount_cents = -105000").run();
+  await post(app, SEPT, 'k2');
+  assert.deepEqual([cat(-1234), cat(-105000)], ['dining', null]);
 });

@@ -2,7 +2,7 @@ import type { ExpenseRow, ExpensesPage, ExpensesQuery, PayeeHistory, PayeeHistor
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
 import { periodRange } from './ledger.ts';
-import { normalizeName } from './recurring.ts';
+import { bankText, normalizeName } from './recurring.ts';
 
 // Every amount that can count toward Out or In, one row each: the owner's split lines, unsplit untagged transactions, and
 // split differences. Bound with (from, toExclusive) three times.
@@ -43,6 +43,9 @@ const OUT = `((lines.category_id IS NOT NULL AND c.is_transfer = 0 AND c.is_inco
 // ponytail: found by category name, add a category flag if the owner ever renames it
 const REIMBURSEMENT = "(c.is_transfer = 1 AND lower(c.name) LIKE 'reimburs%')";
 const REIMBURSED = `(${REIMBURSEMENT} AND lines.is_split = 0 AND lines.amount < 0)`;
+
+// A bill's History counts every charge for it, whatever the category (a monthly investment transfer, an uncategorized Plaid TRANSFER_OUT)
+const BILL = `(${OUT} OR ${REIMBURSED} OR lines.amount < 0)`;
 
 // In: income categories only; an uncategorized inflow is never income
 const IN = '(lines.category_id IS NOT NULL AND c.is_income = 1)';
@@ -117,14 +120,17 @@ export function getExpenses(db: Db, q: ExpensesQuery): ExpensesPage {
 
 const monthBack = (today: string, k: number) => new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)) - 1 - k, 1)).toISOString().slice(0, 7);
 
-/** Which of these transactions have a line that can be in a History (spending or reimbursed); one query for the whole list. */
-export function canHaveHistory(db: Db, rows: { id: string; date: string }[]): Set<string> {
-  if (rows.length === 0) return new Set();
+/** Which of these transactions have a line that can be in a payee's History (spending or reimbursed), and which a line a bill's History
+ * counts; one query for the whole list. */
+export function historyLines(db: Db, rows: { id: string; date: string }[]): { spending: Set<string>; billable: Set<string> } {
+  if (rows.length === 0) return { spending: new Set(), billable: new Set() };
   const dates = rows.map((r) => r.date).sort();
   const day = [dates[0]!, `${dates[dates.length - 1]}~`]; // '~' sorts after the date, so the range ends with the last day
-  return new Set((db.prepare(`${LINES} SELECT DISTINCT lines.transaction_id AS id FROM lines LEFT JOIN categories c ON c.id = lines.category_id
-      WHERE lines.transaction_id IN (SELECT value FROM json_each(?)) AND (${OUT} OR ${REIMBURSED})`)
-    .all(...day, ...day, ...day, JSON.stringify(rows.map((r) => r.id))) as { id: string }[]).map((r) => r.id));
+  const hits = db.prepare(`${LINES} SELECT lines.transaction_id AS id, MAX(${OUT} OR ${REIMBURSED}) AS spending, MAX(${BILL}) AS billable
+      FROM lines LEFT JOIN categories c ON c.id = lines.category_id
+      WHERE lines.transaction_id IN (SELECT value FROM json_each(?)) GROUP BY lines.transaction_id`)
+    .all(...day, ...day, ...day, JSON.stringify(rows.map((r) => r.id))) as { id: string; spending: number | null; billable: number | null }[];
+  return { spending: new Set(hits.filter((h) => h.spending).map((h) => h.id)), billable: new Set(hits.filter((h) => h.billable).map((h) => h.id)) };
 }
 
 /** One payee's or bill's spending, by the same rules as Expenses: twelve months ending this month, and every matching charge, newest
@@ -146,12 +152,11 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
     else throw new ApiError(404, 'NOT_FOUND', 'recurring item not found');
   }
   keys = keys.filter(Boolean);
-  // bank text compares whole (digits kept), so "CHECK 1234" never pools every check
-  const bankText = (b: string) => b.toLowerCase().replace(/\s+/g, ' ').trim();
   const bankKey = q.bank ? bankText(q.bank) : '';
   if (!ids.size && !keys.length) throw new ApiError(400, 'NO_NAME', 'this name has nothing to match', 'name');
-  // names the owner left out of this payee's History
-  const excluded = new Set(q.recurringId ? [] : (db.prepare('SELECT excluded_key AS k FROM history_exclusions WHERE payee_key = ?').all(keys[0]) as { k: string }[]).map((r) => r.k));
+  // names the owner left out of this payee's History, each with every longer name it starts ("acme gas" takes "acme gas station")
+  const excluded = q.recurringId ? [] : (db.prepare('SELECT excluded_key AS k FROM history_exclusions WHERE payee_key = ?').all(keys[0]) as { k: string }[]).map((r) => r.k);
+  const covered = (key: string) => excluded.some((ex) => `${key} `.startsWith(`${ex} `));
   const names = new Map<string, { name: string; excluded: boolean }>();
   const all = ['0000-01-01', '9999-12-31'];
   // a payee's "whole foods" matches "whole foods market", not the other way round
@@ -161,20 +166,20 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
     SELECT lines.transaction_id, lines.date, lines.created_at, lines.row_order, lines.name, lines.amount, lines.is_split, t.amount_cents AS total,
            t.source, t.source_id, t.pending, t.payee, t.merchant_name, t.bank_description, COALESCE(${REIMBURSED}, 0) AS reimbursed
       FROM lines JOIN transactions t ON t.id = lines.transaction_id LEFT JOIN categories c ON c.id = lines.category_id
-     -- a bill counts every charge for it, transfers too (a monthly investment)
-     WHERE ${OUT} OR ${REIMBURSED}${q.recurringId ? ' OR (lines.amount < 0 AND c.is_transfer = 1)' : ''}
+     WHERE ${q.recurringId ? BILL : `${OUT} OR ${REIMBURSED}`}
      ORDER BY lines.date DESC, lines.created_at DESC, lines.row_order DESC, COALESCE(lines.line_id, '~')`).all(...all, ...all, ...all) as {
       transaction_id: string; date: string; created_at: string; row_order: number; name: string; amount: number; is_split: number; total: number;
       source: string; source_id: string | null; pending: number; payee: string | null; merchant_name: string | null; bank_description: string;
       reimbursed: number;
     }[];
   const rows = new Map<string, { row: PayeeHistoryRow; at: Cursor }>();
-  const collect = (match: (l: (typeof lines)[number]) => { named: string | false | undefined; whole: boolean }) => { for (const l of lines) {
-    const { named, whole } = match(l);
+  const collect = (match: (l: (typeof lines)[number]) => { named: string | false | undefined; whole: boolean; prefix?: boolean }) => { for (const l of lines) {
+    const { named, whole, prefix } = match(l);
     if (!named) continue;
     const key = normalizeName(named);
-    if (!q.recurringId && key !== keys[0] && !names.has(key)) names.set(key, { name: named, excluded: excluded.has(key) });
-    if (excluded.has(key)) continue;
+    // only a longer spelling of the payee is offered, never bank-text-only titles
+    if (prefix && key && key !== keys[0] && !names.has(key)) names.set(key, { name: named, excluded: covered(key) });
+    if (covered(key)) continue;
     const r = rows.get(l.transaction_id);
     if (r) { r.row.shareCents -= l.amount; r.row.reimbursed ||= l.reimbursed === 1; }
     else {
@@ -194,9 +199,9 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
     const bankHit = !!bankKey && bankText(l.bank_description) === bankKey && (l.payee === null || bankText(l.payee) === bankKey);
     const whole = byId ? ids.has(l.source_id!) : bankHit || [l.payee, l.merchant_name, l.bank_description].some(hit);
     // the row is titled by the name that matched; a bill, like Recurring, never matches a split line's own payee
-    const named = byId ? whole && l.name : [q.recurringId ? null : l.name, l.payee, l.merchant_name, l.bank_description].find(hit)
-      ?? (bankHit ? l.name : undefined);
-    return { named, whole };
+    const found = byId ? undefined : [q.recurringId ? null : l.name, l.payee, l.merchant_name, l.bank_description].find(hit);
+    const named = byId ? whole && l.name : found ?? (bankHit ? l.name : undefined);
+    return { named, whole, prefix: !q.recurringId && !!found };
   });
   // Recurring's trigger exactly: no money-out charge of any category carries the bill's name
   if (source && !(db.prepare('SELECT payee, merchant_name, bank_description FROM transactions WHERE removed_at IS NULL AND amount_cents < 0').all() as
@@ -228,7 +233,9 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
   const page = after.slice(0, q.limit);
   return {
     name, months, totalCents, averageCents: Math.round(totalCents / span), rows: page.map((r) => r.row),
-    nextCursor: after.length > q.limit ? encodeCursor(page[page.length - 1]!.at) : null, names: [...names.values()],
+    nextCursor: after.length > q.limit ? encodeCursor(page[page.length - 1]!.at) : null,
+    // a name under another listed exclusion goes with it
+    names: [...names].filter(([k]) => !excluded.some((ex) => ex !== k && names.has(ex) && `${k} `.startsWith(`${ex} `))).map(([, n]) => n),
   };
 }
 

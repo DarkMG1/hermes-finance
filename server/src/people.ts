@@ -76,7 +76,7 @@ export function assertPersonTaggable(db: Db, personId: string | null | undefined
 const SUGGESTION_DAYS = 60;
 
 /** Untagged recent deposits that look like repayments, each with the person they most likely came from. */
-export function suggestions(db: Db, now: Date): RepaymentSuggestion[] {
+function repayments(db: Db, now: Date): { r: TxnRow; personId: string | null }[] {
   const since = new Date(now.getTime() - SUGGESTION_DAYS * 86_400_000).toISOString().slice(0, 10);
   const people = listPeople(db, false).filter((p) => !p.archived);
   const rows = db.prepare(`SELECT ${TXN_COLS}, plaid_category FROM transactions t
@@ -88,8 +88,7 @@ export function suggestions(db: Db, now: Date): RepaymentSuggestion[] {
                                                                          WHERE s.key = 'repayment_account_id' AND a.hidden = 0 AND a.type = 'depository'),
                                                                  subtype = 'checking'))
      ORDER BY date DESC, id DESC`).all(since) as (TxnRow & { plaid_category: string | null })[];
-  const l = lookups(db, rows);
-  const out: RepaymentSuggestion[] = [];
+  const out: { r: TxnRow; personId: string | null }[] = [];
   for (const r of rows) {
     const desc = r.bank_description.toLowerCase();
     const byMatch = people.find((p) => p.matchText && desc.includes(p.matchText.toLowerCase()));
@@ -100,9 +99,18 @@ export function suggestions(db: Db, now: Date): RepaymentSuggestion[] {
     });
     const byAmount = people.filter((p) => p.balanceCents === r.amount_cents);
     const person = byMatch ?? byName ?? (byAmount.length === 1 ? byAmount[0] : undefined);
-    out.push({ transaction: rowToTransaction(db, r, l), personId: person?.id ?? null });
+    out.push({ r, personId: person?.id ?? null });
   }
   return out;
+}
+
+/** Home shows only how many, so it never builds the Transactions. */
+export const suggestionCount = (db: Db, now: Date) => repayments(db, now).length;
+
+export function suggestions(db: Db, now: Date): RepaymentSuggestion[] {
+  const found = repayments(db, now);
+  const l = lookups(db, found.map((f) => f.r));
+  return found.map((f) => ({ transaction: rowToTransaction(db, f.r, l), personId: f.personId }));
 }
 
 /** What everyone together owes the owner; people who are ahead count as zero. */

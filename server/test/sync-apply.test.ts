@@ -450,20 +450,25 @@ test('merchant memory: a new row takes the category of the newest unsplit, untag
   seedTxn(db, { id: 'm4', accountId: 'a1', date: '2026-03-02', amountCents: -100, personId: 'pp', payee: 'Synthetic Gym' });
   seedTxn(db, { id: 'm5', accountId: 'a1', date: '2026-03-03', amountCents: -100, categoryId: 'fun', payee: 'Synthetic Gym', removedAt: 'x' });
   seedTxn(db, { id: 'm6', accountId: 'a1', date: '2026-03-04', amountCents: -100, payee: 'Synthetic Gym' });
+  // bank text alone is remembered whole, digits kept: one check never teaches another
+  seedTxn(db, { id: 'chk', accountId: 'a1', date: '2026-01-05', amountCents: -100, categoryId: 'other', bankDescription: 'SYNTHETIC CHECK 1234' });
+  seedTxn(db, { id: 'chk-named', accountId: 'a1', date: '2026-01-06', amountCents: -100, categoryId: 'fun', merchantName: 'Synthetic Check', bankDescription: 'X' });
   apply([page({ added: [
     txn({ transactionId: 'p1', merchantName: 'Synthetic Gym' }),
-    txn({ transactionId: 'p2', merchantName: null, name: 'SYNTHETIC GYM 0042' }),
-    txn({ transactionId: 'p3', merchantName: 'Synthetic Unknown', name: 'SYNTHETIC GYM' }),
-    txn({ transactionId: 'p4', merchantName: 'Synthetic Unknown', name: 'SYNTHETIC NOTHING' }),
+    txn({ transactionId: 'p2', merchantName: null, name: 'synthetic  check 1234' }),
+    txn({ transactionId: 'p3', merchantName: null, name: 'SYNTHETIC CHECK 5678' }),
+    txn({ transactionId: 'p4', merchantName: 'Synthetic Unknown', name: 'SYNTHETIC CHECK 1234' }),
     txn({ transactionId: 'pend', merchantName: 'Synthetic Cafe', category: null, pending: true }),
   ] })]);
-  assert.deepEqual(['p1', 'p2', 'p3', 'p4', 'pend'].map((id) => row(id)?.category_id), ['gym', 'gym', 'gym', 'coffee', null]);
+  // a merchant name looks up names only; no merchant looks up the exact bank text
+  assert.deepEqual(['p1', 'p2', 'p3', 'p4', 'pend'].map((id) => row(id)?.category_id), ['gym', 'other', 'coffee', 'coffee', null]);
   // the posted row of an uncategorized pending charge also goes by memory
   seedTxn(db, { id: 'm7', accountId: 'a1', date: '2026-03-05', amountCents: -100, categoryId: 'fun', payee: 'Synthetic Cafe' });
   apply([page({ added: [txn({ transactionId: 'posted', merchantName: 'Synthetic Cafe', pendingTransactionId: 'pend' })] })]);
   assert.equal(row('posted')?.category_id, 'fun');
-  // a category already on a row stays
+  // a category already on a row stays, and one the owner cleared stays cleared
   db.prepare("UPDATE transactions SET category_id = 'other' WHERE source_id = 'p1'").run();
-  apply([page({ modified: [txn({ transactionId: 'p1', merchantName: 'Synthetic Gym' })] })]);
-  assert.equal(row('p1')?.category_id, 'other');
+  db.prepare("UPDATE transactions SET category_id = NULL, category_owner_set = 1 WHERE source_id = 'p4'").run();
+  apply([page({ modified: [txn({ transactionId: 'p1', merchantName: 'Synthetic Gym' }), txn({ transactionId: 'p4', merchantName: 'Synthetic Gym' })] })]);
+  assert.deepEqual([row('p1')?.category_id, row('p4')?.category_id], ['other', null]);
 });
