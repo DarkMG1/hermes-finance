@@ -3,10 +3,12 @@ import type { Db } from './db.ts';
 import type { Deps } from './deps.ts';
 import { ApiError } from './errors.ts';
 import { applyItems, computeShares, ME, replaceItems, ShareError } from './itemize.ts';
-import { getTransaction } from './ledger.ts';
+import { getTransaction, lookups, rowToTransaction, TXN_COLS, type TxnRow } from './ledger.ts';
 import { assertPersonTaggable } from './people.ts';
 import type { ReadResult } from './receipt-reader.ts';
-import { normalizeName } from './recurring.ts';
+import { memberships, normalizeName } from './recurring.ts';
+
+type Member = ReturnType<typeof memberships>;
 
 export type InboxRow = {
   id: string; jpeg: Buffer | null; bytes: number; captured_at: string; read_at: string | null; read_failed: number; model: string | null;
@@ -39,14 +41,15 @@ const STOP = new Set(['the', 'and', 'inc', 'llc', 'ltd', 'corp', 'company', 'sto
 const words = (s: string | null) => new Set((s ?? '').toLowerCase().match(/[a-z]{3,}/g)?.filter((w) => !STOP.has(w)) ?? []);
 const sharesWord = (t: Transaction, store: Set<string>) => [t.payee, t.merchantName, t.bankDescription].some((s) => [...words(s)].some((w) => store.has(w)));
 
-function candidates(db: Db, row: InboxRow): { exact: Transaction[]; near: Transaction[] } {
+function candidates(db: Db, row: InboxRow, member: Member): { exact: Transaction[]; near: Transaction[] } {
   if (row.total_cents === null || row.total_cents <= 0) return { exact: [], near: [] };
   const day = row.purchase_date ?? row.captured_at.slice(0, 10);
-  const ids = (db.prepare(`SELECT t.id FROM transactions t
+  const rows = db.prepare(`SELECT ${TXN_COLS} FROM transactions t
       WHERE t.amount_cents < 0 AND t.removed_at IS NULL AND t.paid_by_person_id IS NULL AND t.date BETWEEN ? AND ?
         AND NOT EXISTS (SELECT 1 FROM receipts r WHERE r.transaction_id = t.id)
-      ORDER BY t.date DESC, t.created_at DESC, t.id DESC`).all(addDays(day, -1), addDays(day, 5)) as { id: string }[]).map((r) => r.id);
-  const txns = ids.map((id) => getTransaction(db, id)!);
+      ORDER BY t.date DESC, t.created_at DESC, t.id DESC`).all(addDays(day, -1), addDays(day, 5)) as TxnRow[];
+  const l = lookups(db, rows, member);
+  const txns = rows.map((r) => rowToTransaction(db, r, l));
   const total = row.total_cents;
   const store = words(row.merchant);
   const exact = txns.filter((t) => -t.amountCents === total);
@@ -54,8 +57,8 @@ function candidates(db: Db, row: InboxRow): { exact: Transaction[]; near: Transa
   return { exact, near };
 }
 
-export function suggestionsFor(db: Db, row: InboxRow): Transaction[] {
-  const { exact, near } = candidates(db, row);
+export function suggestionsFor(db: Db, row: InboxRow, member: Member): Transaction[] {
+  const { exact, near } = candidates(db, row, member);
   return [...exact, ...near].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
 }
 
@@ -84,7 +87,8 @@ export function matchInbox(deps: Deps, onlyId?: string): number {
     })();
   }
   const rows = db.prepare('SELECT * FROM inbox_receipts WHERE linked_at IS NULL AND jpeg IS NOT NULL AND total_cents IS NOT NULL').all() as InboxRow[];
-  const exact = new Map(rows.map((r) => [r.id, candidates(db, r).exact]));
+  const member = memberships(db);
+  const exact = new Map(rows.map((r) => [r.id, candidates(db, r, member).exact]));
   const claims = new Map<string, number>();
   for (const ts of exact.values()) for (const t of ts) claims.set(t.id, (claims.get(t.id) ?? 0) + 1);
   let linked = 0;
@@ -166,10 +170,11 @@ export function listInbox(db: Db): InboxList {
   const linked = db.prepare(`SELECT * FROM inbox_receipts WHERE linked_at IS NOT NULL AND dismissed_at IS NULL AND linked_transaction_id IS NOT NULL
     AND EXISTS (SELECT 1 FROM receipts WHERE transaction_id = linked_transaction_id)
     ORDER BY linked_at DESC, id LIMIT 20`).all() as InboxRow[];
+  const member = memberships(db);
   return {
     waiting: waiting.map((r) => ({
       id: r.id, capturedAt: r.captured_at, status: status(r), merchant: r.merchant, purchaseDate: r.purchase_date, totalCents: r.total_cents,
-      tagged: r.tagged === 1, payee: payeeFor(known, r.merchant), suggestions: suggestionsFor(db, r),
+      tagged: r.tagged === 1, payee: payeeFor(known, r.merchant), suggestions: suggestionsFor(db, r, member),
     })),
     recentlyLinked: linked.map(toLinked),
   };

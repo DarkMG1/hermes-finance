@@ -24,6 +24,7 @@ struct PayeeHistoryView: View {
     @State private var month: String?
     /// The month the shown rows and cursor belong to.
     @State private var loadedMonth: String?
+    @State private var excluding = false
 
     var body: some View {
         List {
@@ -96,6 +97,23 @@ struct PayeeHistoryView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await load(reset: true) }
         .refreshable { await load(reset: true) }
+        .toolbar {
+            // payee mode: the longer names the prefix match took in, each one can be left out
+            if let payee = match.first(where: { $0.name == "name" })?.value, let names = lastLoad?.value.names, !names.isEmpty {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Section("Include in History") {
+                            ForEach(names, id: \.name) { item in
+                                Toggle(item.name, isOn: Binding(get: { !item.excluded }, set: { on in
+                                    Task { await setExcluded(item.name, !on, payee: payee) }
+                                }))
+                            }
+                        }
+                    } label: { Label("Names", systemImage: "checklist") }
+                    .disabled(excluding)
+                }
+            }
+        }
         // the screen behind hears about edits only after this sheet has gone, so it can close itself cleanly
         .sheet(item: $opened, onDismiss: sendChanges) { transaction in
             TransactionDetailSheet(transaction: transaction, showsHistory: false) {
@@ -155,6 +173,18 @@ struct PayeeHistoryView: View {
             guard gen == generation, !Task.isCancelled else { return true }
             self.error = errorMessage(error)
             return false
+        }
+    }
+
+    private func setExcluded(_ name: String, _ excluded: Bool, payee: String) async {
+        guard !excluding, let client = model.client else { return }
+        excluding = true
+        defer { excluding = false }
+        do {
+            try await client.putHistoryExclusion(name: payee, excludedName: name, excluded: excluded)
+            await load(reset: true)
+        } catch {
+            self.error = errorMessage(error)
         }
     }
 

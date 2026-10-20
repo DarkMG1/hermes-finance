@@ -19,7 +19,8 @@
       "reconciled": false,
       "forgiven": false,
       "hasReceipt": false,
-      "hasHistory": true
+      "hasHistory": true,
+      "recurring": null
     },
     {
       "id": "txn-2",
@@ -40,7 +41,8 @@
       "reconciled": false,
       "forgiven": false,
       "hasReceipt": false,
-      "hasHistory": false
+      "hasHistory": false,
+      "recurring": null
     }
   ],
   "nextCursor": "WyIyMDI2LTAzLTEzIiwidHhuLTIiXQ"

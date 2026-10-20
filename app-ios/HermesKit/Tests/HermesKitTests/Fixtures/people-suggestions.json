@@ -19,7 +19,8 @@
       "reconciled": false,
       "forgiven": false,
       "hasReceipt": false,
-      "hasHistory": false
+      "hasHistory": false,
+      "recurring": null
     },
     "personId": "person-1"
   }

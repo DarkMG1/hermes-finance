@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { parseAppleCardCsv, parseCsv, sourceIds } from '../src/applecard.ts';
 import { buildApp } from '../src/app.ts';
 import { getSpending } from '../src/cashflow.ts';
-import { AUTH, makeTestDeps, seedCategory } from './helpers.ts';
+import { AUTH, makeTestDeps, seedAccount, seedCategory, seedTxn } from './helpers.ts';
 
 const HEADER = 'Transaction Date,Clearing Date,Description,Merchant,Category,Type,Amount (USD),Purchased By';
 const SEPT = [
@@ -138,6 +138,22 @@ test('re-import fills an uncategorized row from a mapping learned since the firs
   assert.equal(cat(), null);
 });
 
+test('re-import fills an uncategorized row from merchant memory learned since, never one the owner cleared', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  seedAccount(deps.db, { id: 'a1' });
+  seedCategory(deps.db, { id: 'coffee', name: 'Coffee' });
+  seedCategory(deps.db, { id: 'grocery', name: 'Grocery' });
+  await post(app, SEPT, 'k1');
+  const cat = (cents: number) => (deps.db.prepare("SELECT category_id FROM transactions WHERE source = 'applecard' AND amount_cents = ?").get(cents) as { category_id: string | null }).category_id;
+  assert.deepEqual([cat(-1234), cat(-105000)], [null, null]);
+  seedTxn(deps.db, { id: 'old', accountId: 'a1', date: '2026-09-20', amountCents: -500, categoryId: 'coffee', payee: 'Synthetic Cafe' });
+  seedTxn(deps.db, { id: 'old2', accountId: 'a1', date: '2026-09-20', amountCents: -500, categoryId: 'grocery', payee: 'Synthetic Grocer' });
+  deps.db.prepare("UPDATE transactions SET category_owner_set = 1 WHERE source = 'applecard' AND amount_cents = -105000").run();
+  await post(app, SEPT, 'k2');
+  assert.deepEqual([cat(-1234), cat(-105000)], ['coffee', null]);
+});
+
 const statement = (clearing: string) => `${HEADER}\n09/30/2026,${clearing},SYNTHETIC COFFEE,Synthetic Coffee,Restaurants,Purchase,5.00,Synthetic Person`;
 
 test('identical same-day purchases that clear on different days are two charges, across statements', async () => {
@@ -210,4 +226,28 @@ test('re-import keeps a date the owner changed', async () => {
   await post(app, SEPT, 'k2');
   const dates = deps.db.prepare("SELECT date FROM transactions WHERE source = 'applecard' AND amount_cents IN (-1234, -105000) ORDER BY amount_cents").all();
   assert.deepEqual(dates, [{ date: '2026-09-03' }, { date: '2026-10-01' }]);
+});
+
+test('new rows take the category of the newest row with their merchant name ahead of the mapping', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  seedAccount(deps.db, { id: 'a1' });
+  seedCategory(deps.db, { id: 'dining', name: 'Dining' });
+  seedCategory(deps.db, { id: 'coffee', name: 'Coffee' });
+  seedCategory(deps.db, { id: 'grocery', name: 'Grocery' });
+  deps.db.prepare("INSERT INTO plaid_category_map (plaid_category, category_id) VALUES ('Restaurants', 'dining')").run();
+  seedTxn(deps.db, { id: 'old', accountId: 'a1', date: '2026-08-01', amountCents: -500, categoryId: 'coffee', payee: 'Synthetic Cafe' });
+  seedTxn(deps.db, { id: 'old2', accountId: 'a1', date: '2026-08-01', amountCents: -500, categoryId: 'grocery', payee: 'Synthetic Grocer' });
+  // a payment's text was once categorized: payments still keep the card-payment category
+  seedTxn(deps.db, { id: 'old3', accountId: 'a1', date: '2026-08-01', amountCents: 500, categoryId: 'grocery', merchantName: 'Synthetic Bank' });
+  seedCategory(deps.db, { id: 'card', name: 'Card Payment', isTransfer: true });
+  deps.db.prepare("INSERT INTO plaid_category_map (plaid_category, category_id) VALUES ('LOAN_PAYMENTS_CREDIT_CARD_PAYMENT', 'card')").run();
+  await post(app, SEPT, 'k1');
+  const cat = (cents: number) => (deps.db.prepare("SELECT category_id FROM transactions WHERE source = 'applecard' AND amount_cents = ?").get(cents) as { category_id: string | null }).category_id;
+  assert.deepEqual([cat(-1234), cat(-105000), cat(50000)], ['coffee', 'grocery', 'card']);
+  // re-import never overwrites the owner's category, nor fills one the owner cleared
+  deps.db.prepare("UPDATE transactions SET category_id = 'dining' WHERE source = 'applecard' AND amount_cents = -1234").run();
+  deps.db.prepare("UPDATE transactions SET category_id = NULL, category_owner_set = 1 WHERE source = 'applecard' AND amount_cents = -105000").run();
+  await post(app, SEPT, 'k2');
+  assert.deepEqual([cat(-1234), cat(-105000)], ['dining', null]);
 });

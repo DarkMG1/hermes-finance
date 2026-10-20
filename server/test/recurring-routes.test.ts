@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.ts';
-import { AUTH, makeTestDeps, seedAccount, seedItem, seedSplit, seedTxn } from './helpers.ts';
+import { AUTH, makeTestDeps, seedAccount, seedCategory, seedItem, seedPerson, seedSplit, seedTxn } from './helpers.ts';
 
 function setup() {
   const { deps } = makeTestDeps();
@@ -26,7 +26,7 @@ function setup() {
 }
 
 test('mark as recurring, rename, change interval, hide, show again, delete', async () => {
-  const { get, send } = setup();
+  const { get, send, db } = setup();
   const made = await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly' });
   assert.equal(made.statusCode, 201);
   const id = made.json().id as string;
@@ -40,7 +40,10 @@ test('mark as recurring, rename, change interval, hide, show again, delete', asy
   assert.equal((await send('DELETE', '/v1/recurring/s-tv')).statusCode, 409);
   assert.equal((await send('DELETE', `/v1/recurring/${id}`)).statusCode, 204);
   assert.equal((await send('PATCH', '/v1/recurring/nope', { hidden: true })).statusCode, 404);
-  assert.equal((await send('PATCH', '/v1/recurring/s-off', { hidden: true })).statusCode, 404);
+  // a stream Plaid stopped is still there, ended; a tombstoned one is gone
+  assert.deepEqual([(await send('PATCH', '/v1/recurring/s-off', { hidden: true })).json().ended], [true]);
+  db.prepare("UPDATE recurring_streams SET status = 'tombstoned' WHERE stream_id = 's-off'").run();
+  assert.equal((await send('PATCH', '/v1/recurring/s-off', { hidden: false })).statusCode, 404);
 });
 
 test('refusals: money in, already recurring (Plaid name), bad frequency; replay creates once', async () => {
@@ -92,4 +95,93 @@ test('bill history: a Plaid stream lists its posted charges, other rows by exact
   assert.equal((await get('/v1/payee-history?recurringId=nope')).code, 'NOT_FOUND');
   assert.equal((await get('/v1/payee-history?recurringId=s-tv&name=Synthetic%20TV')).code, 'INVALID_REQUEST');
   assert.equal((await get('/v1/payee-history')).code, 'INVALID_REQUEST');
+});
+
+test('mark a bill cancelled as of today; only a charge dated after that brings it back; unmark clears it', async () => {
+  const { get, send, db } = setup();
+  const endedOn = () => (db.prepare("SELECT ended_on FROM recurring_overrides WHERE stream_id = 's-tv'").get() as { ended_on: string | null }).ended_on;
+  const item = async (id: string) => (await get('/v1/recurring')).items.find((i: { id: string }) => i.id === id);
+  const tv = (await send('PATCH', '/v1/recurring/s-tv', { ended: true })).json();
+  assert.deepEqual([tv.ended, tv.cancelled, tv.nextDate, endedOn()], [true, true, null, '2026-03-15']);
+  const list = await get('/v1/recurring');
+  assert.deepEqual([list.upcoming.length, list.monthlyTotalCents], [0, 0]);
+  // a pending charge posting (or a date edit) up to the cancel day never revives it
+  db.prepare("UPDATE recurring_streams SET last_date = '2026-03-12' WHERE stream_id = 's-tv'").run();
+  assert.equal((await item('s-tv')).cancelled, true);
+  db.prepare("UPDATE recurring_streams SET last_date = '2026-03-16' WHERE stream_id = 's-tv'").run();
+  assert.deepEqual([(await item('s-tv')).ended, (await item('s-tv')).cancelled], [false, false]);
+  // cancelling a bill charged after today keeps that charge's date
+  assert.equal((await send('PATCH', '/v1/recurring/s-tv', { ended: true })).statusCode, 200);
+  assert.equal(endedOn(), '2026-03-16');
+  // an auto-ended bill is ended but not cancelled; unmarking a cancelled one leaves it ended by its missed charges
+  db.prepare("UPDATE recurring_streams SET last_date = '2026-01-05' WHERE stream_id = 's-tv'").run();
+  assert.deepEqual([(await item('s-tv')).ended, (await item('s-tv')).cancelled], [true, true]);
+  const unmarked = (await send('PATCH', '/v1/recurring/s-tv', { ended: false })).json();
+  assert.deepEqual([unmarked.ended, unmarked.cancelled, endedOn()], [true, false, null]);
+  // an auto-ended bill comes back with a new charge
+  db.prepare("UPDATE recurring_streams SET last_date = '2026-03-14' WHERE stream_id = 's-tv'").run();
+  assert.equal((await item('s-tv')).ended, false);
+  const id = (await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly' })).json().id as string;
+  assert.equal((await send('PATCH', `/v1/recurring/${id}`, { ended: true })).json().ended, true);
+  seedTxn(db, { id: 'sub-2', accountId: 'a1', date: '2026-03-15', amountCents: -1099, payee: 'Synthetic Music' });
+  assert.equal((await item(id)).cancelled, true);
+  seedTxn(db, { id: 'sub-3', accountId: 'a1', date: '2026-03-16', amountCents: -1099, payee: 'Synthetic Music' });
+  assert.deepEqual([(await item(id)).ended, (await item(id)).lastDate], [false, '2026-03-16']);
+  assert.equal((await send('PATCH', `/v1/recurring/${id}`, { ended: false })).json().ended, false);
+});
+
+test('a charge carries the bill whose History lists it: posted Plaid charges by stream id, other rows by exact name, a manual source while History falls back to it', async () => {
+  const { get, send, db } = setup();
+  seedCategory(db, { id: 'c-invest', name: 'Investment', isTransfer: true });
+  seedPerson(db, { id: 'p1', name: 'Synthetic Quill' });
+  seedTxn(db, { id: 'tv-xfer', accountId: 'a1', date: '2026-03-01', amountCents: -1500, categoryId: 'c-invest', payee: 'Synthetic TV' });
+  seedTxn(db, { id: 'tv-uncat-xfer', accountId: 'a1', date: '2026-03-01', amountCents: -1500, plaidCategory: 'TRANSFER_OUT_ACCOUNT_TRANSFER', payee: 'Synthetic TV' });
+  seedTxn(db, { id: 'tv-pend', accountId: 'a1', date: '2026-03-10', amountCents: -1500, payee: 'Synthetic TV', source: 'plaid', sourceId: 'tv-p', pending: true });
+  seedTxn(db, { id: 'tv-refund', accountId: 'a1', date: '2026-03-11', amountCents: 1500, payee: 'Synthetic TV' });
+  seedTxn(db, { id: 'tv-iou', accountId: 'a1', date: '2026-03-11', amountCents: -1500, payee: 'Synthetic TV', personId: 'p1' });
+  const rec = async (id: string) => (await get(`/v1/transactions/${id}`)).recurring;
+  const tv = { id: 's-tv', name: 'Synthetic TV', frequency: 'monthly' };
+  assert.deepEqual(await rec('tv'), tv);
+  assert.deepEqual(await rec('tv-ach'), tv);
+  assert.deepEqual(await rec('tv-pend'), tv);
+  // a posted charge outside the stream, another source's id clash, a refund and someone's IOU are never the bill's
+  for (const id of ['tv-other', 'tv-card', 'tv-refund', 'tv-iou', 'sub']) assert.equal(await rec(id), null, id);
+  // a transfer has no payee History, but its bill's History counts it, categorized or not
+  assert.deepEqual([(await get('/v1/transactions/tv-xfer')).hasHistory, await rec('tv-xfer'), await rec('tv-uncat-xfer')], [true, tv, tv]);
+  const id = (await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly', name: 'Synthetic Tunes' })).json().id as string;
+  const tunes = { id, name: 'Synthetic Tunes', frequency: 'monthly' };
+  assert.deepEqual(await rec('sub'), tunes);
+  const page = (await get('/v1/transactions')).transactions as { id: string; recurring: unknown }[];
+  assert.deepEqual(page.find((t) => t.id === 'sub')!.recurring, tunes);
+  assert.deepEqual(page.find((t) => t.id === 'tv-ach')!.recurring, tv);
+  // ended still counts; renamed away from the bill's text, the charge it was made from belongs while nothing else carries the text
+  await send('PATCH', `/v1/recurring/${id}`, { ended: true });
+  db.prepare("UPDATE transactions SET payee = 'Synthetic Renamed' WHERE id = 'sub'").run();
+  assert.deepEqual(await rec('sub'), tunes);
+  seedTxn(db, { id: 'sub-2', accountId: 'a1', date: '2026-03-12', amountCents: -1099, payee: 'Synthetic Music' });
+  assert.deepEqual([await rec('sub'), await rec('sub-2')], [null, tunes]);
+  // every charge that names a bill is in that bill's History
+  const all = (await get('/v1/transactions?limit=200')).transactions as { id: string; recurring: { id: string } | null }[];
+  assert.ok(all.filter((t) => t.recurring).length >= 6);
+  for (const t of all.filter((x) => x.recurring)) {
+    const h = await get(`/v1/payee-history?recurringId=${t.recurring!.id}&limit=200`);
+    assert.ok(h.rows.some((r: { transactionId: string }) => r.transactionId === t.id), `${t.id} in ${t.recurring!.id}`);
+  }
+  await send('PATCH', '/v1/recurring/s-tv', { hidden: true });
+  assert.equal(await rec('tv'), null);
+});
+
+test('a stream Plaid stops listing stays as ended, still holding its charges; a manual twin comes back', async () => {
+  const { get, send, db } = setup();
+  db.prepare("UPDATE recurring_streams SET is_active = 0 WHERE stream_id = 's-tv'").run();
+  const item = (await get('/v1/recurring')).items.find((i: { id: string }) => i.id === 's-tv');
+  assert.deepEqual([item.ended, item.cancelled, item.stopped, item.nextDate], [true, false, true, null]);
+  assert.equal((await get('/v1/recurring')).upcoming.length, 0);
+  assert.equal((await get('/v1/transactions/tv')).recurring.id, 's-tv');
+  db.prepare("INSERT INTO recurring_manual (id, name, match_text, frequency, source_transaction_id, created_at) VALUES ('man-tv', 'Synthetic TV', 'synthetic tv', 'monthly', 'tv-other', 'x')").run();
+  assert.deepEqual((await get('/v1/recurring')).items.filter((i: { name: string }) => i.name === 'Synthetic TV').map((i: { id: string; ended: boolean }) => [i.id, i.ended]),
+    [['s-tv', true], ['man-tv', false]]);
+  // a live twin wins a name match over the stopped stream; the stream keeps its own charges by id
+  assert.deepEqual([(await get('/v1/transactions/tv-other')).recurring.id, (await get('/v1/transactions/tv')).recurring.id], ['man-tv', 's-tv']);
+  assert.equal((await send('PATCH', '/v1/recurring/s-tv', { ended: true })).json().cancelled, true);
 });

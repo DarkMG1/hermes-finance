@@ -12,7 +12,7 @@ import { parseBody } from '../validate.ts';
 export function recurringRoutes(app: FastifyInstance, deps: Deps): void {
   const { db } = deps;
   const today = () => localDay(deps.now());
-  // inside the write, so a stream that went inactive (or a manual item with no live charge) rolls back as 404
+  // inside the write, so a tombstoned stream (or a manual item with no live charge) rolls back as 404
   const find = (id: string) => {
     const item = getRecurring(db, today(), true).items.find((i) => i.id === id);
     if (!item) throw new ApiError(404, 'NOT_FOUND', 'recurring item not found');
@@ -25,15 +25,19 @@ export function recurringRoutes(app: FastifyInstance, deps: Deps): void {
     const body = parseBody(PatchRecurringBody, req.body);
     const r = idempotentWrite(deps, req, () => {
       const id = req.params.id;
+      // cancelled as of today (or a later last charge): only a charge dated after the cancel brings the bill back, never a pending one posting
+      const endedOn = body.ended ? [find(id).lastDate, today()].sort()[1]! : null;
       if (db.prepare('SELECT 1 FROM recurring_streams WHERE stream_id = ?').get(id)) {
         db.prepare('INSERT OR IGNORE INTO recurring_overrides (stream_id) VALUES (?)').run(id);
         if (body.hidden !== undefined) db.prepare('UPDATE recurring_overrides SET hidden = ? WHERE stream_id = ?').run(body.hidden ? 1 : 0, id);
         if (body.name !== undefined) db.prepare('UPDATE recurring_overrides SET name = ? WHERE stream_id = ?').run(body.name, id);
         if (body.frequency !== undefined) db.prepare('UPDATE recurring_overrides SET frequency = ? WHERE stream_id = ?').run(body.frequency, id);
+        if (body.ended !== undefined) db.prepare('UPDATE recurring_overrides SET ended_on = ? WHERE stream_id = ?').run(endedOn, id);
       } else if (db.prepare('SELECT 1 FROM recurring_manual WHERE id = ?').get(id)) {
         if (body.hidden !== undefined) db.prepare('UPDATE recurring_manual SET hidden = ? WHERE id = ?').run(body.hidden ? 1 : 0, id);
         if (body.name) db.prepare('UPDATE recurring_manual SET name = ? WHERE id = ?').run(body.name, id);
         if (body.frequency !== undefined) db.prepare('UPDATE recurring_manual SET frequency = ? WHERE id = ?').run(body.frequency, id);
+        if (body.ended !== undefined) db.prepare('UPDATE recurring_manual SET ended_on = ? WHERE id = ?').run(endedOn, id);
       } else {
         throw new ApiError(404, 'NOT_FOUND', 'recurring item not found');
       }

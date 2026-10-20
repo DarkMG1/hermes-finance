@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { AppleCardImportResult } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
+import { merchantMemory } from './ledger.ts';
 import { localDay, snapshotBalances } from './networth.ts';
 
 // Wallet's Apple Card export: purchases positive, payments and credits negative. Hermes: negative = money out.
@@ -108,13 +109,14 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
   const upsert = db.prepare(`
     INSERT INTO transactions (id, account_id, source, source_id, date, authorized_date, clearing_date, amount_cents, bank_description, merchant_name, plaid_category, category_id, created_at, updated_at)
     VALUES (@id, @accountId, 'applecard', @sourceId, @date, @date, @clearing, @amount, @desc, @merchant, @plaidCategory,
-      (SELECT category_id FROM plaid_category_map WHERE plaid_category = @plaidCategory), @now, @now)
+      COALESCE(@remembered, (SELECT category_id FROM plaid_category_map WHERE plaid_category = @plaidCategory)), @now, @now)
     ON CONFLICT (source, source_id) DO UPDATE SET
       date = CASE WHEN transactions.date_owner_set = 1 THEN transactions.date ELSE excluded.date END, authorized_date = excluded.authorized_date, clearing_date = COALESCE(excluded.clearing_date, transactions.clearing_date),
       amount_cents = excluded.amount_cents,
       bank_description = excluded.bank_description, merchant_name = excluded.merchant_name, plaid_category = excluded.plaid_category,
       category_id = COALESCE(transactions.category_id, CASE WHEN transactions.category_owner_set = 0 THEN excluded.category_id END),
       updated_at = excluded.updated_at`);
+  const remembered = merchantMemory(db);
   const result: AppleCardImportResult = { accountId, rows: rows.length, added: 0, updated: 0, skippedBeforeCutover: 0 };
   const stored = db.prepare("SELECT clearing_date AS c FROM transactions WHERE source = 'applecard' AND source_id = ?");
   const taken = new Set<string>();
@@ -157,10 +159,11 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
     const row = found[i];
     if (cutover && r.transactionDate < cutover) { result.skippedBeforeCutover += 1; return; }
     if (row) result.updated += 1; else result.added += 1;
-    // payments must never count as spending; other rows keep Apple's category so refunds net against purchases
+    // payments must never count as spending (so never take a remembered category); other rows keep Apple's category so refunds net against purchases
     const plaidCategory = r.type.toLowerCase() === 'payment' ? 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' : r.category;
     upsert.run({ id: randomUUID(), accountId, sourceId, date: r.transactionDate, clearing: r.clearingDate, amount: r.amountCents, desc: r.description,
-      merchant: r.merchant, plaidCategory, now: nowIso });
+      merchant: r.merchant, plaidCategory,
+      remembered: plaidCategory === 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' ? null : remembered(r.merchant, r.description), now: nowIso });
   });
   const sum = (db.prepare("SELECT COALESCE(SUM(amount_cents), 0) AS s FROM transactions WHERE account_id = ? AND source = 'applecard' AND removed_at IS NULL")
     .get(accountId) as { s: number }).s;

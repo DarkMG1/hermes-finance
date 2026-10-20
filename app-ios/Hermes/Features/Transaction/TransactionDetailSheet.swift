@@ -29,7 +29,12 @@ struct TransactionDetailSheet: View {
     @State private var itemizing = false
     @State private var savedFromItems = false
     @State private var markingRecurring = false
-    @State private var recurringMessage: String?
+    /// Set by a mark here, so the sheet shows the new bill without reopening.
+    @State private var marked: TransactionRecurring?
+    @State private var recurringBusy = false
+    @State private var recurringWrites = WriteGuard()
+    /// The frequency an unconfirmed mark sent: the retry resends it under the same key.
+    @State private var markFrequency = ""
     @State private var recurringError: String?
     @State private var reconciled = false
     @State private var reconciling = false
@@ -43,10 +48,10 @@ struct TransactionDetailSheet: View {
 
     var body: some View {
         Sheet(
-            title: "Transaction", canSave: !patch.isEmpty && !payeeInvalid && !deleteWrites.unresolved, busy: busy || reconciling || receiptBusy,
-            unresolved: writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved, dirty: !patch.isEmpty,
+            title: "Transaction", canSave: !patch.isEmpty && !payeeInvalid && !deleteWrites.unresolved,
+            busy: busy || reconciling || receiptBusy || recurringBusy, unresolved: unresolved, dirty: !patch.isEmpty,
             onCancel: {
-                if writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved { Task { await onChange() } }
+                if unresolved { Task { await onChange() } }
                 dismiss()
             },
             onSave: { Task { await save() } }
@@ -69,11 +74,12 @@ struct TransactionDetailSheet: View {
             Section {
                 Field(label: "Payee", error: payeeInvalid ? "Payee can't be empty" : nil) { TextField("Payee", text: $payee) }
                 // the saved payee, not the text being typed
-                if showsHistory && transaction.hasHistory == true {
+                if showsHistory && (transaction.hasHistory == true || bill != nil) {
                     NavigationLink {
-                        PayeeHistoryView(match: [URLQueryItem(name: "name", value: transaction.payee)]
+                        PayeeHistoryView(match: bill.map { [URLQueryItem(name: "recurringId", value: $0.id)] }
+                                         ?? [URLQueryItem(name: "name", value: transaction.payee)]
                                          + (transaction.bankDescription.isEmpty ? [] : [URLQueryItem(name: "bank", value: transaction.bankDescription)]),
-                                         title: transaction.payee) { ids in
+                                         title: bill?.name ?? transaction.payee) { ids in
                             othersChanged.formUnion(ids.subtracting([transaction.id]))
                             // this sheet's own charge changed there: its copy is stale, so close it rather than let it save over
                             if ids.contains(transaction.id) { busy = true; await onChange(); dismiss() } else { savedOutside = true }
@@ -132,16 +138,20 @@ struct TransactionDetailSheet: View {
                 }
                 .disabled(deleteWrites.unresolved)
             }
-            if transaction.amountCents < 0 && !forgiven {
+            if let bill {
+                Section { Text("Recurring · \(RecurringFrequency.label(bill.frequency))") }
+            } else if transaction.amountCents < 0 && !forgiven {
                 Section {
                     // dialog on its button: on the Form it floats mid-screen
-                    Button("Mark as recurring…") { markingRecurring = true }
+                    Button("Mark as recurring…") {
+                        if recurringWrites.unresolved { Task { await markRecurring(markFrequency) } } else { markingRecurring = true }
+                    }
+                        .disabled(recurringBusy)
                         .confirmationDialog("How often?", isPresented: $markingRecurring, titleVisibility: .visible) {
                             ForEach(RecurringFrequency.writable, id: \.self) { frequency in
                                 Button(RecurringFrequency.label(frequency)) { Task { await markRecurring(frequency) } }
                             }
                         }
-                    if let recurringMessage { Text(recurringMessage).textStyle(.caption, color: Palette.secondaryText) }
                     InlineError(message: recurringError)
                 }
             }
@@ -215,6 +225,8 @@ struct TransactionDetailSheet: View {
     }
 
     private var forgiven: Bool { transaction.forgiven == true }
+    private var bill: TransactionRecurring? { marked ?? transaction.recurring }
+    private var unresolved: Bool { writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved || recurringWrites.unresolved }
     private var canSplit: Bool { transaction.paidByPersonId == nil && paidById == nil && !forgiven }
     private var trimmedPayee: String { payee.trimmingCharacters(in: .whitespacesAndNewlines) }
 
@@ -287,15 +299,21 @@ struct TransactionDetailSheet: View {
     }
 
     private func markRecurring(_ frequency: String) async {
-        guard let client = model.client else { return }
-        recurringMessage = nil
+        guard !recurringBusy, let client = model.client else { return }
+        recurringBusy = true
+        defer { recurringBusy = false }
         recurringError = nil
+        markFrequency = frequency
         do {
-            _ = try await client.createRecurring(body: CreateRecurringBody(transactionId: transaction.id, frequency: frequency, name: nil),
-                                                 idempotencyKey: UUID().uuidString)
-            recurringMessage = "Added to Recurring"
+            let item = try await client.createRecurring(body: CreateRecurringBody(transactionId: transaction.id, frequency: frequency, name: nil),
+                                                        idempotencyKey: recurringWrites.key)
+            recurringWrites.didSucceed()
+            marked = TransactionRecurring(id: item.id, name: item.name, frequency: item.frequency)
+            // the row behind now belongs to a bill; it refreshes when this sheet closes, like a reconcile
+            savedOutside = true
         } catch {
-            recurringError = errorMessage(error)
+            recurringWrites.didFail(error)
+            recurringError = recurringWrites.unresolved ? "Couldn't confirm the save. Try again." : errorMessage(error)
         }
     }
 

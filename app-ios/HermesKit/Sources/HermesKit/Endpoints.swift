@@ -143,6 +143,12 @@ extension APIClient {
         try await write("POST", "/v1/recurring", body: body, key: idempotencyKey)
     }
 
+    /// Sets the state outright, so no idempotency key.
+    public func putHistoryExclusion(name: String, excludedName: String, excluded: Bool) async throws {
+        let body = try JSONEncoder().encode(HistoryExclusionBody(name: name, excludedName: excludedName, excluded: excluded))
+        try await send("PUT", "/v1/payee-history/exclusions", body: body, idempotencyKey: nil, timeout: 20)
+    }
+
     public func deleteRecurring(id: String) async throws {
         try await send("DELETE", "/v1/recurring/\(id)", body: nil, idempotencyKey: nil, timeout: 20)
     }

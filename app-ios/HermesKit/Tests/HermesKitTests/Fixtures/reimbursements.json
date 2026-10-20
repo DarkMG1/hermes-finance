@@ -1,0 +1,92 @@
+{
+  "months": [
+    {
+      "month": "2026-03",
+      "outCents": 2000,
+      "inCents": 1500,
+      "unpaidCents": 500
+    },
+    {
+      "month": "2026-02",
+      "outCents": 0,
+      "inCents": 0,
+      "unpaidCents": 0
+    },
+    {
+      "month": "2026-01",
+      "outCents": 0,
+      "inCents": 0,
+      "unpaidCents": 0
+    },
+    {
+      "month": "2025-12",
+      "outCents": 0,
+      "inCents": 0,
+      "unpaidCents": 0
+    },
+    {
+      "month": "2025-11",
+      "outCents": 0,
+      "inCents": 0,
+      "unpaidCents": 0
+    },
+    {
+      "month": "2025-10",
+      "outCents": 0,
+      "inCents": 0,
+      "unpaidCents": 0
+    },
+    {
+      "month": "2025-09",
+      "outCents": 0,
+      "inCents": 0,
+      "unpaidCents": 0
+    },
+    {
+      "month": "2025-08",
+      "outCents": 0,
+      "inCents": 0,
+      "unpaidCents": 0
+    },
+    {
+      "month": "2025-07",
+      "outCents": 0,
+      "inCents": 0,
+      "unpaidCents": 0
+    },
+    {
+      "month": "2025-06",
+      "outCents": 0,
+      "inCents": 0,
+      "unpaidCents": 0
+    },
+    {
+      "month": "2025-05",
+      "outCents": 0,
+      "inCents": 0,
+      "unpaidCents": 0
+    },
+    {
+      "month": "2025-04",
+      "outCents": 0,
+      "inCents": 0,
+      "unpaidCents": 0
+    }
+  ],
+  "rows": [
+    {
+      "transactionId": "txn-10",
+      "lineId": null,
+      "date": "2026-03-06",
+      "name": "Synthetic Employer",
+      "amountCents": 1500
+    },
+    {
+      "transactionId": "txn-9",
+      "lineId": null,
+      "date": "2026-03-04",
+      "name": "Synthetic Airline",
+      "amountCents": -2000
+    }
+  ]
+}

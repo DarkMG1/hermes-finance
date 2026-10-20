@@ -8,6 +8,7 @@ struct SpendingView: View {
     @State private var state: LoadState<Spending> = .loading
     @State private var loadedPeriod: SpendingPeriod?
     @State private var dueThisWeek = 0
+    @State private var unpaid = 0
 
     var body: some View {
         Screen(title: "Spending") {
@@ -66,6 +67,12 @@ struct SpendingView: View {
                         ListRow(title: "All expenses") { Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText) }
                     }
                     .buttonStyle(.plain)
+                    NavigationLink { ReimbursementsView() } label: {
+                        ListRow(title: "Reimbursements", subtitle: unpaid > 0 ? "\(Money.format(unpaid)) unpaid" : nil) {
+                            Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText)
+                        }
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }
@@ -75,6 +82,7 @@ struct SpendingView: View {
             await load()
         }
         .task { await loadDue() }
+        .task { await loadUnpaid() }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink { RecurringView() } label: {
@@ -84,11 +92,17 @@ struct SpendingView: View {
                 .accessibilityValue(dueThisWeek > 0 ? "\(dueThisWeek) due this week" : "")
             }
         }
-        .refreshable { await load(); await loadDue() }
+        .refreshable { await load(); await loadDue(); await loadUnpaid() }
     }
 
     private func loadDue() async {
         if let list = try? await model.client?.recurring() { dueThisWeek = list.dueThisWeek }
+    }
+
+    private func loadUnpaid() async {
+        if let loaded = try? await model.reader?.read("/v1/reimbursements", as: Reimbursements.self) {
+            unpaid = loaded.value.unpaidCents
+        }
     }
 
     private func expenses(_ title: String, _ query: ExpensesQuery, total: Int) -> some View {

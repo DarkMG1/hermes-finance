@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { Reimbursements } from '@hermes/shared';
 import { buildApp } from '../src/app.ts';
 import { makeTestDeps, AUTH, seedAccount, seedCategory, seedTxn, seedSplit, seedPerson } from './helpers.ts';
 
@@ -126,4 +127,40 @@ test('moving a split line to someone else takes it out of Expenses and its categ
   const s = (await app.inject({ method: 'GET', url: '/v1/spending?period=month&date=2026-03', headers: AUTH })).json();
   assert.equal(s.categories.find((c: { name: string }) => c.name === 'Fun').spentCents, 1000);
   assert.equal(s.outCents, 4200);
+});
+
+test('reimbursements: twelve months of Reimbursement lines, charges out and paybacks in, newest first', async () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'a1' });
+  seedCategory(db, { id: 'c-reimb', name: 'Reimbursements', isTransfer: true });
+  seedCategory(db, { id: 'c-xfer', name: 'Transfer', isTransfer: true });
+  seedCategory(db, { id: 'c-food', name: 'Food' });
+  seedPerson(db, { id: 'p1', name: 'Synthetic Quill' });
+  const row = (id: string, date: string, amountCents: number, more: { categoryId?: string; personId?: string; removedAt?: string } = { categoryId: 'c-reimb' }) =>
+    seedTxn(db, { id, accountId: 'a1', date, amountCents, payee: `Synthetic ${id}`, ...more });
+  row('r1', '2026-03-02', -5000);
+  row('r2', '2026-03-10', 3000);
+  row('r3', '2026-02-01', -2000, {});
+  seedSplit(db, { id: 'r3-a', transactionId: 'r3', amountCents: -1200, categoryId: 'c-reimb', payee: 'Synthetic Hotel' });
+  seedSplit(db, { id: 'r3-b', transactionId: 'r3', amountCents: -800, categoryId: 'c-food' });
+  row('r4', '2026-02-20', 1200);
+  row('r5', '2025-03-31', -999); // before the window
+  row('r6', '2026-03-03', -100, { personId: 'p1' });
+  row('r7', '2026-03-04', -100, { categoryId: 'c-reimb', removedAt: 'x' });
+  row('r8', '2026-03-05', -100, { categoryId: 'c-xfer' });
+  const app = buildApp(deps);
+  const r = (await app.inject({ method: 'GET', url: '/v1/reimbursements', headers: AUTH })).json() as Reimbursements;
+  Reimbursements.parse(r);
+  assert.equal(r.months.length, 12);
+  assert.deepEqual(r.months.slice(0, 3), [
+    { month: '2026-03', outCents: 5000, inCents: 3000, unpaidCents: 2000 },
+    { month: '2026-02', outCents: 1200, inCents: 1200, unpaidCents: 0 },
+    { month: '2026-01', outCents: 0, inCents: 0, unpaidCents: 0 }]);
+  assert.equal(r.months[11]!.month, '2025-04');
+  assert.deepEqual(r.rows, [
+    { transactionId: 'r2', lineId: null, date: '2026-03-10', name: 'Synthetic r2', amountCents: 3000 },
+    { transactionId: 'r1', lineId: null, date: '2026-03-02', name: 'Synthetic r1', amountCents: -5000 },
+    { transactionId: 'r4', lineId: null, date: '2026-02-20', name: 'Synthetic r4', amountCents: 1200 },
+    { transactionId: 'r3', lineId: 'r3-a', date: '2026-02-01', name: 'Synthetic Hotel', amountCents: -1200 }]);
 });
