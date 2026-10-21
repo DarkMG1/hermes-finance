@@ -285,8 +285,8 @@ public struct ReimbursementRow: Codable, Sendable, Identifiable {
 public struct Reimbursements: Codable, Sendable {
     public let months: [ReimbursementMonth]
     public let rows: [ReimbursementRow]
-    /// A payback often lands the month after its charge, so what's still owed is the 12 months' sum.
-    public var unpaidCents: Int { months.reduce(0) { $0 + $1.unpaidCents } }
+    /// This month's: earlier months are hidden by default (older data never netted to $0).
+    public var unpaidCents: Int { months.first?.unpaidCents ?? 0 }
 }
 
 public struct Bank: Codable, Sendable, Identifiable, Hashable {

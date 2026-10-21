@@ -10,6 +10,7 @@ ios/
 android/
 .superpowers/
 docs/
+AGENTS.md
 app-ios/Hermes.xcodeproj/
 app-ios/Hermes/Info.plist
 app-ios/Signing.local.xcconfig

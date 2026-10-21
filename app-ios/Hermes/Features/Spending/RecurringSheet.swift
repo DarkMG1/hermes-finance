@@ -44,18 +44,13 @@ struct RecurringSheet: View {
             }
             Section {
                 InlineError(message: error)
-                if item.cancelled == true {
-                    Text("Cancelled. A new charge brings it back.").textStyle(.caption, color: Palette.secondaryText)
-                } else if item.stopped == true {
-                    Text("Ended: your bank stopped tracking this bill.").textStyle(.caption, color: Palette.secondaryText)
-                } else if item.ended == true {
-                    Text("Ended: no charge for two periods. A new charge brings it back.").textStyle(.caption, color: Palette.secondaryText)
-                }
                 // older servers don't send `ended` and reject it in a PATCH
                 if item.ended != nil {
                     HButton(title: item.cancelled == true ? "Not cancelled" : "Mark as cancelled", kind: .secondary, busy: busy) {
                         Task { await send(PatchRecurringBody(ended: item.cancelled != true), guard: $cancelWrites) }
                     }
+                    // the separator under this button runs edge to edge, not from the label's inset
+                    .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                 }
                 if item.source == "plaid" {
                     HButton(title: item.hidden ? "Show again" : "Not recurring", kind: .destructive, busy: busy) {
@@ -66,6 +61,14 @@ struct RecurringSheet: View {
                         .confirmationDialog("Delete this recurring item?", isPresented: $confirmDelete, titleVisibility: .visible) {
                             Button("Delete", role: .destructive) { Task { await run(nil) { try await $0.deleteRecurring(id: item.id) } } }
                         }
+                }
+            } footer: {
+                if item.cancelled == true {
+                    Text("Cancelled. A new charge brings it back.")
+                } else if item.stopped == true {
+                    Text("Ended: your bank stopped tracking this bill.")
+                } else if item.ended == true {
+                    Text("Ended: no charge for two periods. A new charge brings it back.")
                 }
             }
         }

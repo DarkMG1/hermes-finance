@@ -53,8 +53,8 @@ import Testing
     {"months":[{"month":"2026-11","outCents":0,"inCents":2000,"unpaidCents":-2000},
                {"month":"2026-10","outCents":5000,"inCents":0,"unpaidCents":5000}],"rows":[]}
     """#
-    // a payback in the month after its charge nets against it
-    #expect(try JSONDecoder().decode(Reimbursements.self, from: Data(paidLater.utf8)).unpaidCents == 3000)
+    // only the newest month counts
+    #expect(try JSONDecoder().decode(Reimbursements.self, from: Data(paidLater.utf8)).unpaidCents == -2000)
     let served = try JSONDecoder().decode(Reimbursements.self, from: try fixture("reimbursements"))
     #expect(served.months.count == 12 && !served.rows.isEmpty)
 }
