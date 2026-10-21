@@ -49,18 +49,9 @@ struct RecurringSheet: View {
                     HButton(title: item.cancelled == true ? "Not cancelled" : "Mark as cancelled", kind: .secondary, busy: busy) {
                         Task { await send(PatchRecurringBody(ended: item.cancelled != true), guard: $cancelWrites) }
                     }
+                    // the separator under this button runs edge to edge, not from the label's inset
+                    .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                 }
-            } footer: {
-                if item.cancelled == true {
-                    Text("Cancelled. A new charge brings it back.")
-                } else if item.stopped == true {
-                    Text("Ended: your bank stopped tracking this bill.")
-                } else if item.ended == true {
-                    Text("Ended: no charge for two periods. A new charge brings it back.")
-                }
-            }
-            // its own section: two buttons in one draw an inset separator between them
-            Section {
                 if item.source == "plaid" {
                     HButton(title: item.hidden ? "Show again" : "Not recurring", kind: .destructive, busy: busy) {
                         Task { await send(PatchRecurringBody(hidden: !item.hidden)) }
@@ -70,6 +61,14 @@ struct RecurringSheet: View {
                         .confirmationDialog("Delete this recurring item?", isPresented: $confirmDelete, titleVisibility: .visible) {
                             Button("Delete", role: .destructive) { Task { await run(nil) { try await $0.deleteRecurring(id: item.id) } } }
                         }
+                }
+            } footer: {
+                if item.cancelled == true {
+                    Text("Cancelled. A new charge brings it back.")
+                } else if item.stopped == true {
+                    Text("Ended: your bank stopped tracking this bill.")
+                } else if item.ended == true {
+                    Text("Ended: no charge for two periods. A new charge brings it back.")
                 }
             }
         }

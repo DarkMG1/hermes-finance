@@ -164,6 +164,7 @@ private struct HideSearchOnOpen: UIViewRepresentable {
 
     final class Nudge: UIView {
         private var done = false
+        private var tracking: NSKeyValueObservation?
 
         override func didMoveToWindow() {
             super.didMoveToWindow()
@@ -179,11 +180,19 @@ private struct HideSearchOnOpen: UIViewRepresentable {
             }
             if let bar = controller.navigationItem.searchController?.searchBar {
                 // UIKit re-sets the bar's frame on every layout, which cancels a view transform; a sublayer transform sticks
-                // the field's bottom stays 4pt inside the bar: past it, the field covers the pull-to-refresh spinner
+                // the field's bottom stays 4pt inside the bar
                 // convert sees the sublayer transform, so clear it before measuring or a re-run measures its own shift
                 bar.layer.sublayerTransform = CATransform3DIdentity
                 let spare = bar.bounds.height - bar.convert(bar.searchTextField.bounds, from: bar.searchTextField).maxY
-                bar.layer.sublayerTransform = CATransform3DMakeTranslation(0, max(0, spare - 4), 0)
+                let shift = max(0, spare - 4)
+                bar.layer.sublayerTransform = CATransform3DMakeTranslation(0, shift, 0)
+                // iOS 26 lays the pull-to-refresh spinner in the 60pt band under the title, the band this drawer sits in; UIKit's
+                // own stacked bar rides down with the overscroll and uncovers it, SwiftUI's stays pinned, so ride it here
+                // ponytail: if a later iOS moves the bar itself the field moves twice; delete this block then
+                tracking = scroll.observe(\.contentOffset) { [weak bar] scroll, _ in
+                    let overscroll = max(0, -(scroll.contentOffset.y + scroll.adjustedContentInset.top))
+                    bar?.layer.sublayerTransform = CATransform3DMakeTranslation(0, shift + overscroll, 0)
+                }
             }
             scroll.contentOffset.y += 100
             DispatchQueue.main.async { scroll.contentOffset.y = -scroll.adjustedContentInset.top }
