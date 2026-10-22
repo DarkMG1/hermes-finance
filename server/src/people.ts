@@ -7,7 +7,7 @@ import { TXN_COLS, lookups, rowToTransaction, type TxnRow } from './ledger.ts';
 
 // Every live amount between the owner and a person: split lines and unsplit transactions tagged with them, and manual rows they paid.
 // Money out (negative) raises what they owe; money in, and a row they paid (its share counted as positive), lowers it.
-export const TAGGED = `
+const TAGGED = `
   SELECT sl.person_id AS person_id, t.id AS transaction_id, sl.id AS line_id, t.date AS date,
          COALESCE(sl.payee, t.payee, t.merchant_name, t.bank_description) AS payee, sl.amount_cents AS amount, 0 AS paid_by,
          t.created_at AS created_at, t.rowid AS row_order, t.forgiven AS forgiven

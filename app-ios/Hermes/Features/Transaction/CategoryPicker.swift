@@ -11,11 +11,11 @@ struct CategoryPicker: View {
 
     var body: some View {
         List {
-            Button { choose(nil) } label: { row(noneTitle, selected: selection == nil) }
+            Button { choose(nil) } label: { SelectionRow(title: noneTitle, selected: selection == nil) }
             ForEach(CategoryGrouping.group(model.categories, matching: query), id: \.name) { group in
                 Section(group.name) {
                     ForEach(group.items) { category in
-                        Button { choose(category.id) } label: { row(category.name, selected: selection == category.id) }
+                        Button { choose(category.id) } label: { SelectionRow(title: category.name, selected: selection == category.id) }
                     }
                 }
             }
@@ -29,14 +29,5 @@ struct CategoryPicker: View {
     private func choose(_ id: String?) {
         selection = id
         dismiss()
-    }
-
-    private func row(_ title: String, selected: Bool) -> some View {
-        HStack {
-            Text(title).textStyle(.body)
-            Spacer()
-            if selected { Image(systemName: "checkmark").foregroundStyle(Palette.accent) }
-        }
-        .contentShape(Rectangle())
     }
 }

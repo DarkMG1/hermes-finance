@@ -6,7 +6,7 @@ import { fillFromMemory, fitSplitToAmount, merchantMemory } from '../ledger.ts';
 import { nameZellePayees } from '../zelle.ts';
 import { normalizeName } from '../recurring.ts';
 
-export type ApplyCounts = { added: number; modified: number; removed: number };
+type ApplyCounts = { added: number; modified: number; removed: number };
 
 export function getCutoverDate(db: Db): string | null {
   const row = db.prepare("SELECT value FROM settings WHERE key = 'cutover_date'").get() as { value: string } | undefined;

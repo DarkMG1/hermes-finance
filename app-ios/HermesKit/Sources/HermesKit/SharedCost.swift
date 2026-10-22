@@ -1,5 +1,3 @@
-import Foundation
-
 /// A cost split 50/50 apart from a part that is only the owner's and a part that is only theirs; the owner's half takes any odd cent.
 public enum SharedCost {
     /// The owner's share, or nil unless 0 < total, both parts ≥ 0 and together ≤ total.

@@ -5,12 +5,12 @@ import { localDay } from './days.ts';
 import { ApiError } from './errors.ts';
 import { getTransaction } from './ledger.ts';
 import { assertPersonTaggable } from './people.ts';
-import { writeSplit } from './routes/ledger.ts';
+import { writeSplit } from './splits.ts';
 
 /** The owner, in item people lists and share results. */
 export const ME = 'me';
 
-export type ShareItem = { amountCents: number; people: string[] };
+type ShareItem = { amountCents: number; people: string[] };
 export type ShareInput = { items: ShareItem[]; taxCents: number; tipCents: number; feesCents: number; targetCents: number };
 export type ShareResult = { shares: { person: string; cents: number }[]; gapCents: number };
 
@@ -69,10 +69,10 @@ export function computeShares(input: ShareInput): ShareResult {
   };
 }
 
-export type AppliedLine = { personId: string | null; amountCents: number };
+type AppliedLine = { personId: string | null; amountCents: number };
 
 /** What an items save leaves behind, in a form that later changes can be compared against. */
-export function currentLines(db: Db, txnId: string): AppliedLine[] {
+function currentLines(db: Db, txnId: string): AppliedLine[] {
   const t = db.prepare('SELECT amount_cents, person_id, paid_by_person_id FROM transactions WHERE id = ?').get(txnId) as
     { amount_cents: number; person_id: string | null; paid_by_person_id: string | null };
   if (t.paid_by_person_id) return [{ personId: null, amountCents: t.amount_cents }];

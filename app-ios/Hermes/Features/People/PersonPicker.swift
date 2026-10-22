@@ -12,10 +12,10 @@ struct PersonPicker: View {
 
     var body: some View {
         List {
-            Button { choose(nil) } label: { row(noneTitle, selected: selection == nil) }
+            Button { choose(nil) } label: { SelectionRow(title: noneTitle, selected: selection == nil) }
             Section {
                 ForEach(model.people.filter { !$0.archived || $0.id == selection }) { person in
-                    Button { choose(person.id) } label: { row(person.name, selected: selection == person.id) }
+                    Button { choose(person.id) } label: { SelectionRow(title: person.name, selected: selection == person.id) }
                 }
                 Button("New person…") { adding = true }
             }
@@ -34,14 +34,5 @@ struct PersonPicker: View {
     private func choose(_ id: String?) {
         selection = id
         dismiss()
-    }
-
-    private func row(_ title: String, selected: Bool) -> some View {
-        HStack {
-            Text(title).textStyle(.body)
-            Spacer()
-            if selected { Image(systemName: "checkmark").foregroundStyle(Palette.accent) }
-        }
-        .contentShape(Rectangle())
     }
 }

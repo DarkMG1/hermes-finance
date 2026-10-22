@@ -135,7 +135,7 @@ function bills(db: Db, today: string): Bill[] {
   return all;
 }
 
-export type MemberRow = { id: string; source: string; source_id: string | null; pending: number; payee: string | null; merchant_name: string | null;
+type MemberRow = { id: string; source: string; source_id: string | null; pending: number; payee: string | null; merchant_name: string | null;
   bank_description: string };
 
 /** Reads the visible Recurring items once (ended ones included) and returns which one each row's charge is in the History of: a posted Plaid

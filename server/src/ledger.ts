@@ -1,8 +1,10 @@
-import type { Account, Category, Home, ListTransactionsQuery, SpendingQuery, SplitLine, Transaction, TransactionPage } from '@hermes/shared';
+import type { Account, Category, Home, ListTransactionsQuery, SplitLine, Transaction, TransactionPage } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { historyLines } from './cashflow.ts';
 import { ApiError } from './errors.ts';
 import { bankText, memberships, normalizeName } from './recurring.ts';
+
+export { periodRange } from './days.ts';
 
 export type TxnRow = {
   id: string; account_id: string; source: 'plaid' | 'manual' | 'actual' | 'applecard'; source_id: string | null; date: string; amount_cents: number;
@@ -227,20 +229,10 @@ export function fitSplitToAmount(db: Db, transactionId: string, nowIso: string):
   db.prepare('UPDATE transactions SET updated_at = ? WHERE id = ?').run(nowIso, transactionId);
 }
 
-export function periodRange(q: SpendingQuery): { from: string; toExclusive: string } {
-  if (q.period === 'year') {
-    return { from: `${q.date}-01-01`, toExclusive: `${String(Number(q.date) + 1).padStart(4, '0')}-01-01` };
-  }
-  const [ys, ms] = q.date.split('-');
-  const y = Number(ys);
-  const m = Number(ms);
-  const next = m === 12 ? `${String(y + 1).padStart(4, '0')}-01` : `${ys}-${String(m + 1).padStart(2, '0')}`;
-  return { from: `${q.date}-01`, toExclusive: `${next}-01` };
-}
-
-/** Today's net worth from live balances: what Home shows. */
-export function liveNetWorthCents(db: Db): number {
-  const accounts = db.prepare('SELECT type, balance_current_cents AS b FROM accounts WHERE hidden = 0 AND balance_current_cents IS NOT NULL').all() as { type: string; b: number }[];
+/** Today's net worth from visible live balances, optionally filtered by type or account. */
+export function liveNetWorthCents(db: Db, type: string | null = null, ids?: string[]): number {
+  const accounts = db.prepare(`SELECT type, balance_current_cents AS b FROM accounts a WHERE hidden = 0 AND balance_current_cents IS NOT NULL
+    AND (? IS NULL OR type = ?) ${ids ? `AND a.id IN (${ids.map(() => '?').join(', ')})` : ''}`).all(type, type, ...(ids ?? [])) as { type: string; b: number }[];
   return accounts.reduce((sum, a) => sum + (NEGATIVE_TYPES.has(a.type) ? -a.b : a.b), 0);
 }
 

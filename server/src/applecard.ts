@@ -15,7 +15,7 @@ type Column = keyof typeof COLUMNS;
 const REQUIRED: Column[] = ['transactionDate', 'description', 'type', 'amount'];
 const MAX_ROWS = 20_000;
 
-export type AppleCardRow = {
+type AppleCardRow = {
   transactionDate: string; clearingDate: string | null; description: string; merchant: string | null;
   category: string | null; type: string; amountCents: number;
 };

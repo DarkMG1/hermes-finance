@@ -47,7 +47,7 @@ public struct Investments: Decodable, Sendable {
     }
 }
 
-/// The Investments screen's account chips: no selection means every account.
+/// The Investments screen's account filter: no selection means every account.
 public enum InvestmentFilter {
     public static func queryItems(_ accountIds: Set<String>) -> [URLQueryItem] {
         accountIds.isEmpty ? [] : [URLQueryItem(name: "accountIds", value: accountIds.sorted().joined(separator: ","))]

@@ -7,7 +7,7 @@ export function holdingKey(s: { securityId: string; ticker: string | null; type:
   return s.ticker ? s.ticker.toUpperCase() : s.securityId;
 }
 
-export type DayValue = { totalCents: number; cashCents: number; bySecurity: Map<string, number> };
+type DayValue = { totalCents: number; cashCents: number; bySecurity: Map<string, number> };
 export type AccountEstimate = { accountId: string; anchor: string; earliest: string; valueOn(day: string): DayValue };
 
 type Sec = { id: string; ticker: string | null; type: string | null; isCash: number };

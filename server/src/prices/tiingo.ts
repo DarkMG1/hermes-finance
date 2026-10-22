@@ -1,4 +1,5 @@
-import { PriceError, tiingoTicker, type DailyPrice, type PricePort } from '../prices.ts';
+import { tiingoTicker } from '../prices.ts';
+import { PriceError, type DailyPrice, type PricePort } from './port.ts';
 
 export function createTiingoClient(apiKey: string): PricePort {
   return {

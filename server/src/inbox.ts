@@ -11,7 +11,7 @@ import { memberships, normalizeName } from './recurring.ts';
 
 type Member = ReturnType<typeof memberships>;
 
-export type InboxRow = {
+type InboxRow = {
   id: string; jpeg: Buffer | null; bytes: number; captured_at: string; read_at: string | null; read_failed: number; model: string | null;
   merchant: string | null; purchase_date: string | null; total_cents: number | null; tax_cents: number | null; tip_cents: number | null;
   fees_cents: number | null; items: string | null; tagged: number; linked_transaction_id: string | null; linked_at: string | null;
@@ -55,7 +55,7 @@ function candidates(db: Db, row: InboxMetadata, member: Member): { exact: Transa
   return { exact, near };
 }
 
-export function suggestionsFor(db: Db, row: InboxMetadata, member: Member): Transaction[] {
+function suggestionsFor(db: Db, row: InboxMetadata, member: Member): Transaction[] {
   const { exact, near } = candidates(db, row, member);
   return [...exact, ...near].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
 }

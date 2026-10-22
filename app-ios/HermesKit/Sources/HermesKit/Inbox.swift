@@ -1,5 +1,3 @@
-import Foundation
-
 /// A receipt snapped before its bank charge arrived.
 public struct InboxReceipt: Codable, Sendable, Identifiable {
     public let id: String

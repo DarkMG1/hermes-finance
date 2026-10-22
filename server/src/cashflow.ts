@@ -1,7 +1,7 @@
 import type { ExpenseRow, ExpensesPage, ExpensesQuery, PayeeHistory, PayeeHistoryQuery, PayeeHistoryRow, Reimbursements, Spending, SpendingQuery } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
-import { periodRange } from './ledger.ts';
+import { periodRange } from './days.ts';
 import { bankText, normalizeName } from './recurring.ts';
 
 // Every amount that can count toward Out or In, one row each: the owner's split lines, unsplit untagged transactions, and
@@ -21,8 +21,7 @@ const LINES = `
        AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
        AND t.person_id IS NULL
     UNION ALL
-    -- the bank changed a split transaction's amount: the owner's lines stay as saved and the exact difference
-    -- counts as uncategorized spending until they re-split, so the total always matches the bank
+    -- any residual split difference counts as uncategorized spending so the total matches the transaction
     SELECT t.id, NULL, t.date, t.created_at, t.rowid, COALESCE(t.payee, t.merchant_name, t.bank_description),
            NULL, t.amount_cents - SUM(sl.amount_cents), t.plaid_category, 1, 1
       FROM split_lines sl JOIN transactions t ON t.id = sl.transaction_id

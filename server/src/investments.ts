@@ -27,7 +27,7 @@ function upsertSecurities(db: Db, securities: PlaidSecurity[], nowIso: string): 
 }
 
 /** Stores the item's last 730 days of investment transactions on every sync, so older ones Plaid makes available later still arrive. Never throws. */
-export async function syncInvestmentTransactions(deps: Deps, itemId: string, token: string, accountIds: Map<string, string>): Promise<void> {
+async function syncInvestmentTransactions(deps: Deps, itemId: string, token: string, accountIds: Map<string, string>): Promise<void> {
   const { db } = deps;
   try {
     const today = localDay(deps.now());

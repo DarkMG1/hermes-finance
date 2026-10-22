@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const Id = z.string().min(1).max(100);
 const DateStr = z.string().regex(DATE_RE, 'expected YYYY-MM-DD')
   .refine((s) => DATE_RE.test(s) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s, 'not a real date');
@@ -181,7 +181,7 @@ export type SpendingQuery = z.infer<typeof SpendingQuery>;
 
 export const Spending = z.object({
   from: DateStr, toExclusive: DateStr, inCents: Cents, outCents: Cents, netCents: Cents,
-  /** Equal to outCents; kept for app builds before v1.3. Remove in v1.4. */
+  /** Equal to outCents; kept for app builds before v1.3. */
   totalCents: Cents,
   categories: z.array(z.object({ categoryId: Id.nullable(), name: z.string(), spentCents: Cents })),
 });
@@ -304,14 +304,14 @@ export const AppleCardImportResult = z.object({
 });
 export type AppleCardImportResult = z.infer<typeof AppleCardImportResult>;
 
+const Extra = z.number().int().min(0).max(10_000_000);
+
 /** What the receipt reader must return; zero-amount lines (free items) are dropped. */
 export const ReceiptReadOutput = z.object({
   items: z.array(z.object({ name: z.string().trim().min(1).max(200), amountCents: z.number().int().min(-10_000_000).max(10_000_000) }))
     .transform((items) => items.filter((i) => i.amountCents !== 0))
     .refine((items) => items.length >= 1 && items.length <= 200, 'between 1 and 200 items'),
-  taxCents: z.number().int().min(0).max(10_000_000),
-  tipCents: z.number().int().min(0).max(10_000_000),
-  feesCents: z.number().int().min(0).max(10_000_000),
+  taxCents: Extra, tipCents: Extra, feesCents: Extra,
   totalCents: z.number().int().min(0).max(100_000_000).nullable(),
   merchant: z.string().trim().max(200).nullable().optional().catch(null).transform((m) => (m ? m : null)),
   purchaseDate: DateInput.nullable().optional().catch(null).transform((d) => d ?? null),
@@ -330,7 +330,6 @@ export const Itemization = z.object({
 });
 export type Itemization = z.infer<typeof Itemization>;
 
-const Extra = z.number().int().min(0).max(10_000_000);
 export const SaveItemsBody = z.object({
   items: z.array(z.object({
     name: z.string().trim().min(1).max(200),

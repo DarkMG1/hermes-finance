@@ -8,7 +8,7 @@ export type PlaidAccount = {
   currentBalance: number | null; availableBalance: number | null;
 };
 /** Amounts in dollars, as Plaid sends them (positive values). */
-export type PlaidHolding = { accountId: string; securityId: string; quantity: number; price: number; value: number; costBasis: number | null };
+type PlaidHolding = { accountId: string; securityId: string; quantity: number; price: number; value: number; costBasis: number | null };
 export type PlaidSecurity = { securityId: string; name: string | null; ticker: string | null; type: string | null; isCash: boolean; closePrice: number | null };
 /** Plaid signs: quantity positive for buys, negative for sells; amount positive when cash is debited. Dollars. */
 export type PlaidInvestmentTxn = {

@@ -32,15 +32,7 @@ export function minusMonths(day: string, n: number): string {
 /** Rebuilt from transactions before their first snapshot; every other type holds flat at it. */
 const REBUILT_TYPES = ['depository', 'credit', 'loan'];
 
-/** The live balance total of visible accounts matching the filter, signed as on Home. */
-function liveCents(db: Db, type: string | null, ids: string[] | undefined): number {
-  if (type === null && !ids) return liveNetWorthCents(db);
-  const rows = db.prepare(`SELECT type, balance_current_cents AS c FROM accounts a WHERE hidden = 0 AND balance_current_cents IS NOT NULL
-    AND (? IS NULL OR type = ?) ${ids ? `AND a.id IN (${ids.map(() => '?').join(', ')})` : ''}`).all(type, type, ...(ids ?? [])) as { type: string; c: number }[];
-  return rows.reduce((s, r) => s + (NEGATIVE_TYPES.has(r.type) ? -r.c : r.c), 0);
-}
-
-export type NetWorthFilter = { type?: string; accountIds?: string[] };
+type NetWorthFilter = { type?: string; accountIds?: string[] };
 
 export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string, filter: NetWorthFilter = {}): NetWorthHistory {
   const type = filter.type ?? null;
@@ -52,7 +44,7 @@ export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string
     JOIN accounts a ON a.id = s.account_id WHERE a.hidden = 0 AND s.date <= ? AND (? IS NULL OR a.type = ?) ${idClause} ORDER BY s.date`).all(today, type, type, ...idArgs) as
     { accountId: string; date: string; cents: number; type: string }[];
   const first = snaps[0];
-  if (!first) return { points: [], currentCents: liveCents(db, type, ids), changeCents: 0, estimatedThrough: null };
+  if (!first) return { points: [], currentCents: liveNetWorthCents(db, type, ids), changeCents: 0, estimatedThrough: null };
   const signed = (s: { cents: number; type: string }) => (NEGATIVE_TYPES.has(s.type) ? -s.cents : s.cents);
   // each account's first snapshot (S) anchors its estimate for every earlier day
   const anchors = new Map<string, string>();
