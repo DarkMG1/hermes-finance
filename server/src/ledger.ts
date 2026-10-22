@@ -18,16 +18,22 @@ export const TXN_COLS = 'id, account_id, source, source_id, date, amount_cents, 
 // member: pass one memberships(db) to share the Recurring read across several lists
 export function lookups(db: Db, rows: TxnRow[], member = memberships(db)) {
   const { spending, billable } = historyLines(db, rows);
+  const ids = JSON.stringify(rows.map((r) => r.id));
+  const splits = new Map<string, SplitLine[]>();
+  const lines = db.prepare(`SELECT transaction_id, id, amount_cents AS amountCents, category_id AS categoryId, notes, person_id AS personId, payee
+    FROM split_lines WHERE transaction_id IN (SELECT value FROM json_each(?)) ORDER BY id`).all(ids) as (SplitLine & { transaction_id: string })[];
+  for (const { transaction_id: id, ...line } of lines) {
+    if (!splits.has(id)) splits.set(id, []);
+    splits.get(id)!.push(line);
+  }
+  const receipts = new Set((db.prepare('SELECT transaction_id AS id FROM receipts WHERE transaction_id IN (SELECT value FROM json_each(?))')
+    .all(ids) as { id: string }[]).map((r) => r.id));
   // a bill holds only the charges its History lists: owner money out (a refund or someone's IOU never opens the bill)
-  return { spending, recurring: member(rows.filter((r) => r.amount_cents < 0 && r.person_id === null && r.forgiven === 0 && billable.has(r.id))) };
+  return { spending, splits, receipts, recurring: member(rows.filter((r) => r.amount_cents < 0 && r.person_id === null && r.forgiven === 0 && billable.has(r.id))) };
 }
 
-export function rowToTransaction(db: Db, r: TxnRow, { spending, recurring } = lookups(db, [r])): Transaction {
-  const lines = db.prepare('SELECT id, amount_cents, category_id, notes, person_id, payee FROM split_lines WHERE transaction_id = ? ORDER BY id').all(r.id) as
-    { id: string; amount_cents: number; category_id: string | null; notes: string | null; person_id: string | null; payee: string | null }[];
-  const splitLines: SplitLine[] = lines.map((l) => ({
-    id: l.id, amountCents: l.amount_cents, categoryId: l.category_id, notes: l.notes, personId: l.person_id, payee: l.payee,
-  }));
+export function rowToTransaction(db: Db, r: TxnRow, { spending, recurring, splits, receipts } = lookups(db, [r])): Transaction {
+  const splitLines = splits.get(r.id) ?? [];
   const payee = r.payee ?? r.merchant_name ?? r.bank_description;
   return {
     id: r.id, accountId: r.account_id, source: r.source, date: r.date, amountCents: r.amount_cents,
@@ -35,7 +41,7 @@ export function rowToTransaction(db: Db, r: TxnRow, { spending, recurring } = lo
     merchantName: r.merchant_name, pending: r.pending === 1, categoryId: r.category_id, notes: r.notes, personId: r.person_id, paidByPersonId: r.paid_by_person_id, repaymentDismissed: r.repayment_dismissed === 1, splitLines,
     reconciled: r.reconciled_at !== null && r.reconciled_cents === r.amount_cents,
     forgiven: r.forgiven === 1,
-    hasReceipt: db.prepare('SELECT 1 FROM receipts WHERE transaction_id = ?').get(r.id) !== undefined,
+    hasReceipt: receipts.has(r.id),
     // raw bank text alone (no merchant, no owner payee) is often generic ("POS PURCHASE") and would pool unrelated charges
     // a bill's charge always opens the bill's History
     hasHistory: (normalizeName(payee) !== '' && (r.payee !== null || r.merchant_name !== null) && spending.has(r.id)) || recurring.has(r.id),
@@ -187,8 +193,8 @@ export function fillFromMemory(db: Db, nowIso: string): void {
  */
 export function fitSplitToAmount(db: Db, transactionId: string, nowIso: string): void {
   const txn = db.prepare('SELECT amount_cents AS a FROM transactions WHERE id = ?').get(transactionId) as { a: number } | undefined;
-  const lines = db.prepare('SELECT id, amount_cents AS a, category_id AS c, person_id AS p FROM split_lines WHERE transaction_id = ? ORDER BY id')
-    .all(transactionId) as { id: string; a: number; c: string | null; p: string | null }[];
+  const lines = db.prepare('SELECT id, amount_cents AS a, category_id AS c, person_id AS p, payee AS n FROM split_lines WHERE transaction_id = ? ORDER BY id')
+    .all(transactionId) as { id: string; a: number; c: string | null; p: string | null; n: string | null }[];
   if (!txn || !lines.length) return;
   const total = lines.reduce((s, l) => s + l.a, 0);
   if (txn.a === total) return;
@@ -211,7 +217,8 @@ export function fitSplitToAmount(db: Db, transactionId: string, nowIso: string):
   if (!sameSign || kept.length < 2) {
     db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(transactionId);
     const winner = kept[0] ?? bySize[0]!;
-    db.prepare('UPDATE transactions SET category_id = ?, person_id = ?, updated_at = ? WHERE id = ?').run(winner.c, winner.p, nowIso, transactionId);
+    db.prepare('UPDATE transactions SET category_id = ?, person_id = ?, payee = COALESCE(?, payee), updated_at = ? WHERE id = ?')
+      .run(winner.c, winner.p, winner.n, nowIso, transactionId);
     return;
   }
   const update = db.prepare('UPDATE split_lines SET amount_cents = ? WHERE id = ?');

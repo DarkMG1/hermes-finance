@@ -53,9 +53,9 @@ export function computeShares(input: ShareInput): ShareResult {
   const cents = new Map<string, number>();
   const frac = new Map<string, number>();
   for (const p of people) {
-    const n = (base.get(p) ?? 0) * targetCents;
-    cents.set(p, Math.floor(n / itemsTotal));
-    frac.set(p, n % itemsTotal);
+    const n = BigInt(base.get(p) ?? 0) * BigInt(targetCents);
+    cents.set(p, Number(n / BigInt(itemsTotal)));
+    frac.set(p, Number(n % BigInt(itemsTotal)));
   }
   let left = targetCents - [...cents.values()].reduce((a, b) => a + b, 0);
   const ranked = people.filter((p) => p !== ME).sort((a, b) => (frac.get(b) ?? 0) - (frac.get(a) ?? 0) || people.indexOf(a) - people.indexOf(b));
@@ -108,7 +108,7 @@ export function applyItems(db: Db, id: string, body: SaveItemsBody, nowIso: stri
   body.items.forEach((item, i) => item.people.forEach((p) => {
     if (p === ME) return;
     if (payer && p !== payer) throw new ApiError(400, 'INVALID_REQUEST', `items.${i}.people: only you and the person who paid`, `items.${i}.people`);
-    assertPersonTaggable(db, p, `items.${i}.people`, id);
+    assertPersonTaggable(db, p, `items.${i}.people`, id, payer ? 'payer' : 'person');
   }));
   const itemsTotal = body.items.reduce((s, i) => s + i.amountCents, 0);
   const target = payer ? itemsTotal + body.taxCents + body.tipCents + body.feesCents : -txn.amountCents;

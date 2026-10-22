@@ -569,6 +569,156 @@
         ],
         "gapCents": 0
       }
+    },
+    {
+      "name": "largeExactRemainder",
+      "input": {
+        "items": [
+          {
+            "amountCents": 1,
+            "people": [
+              "me"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          },
+          {
+            "amountCents": 10000000,
+            "people": [
+              "p1"
+            ]
+          }
+        ],
+        "taxCents": 1,
+        "tipCents": 0,
+        "feesCents": 0,
+        "targetCents": 200000002
+      },
+      "expected": {
+        "shares": [
+          {
+            "person": "me",
+            "cents": 2
+          },
+          {
+            "person": "p1",
+            "cents": 200000000
+          }
+        ],
+        "gapCents": 0
+      }
     }
   ]
 }

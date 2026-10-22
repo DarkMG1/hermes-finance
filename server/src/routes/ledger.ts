@@ -6,7 +6,7 @@ import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
-import { assertPersonTaggable, owedToYouCents, suggestionCount, youOweCents } from '../people.ts';
+import { assertPersonTaggable, homePeople } from '../people.ts';
 import { excludedBy, getExpenses, getPayeeHistory, getReimbursements, getSpending } from '../cashflow.ts';
 import { restoreToInbox } from '../inbox.ts';
 import { normalizeName } from '../recurring.ts';
@@ -16,6 +16,7 @@ import { assertCategoryExists, getHome, getTransaction, learnCategory, listAccou
 
 /** Checks split lines against a transaction's amount and makes them its split; the row's own category and person move onto the lines. */
 export function writeSplit(db: Db, txnId: string, amountCents: number, lines: PutSplitsBody['lines'], field: string, nowIso: string): void {
+  if (lines.length > 20) throw new ApiError(400, 'INVALID_REQUEST', `${field}: at most 20 lines`, field);
   lines.forEach((l, i) => assertCategoryExists(db, l.categoryId, `${field}.${i}.categoryId`));
   lines.forEach((l, i) => assertPersonTaggable(db, l.personId, `${field}.${i}.personId`, txnId));
   // lines share the transaction's sign: the app enters them as positive amounts, so it couldn't show anything else
@@ -53,7 +54,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   app.get('/v1/transactions', async (req) => listTransactions(db, parseBody(ListTransactionsQuery, req.query)));
   // people.ts reads through ledger.ts, so Home's Who Owes Me fields are added here rather than inside getHome
   app.get('/v1/home', async () => ({
-    ...getHome(db), owedToYouCents: owedToYouCents(db), youOweCents: youOweCents(db), repaymentSuggestions: suggestionCount(db, deps.now()),
+    ...getHome(db), ...homePeople(db, deps.now()),
     toReconcile: oldestOpenBefore(db, localDay(deps.now()).slice(0, 7)),
   }));
   app.get('/v1/expenses', async (req) => getExpenses(db, parseBody(ExpensesQuery, req.query)));
@@ -104,7 +105,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
         if (body.paidByPersonId !== null && current.amountCents >= 0) {
           throw new ApiError(400, 'INVALID_REQUEST', 'paidByPersonId: a payer covers money out', 'paidByPersonId');
         }
-        assertPersonTaggable(db, body.paidByPersonId, 'paidByPersonId', current.id);
+        assertPersonTaggable(db, body.paidByPersonId, 'paidByPersonId', current.id, 'payer');
       }
       // a row someone else paid is the owner's own spending, so it never carries a person tag
       const personAfter = body.personId !== undefined ? body.personId : body.categoryId ? null : current.personId;
@@ -123,7 +124,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
         args.push(body.personId);
         if (body.personId !== null) sets.push('category_id = NULL');
       }
-      if (body.payee !== undefined) { sets.push('payee = ?'); args.push(body.payee); }
+      if (body.payee !== undefined) { sets.push('payee = ?', 'payee_owner_set = 1'); args.push(body.payee); }
       if (body.notes !== undefined) { sets.push('notes = ?'); args.push(body.notes); }
       if (body.paidByPersonId !== undefined) { sets.push('paid_by_person_id = ?'); args.push(body.paidByPersonId); }
       if (body.repaymentDismissed !== undefined) { sets.push('repayment_dismissed = ?'); args.push(body.repaymentDismissed ? 1 : 0); }
@@ -143,6 +144,10 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
       if (txn.forgiven) throw new ApiError(409, 'FORGIVENESS_LOCKED', 'delete the forgiveness to change it');
       if (txn.paidByPersonId) throw new ApiError(409, 'PAID_BY_PERSON', 'a transaction someone else paid cannot be split', 'lines');
+      if (txn.splitLines.some((l) => l.personId !== null || l.payee !== null)
+        && body.lines.some((l) => l.personId === undefined || l.payee === undefined)) {
+        throw new ApiError(409, 'APP_OUTDATED', 'update the app before saving this split');
+      }
       if (!body.lines.length && !txn.splitLines.length) return { status: 200, body: txn };
       writeSplit(db, txn.id, txn.amountCents, body.lines, 'lines', deps.now().toISOString());
       return { status: 200, body: getTransaction(db, txn.id) };
@@ -186,7 +191,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
     const r = idempotentWrite(deps, req, () => {
       assertCategoryExists(db, body.categoryId, 'categoryId');
       const id = randomUUID();
-      assertPersonTaggable(db, body.paidByPersonId, 'paidByPersonId', id);
+      assertPersonTaggable(db, body.paidByPersonId, 'paidByPersonId', id, 'payer');
       assertPersonTaggable(db, body.personId, 'personId', id);
       const now = deps.now().toISOString();
       db.prepare(`INSERT INTO transactions (id, account_id, source, date, amount_cents, bank_description, payee, category_id, notes, paid_by_person_id,

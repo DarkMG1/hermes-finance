@@ -62,7 +62,7 @@ public struct PatchAccountBody: Encodable, Sendable, Equatable {
     }
 }
 
-/// One line of a split. `categoryId: nil` sends JSON null (an uncategorized line); nil notes, person and name are left out.
+/// One line of a split. Nil category, person and name send JSON null; nil notes are left out.
 public struct SplitLineBody: Encodable, Sendable, Equatable {
     public let amountCents: Int
     public let categoryId: String?
@@ -86,8 +86,8 @@ public struct SplitLineBody: Encodable, Sendable, Equatable {
         try container.encode(amountCents, forKey: .amountCents)
         if let categoryId { try container.encode(categoryId, forKey: .categoryId) } else { try container.encodeNil(forKey: .categoryId) }
         try container.encodeIfPresent(notes, forKey: .notes)
-        try container.encodeIfPresent(personId, forKey: .personId)
-        try container.encodeIfPresent(payee, forKey: .payee)
+        try container.encode(personId, forKey: .personId)
+        try container.encode(payee, forKey: .payee)
     }
 }
 

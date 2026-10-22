@@ -62,8 +62,8 @@ test('split lines take a person; a person line with a category is 400; an archiv
   const { deps, get, send } = setup();
   seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-01', amountCents: -9000, personId: 'p1' });
   const lines = (personB: string) => [
-    { amountCents: -3000, categoryId: 'c-food' }, { amountCents: -3000, categoryId: null, personId: 'p1' },
-    { amountCents: -3000, categoryId: null, personId: personB }];
+    { amountCents: -3000, categoryId: 'c-food', personId: null, payee: null }, { amountCents: -3000, categoryId: null, personId: 'p1', payee: null },
+    { amountCents: -3000, categoryId: null, personId: personB, payee: null }];
   const ok = await send('PUT', '/v1/transactions/t1/splits', 'sp-1', { lines: lines('p2') });
   assert.equal(ok.statusCode, 200);
   assert.deepEqual(ok.json().splitLines.map((l: { personId: string | null }) => l.personId), [null, 'p1', 'p2']);

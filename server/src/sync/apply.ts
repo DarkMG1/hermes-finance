@@ -71,12 +71,12 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
   const mappedCategory = db.prepare('SELECT category_id FROM plaid_category_map WHERE plaid_category = ?');
   const remembered = merchantMemory(db);
   const checkSuperseded = db.prepare("SELECT id FROM transactions WHERE source = 'plaid' AND pending_source_id = ?");
-  const getRow = db.prepare("SELECT id, date, date_owner_set, category_id, category_owner_set, payee, notes, person_id, repayment_dismissed, pending_source_id FROM transactions WHERE source = 'plaid' AND source_id = ?");
+  const getRow = db.prepare("SELECT id, date, date_owner_set, category_id, category_owner_set, payee, payee_owner_set, notes, person_id, repayment_dismissed, pending_source_id FROM transactions WHERE source = 'plaid' AND source_id = ?");
   const upsert = db.prepare(`
     INSERT INTO transactions (id, account_id, source, source_id, date, authorized_date, amount_cents, bank_description, merchant_name,
-      plaid_category, pending, pending_source_id, category_id, category_owner_set, payee, notes, person_id, repayment_dismissed, date_owner_set, created_at, updated_at)
+      plaid_category, pending, pending_source_id, category_id, category_owner_set, payee, payee_owner_set, notes, person_id, repayment_dismissed, date_owner_set, created_at, updated_at)
     VALUES (@id, @accountId, 'plaid', @sourceId, @date, @authorizedDate, @amount, @desc, @merchant, @plaidCategory, @pending,
-      @pendingSourceId, @categoryId, @ownerSet, @payee, @notes, @personId, @dismissed, @dateOwnerSet, @now, @now)
+      @pendingSourceId, @categoryId, @ownerSet, @payee, @payeeOwnerSet, @notes, @personId, @dismissed, @dateOwnerSet, @now, @now)
     ON CONFLICT (source, source_id) DO UPDATE SET
       account_id = excluded.account_id, date = CASE WHEN transactions.date_owner_set = 1 THEN transactions.date ELSE excluded.date END, authorized_date = excluded.authorized_date,
       amount_cents = excluded.amount_cents, bank_description = excluded.bank_description, merchant_name = excluded.merchant_name,
@@ -114,6 +114,7 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
     let categoryId = learned;
     let ownerSet = 0;
     let payee: string | null = null;
+    let payeeOwnerSet = 0;
     let notes: string | null = null;
     let personId: string | null = null;
     let dismissed = 0;
@@ -122,12 +123,13 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
     let pendingId: string | null = null;
     if (!exists && t.pendingTransactionId) {
       const pending = getRow.get(t.pendingTransactionId) as
-        { id: string; date: string; date_owner_set: number; category_id: string | null; category_owner_set: number; payee: string | null;
+        { id: string; date: string; date_owner_set: number; category_id: string | null; category_owner_set: number; payee: string | null; payee_owner_set: number;
           notes: string | null; person_id: string | null; repayment_dismissed: number } | undefined;
       if (pending) {
         ownerSet = pending.category_owner_set;
         categoryId = pending.category_id !== null || ownerSet ? pending.category_id : learned;
         payee = pending.payee;
+        payeeOwnerSet = pending.payee_owner_set;
         notes = pending.notes;
         personId = pending.person_id;
         dismissed = pending.repayment_dismissed;
@@ -138,7 +140,7 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
     upsert.run({
       id: randomUUID(), accountId: accountFor(t.accountId), sourceId: t.transactionId, date, authorizedDate: t.authorizedDate,
       amount: plaidAmountToCents(t.amount), desc: t.name, merchant: t.merchantName, plaidCategory: t.category,
-      pending: t.pending ? 1 : 0, pendingSourceId: t.pendingTransactionId, categoryId, ownerSet, payee, notes, personId, dismissed, dateOwnerSet, now: opts.nowIso,
+      pending: t.pending ? 1 : 0, pendingSourceId: t.pendingTransactionId, categoryId, ownerSet, payee, payeeOwnerSet, notes, personId, dismissed, dateOwnerSet, now: opts.nowIso,
     });
     if (t.pendingTransactionId) {
       markRemoved.run(opts.nowIso, opts.nowIso, t.pendingTransactionId);

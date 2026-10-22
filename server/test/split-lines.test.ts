@@ -31,13 +31,13 @@ test('split lines carry their own trimmed name; blank or missing stores null', a
   assert.equal(tooLong.statusCode, 400);
 });
 
-test('re-saving a split without names clears them (the app sends names back)', async () => {
+test('re-saving a split with explicit nulls clears its names', async () => {
   const { deps, app } = setup();
   seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-01', amountCents: -2000 });
   seedSplit(deps.db, { id: 'l1', transactionId: 't1', amountCents: -1000, categoryId: 'c-food', payee: 'Synthetic Lamp' });
   seedSplit(deps.db, { id: 'l2', transactionId: 't1', amountCents: -1000, categoryId: 'c-fun' });
   const res = await app.inject({ method: 'PUT', url: '/v1/transactions/t1/splits', headers: w('k1'), payload: { lines: [
-    { amountCents: -1000, categoryId: 'c-food' }, { amountCents: -1000, categoryId: 'c-fun' },
+    { amountCents: -1000, categoryId: 'c-food', personId: null, payee: null }, { amountCents: -1000, categoryId: 'c-fun', personId: null, payee: null },
   ] } });
   assert.deepEqual(res.json().splitLines.map((l: { payee: string | null }) => l.payee), [null, null]);
 });

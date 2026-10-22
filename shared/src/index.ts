@@ -4,6 +4,8 @@ export const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 const Id = z.string().min(1).max(100);
 const DateStr = z.string().regex(DATE_RE, 'expected YYYY-MM-DD')
   .refine((s) => DATE_RE.test(s) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s, 'not a real date');
+// Leave year 9999 for exclusive period boundaries and derived dates in responses.
+const DateInput = DateStr.refine((s) => s < '9999-01-01', 'year must be at most 9998');
 const Cents = z.number().int().safe();
 
 export const ApiErrorBody = z.object({ code: z.string(), message: z.string(), field: z.string().optional() });
@@ -47,7 +49,7 @@ export const TransactionPage = z.object({ transactions: z.array(Transaction), ne
 export type TransactionPage = z.infer<typeof TransactionPage>;
 
 export const ListTransactionsQuery = z.object({
-  accountId: Id.optional(), categoryId: Id.optional(), personId: Id.optional(), from: DateStr.optional(), to: DateStr.optional(),
+  accountId: Id.optional(), categoryId: Id.optional(), personId: Id.optional(), from: DateInput.optional(), to: DateInput.optional(),
   q: z.string().min(1).max(100).optional(), cursor: z.string().max(200).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
 }).strict();
@@ -57,7 +59,7 @@ export const PatchTransactionBody = z.object({
   categoryId: Id.nullable().optional(), payee: z.string().min(1).max(200).nullable().optional(), notes: z.string().max(2000).nullable().optional(),
   personId: Id.nullable().optional(), paidByPersonId: Id.nullable().optional(), repaymentDismissed: z.boolean().optional(),
   /** The owner's date; bank sync and Apple Card re-import keep it from then on. */
-  date: DateStr.optional(),
+  date: DateInput.optional(),
 }).strict()
   .refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' })
   .refine((b) => !(b.categoryId && b.personId), { message: 'categoryId and personId cannot both be set', path: ['personId'] })
@@ -67,7 +69,8 @@ export type PatchTransactionBody = z.infer<typeof PatchTransactionBody>;
 export const PatchAccountBody = z.object({ name: z.string().trim().min(1).max(100).nullable() }).strict();
 export type PatchAccountBody = z.infer<typeof PatchAccountBody>;
 
-/** Replaces a transaction's split lines. No lines removes the split; otherwise 2+ lines that add up to the transaction amount. */
+/** Replaces a transaction's split lines. No lines removes the split; otherwise 2+ lines that add up to the transaction amount.
+ * Send personId and payee explicitly (null to clear); omitting either on an annotated split returns APP_OUTDATED. */
 export const PutSplitsBody = z.object({
   lines: z.array(z.object({
     amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'), categoryId: Id.nullable(), notes: z.string().max(2000).nullable().optional(),
@@ -101,14 +104,14 @@ export const PersonDetail = z.object({ person: Person, history: z.array(HistoryE
 export type PersonDetail = z.infer<typeof PersonDetail>;
 
 export const ForgiveBody = z.object({
-  amountCents: z.number().int().min(1).max(10_000_000), date: DateStr, categoryId: Id.nullable().optional(), notes: z.string().max(2000).optional(),
+  amountCents: z.number().int().min(1).max(10_000_000), date: DateInput, categoryId: Id.nullable().optional(), notes: z.string().max(2000).optional(),
 }).strict();
 export type ForgiveBody = z.infer<typeof ForgiveBody>;
 
 export const RepaymentSuggestion = z.object({ transaction: Transaction, personId: Id.nullable() });
 export type RepaymentSuggestion = z.infer<typeof RepaymentSuggestion>;
 
-export const ListPeopleQuery = z.object({ all: z.literal('1').optional() }).strict();
+export const ListPeopleQuery = z.object({ all: z.enum(['0', '1']).optional() }).strict();
 export type ListPeopleQuery = z.infer<typeof ListPeopleQuery>;
 
 export const CreatePersonBody = z.object({
@@ -127,7 +130,7 @@ export const PeopleSettings = z.object({ repaymentAccountId: Id.nullable() }).st
 export type PeopleSettings = z.infer<typeof PeopleSettings>;
 
 export const CreateTransactionBody = z.object({
-  date: DateStr, amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'),
+  date: DateInput, amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'),
   payee: z.string().min(1).max(200), categoryId: Id.nullable().optional(), notes: z.string().max(2000).nullable().optional(),
   paidByPersonId: Id.optional(),
   /** All of it is this person's: they owe the owner the whole amount. */
@@ -143,7 +146,8 @@ export const CreateTransactionBody = z.object({
   });
 export type CreateTransactionBody = z.infer<typeof CreateTransactionBody>;
 
-const Month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'expected YYYY-MM');
+const Month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'expected YYYY-MM')
+  .refine((s) => s < '9999-01', 'year must be at most 9998');
 
 export const ReconcileSummary = z.object({ month: Month, open: z.number().int() });
 export type ReconcileSummary = z.infer<typeof ReconcileSummary>;
@@ -170,8 +174,8 @@ export const ReconcileBody = z.object({ reconciled: z.boolean(), amountCents: Ce
 export type ReconcileBody = z.infer<typeof ReconcileBody>;
 
 export const SpendingQuery = z.discriminatedUnion('period', [
-  z.object({ period: z.literal('month'), date: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) }),
-  z.object({ period: z.literal('year'), date: z.string().regex(/^\d{4}$/) }),
+  z.object({ period: z.literal('month'), date: Month }),
+  z.object({ period: z.literal('year'), date: z.string().regex(/^\d{4}$/).refine((s) => s < '9999', 'year must be at most 9998') }),
 ]);
 export type SpendingQuery = z.infer<typeof SpendingQuery>;
 
@@ -238,7 +242,7 @@ export type ExpensesPage = z.infer<typeof ExpensesPage>;
  * bank (with name) also matches charges not renamed from that exact bank text; month (YYYY-MM) narrows the rows only, never the months or totals. */
 export const PayeeHistoryQuery = z.object({
   name: z.string().min(1).max(2000).optional(), bank: z.string().min(1).max(2000).optional(), recurringId: Id.optional(),
-  month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/).optional(),
+  month: Month.optional(),
   cursor: z.string().max(400).optional(), limit: z.coerce.number().int().min(1).max(200).default(50),
 }).strict()
   .refine((q) => (q.name === undefined) !== (q.recurringId === undefined), { message: 'give name or recurringId', path: ['name'] })
@@ -310,7 +314,7 @@ export const ReceiptReadOutput = z.object({
   feesCents: z.number().int().min(0).max(10_000_000),
   totalCents: z.number().int().min(0).max(100_000_000).nullable(),
   merchant: z.string().trim().max(200).nullable().optional().catch(null).transform((m) => (m ? m : null)),
-  purchaseDate: DateStr.nullable().optional().catch(null).transform((d) => d ?? null),
+  purchaseDate: DateInput.nullable().optional().catch(null).transform((d) => d ?? null),
 });
 export type ReceiptReadOutput = z.infer<typeof ReceiptReadOutput>;
 
@@ -332,7 +336,7 @@ export const SaveItemsBody = z.object({
     name: z.string().trim().min(1).max(200),
     amountCents: Cents.refine((n) => n !== 0 && Math.abs(n) <= 10_000_000, 'amount must be non-zero and at most 100,000.00'),
     people: z.array(Id).min(1).max(20).refine((p) => new Set(p).size === p.length, 'a person is listed twice'),
-  }).strict()).min(1).max(200),
+  }).strict()).min(1).max(200).refine((items) => new Set(items.flatMap((i) => i.people)).size <= 20, 'at most 20 people across all items'),
   taxCents: Extra, tipCents: Extra, feesCents: Extra,
 }).strict();
 export type SaveItemsBody = z.infer<typeof SaveItemsBody>;
