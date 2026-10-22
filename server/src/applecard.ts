@@ -148,11 +148,12 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
   const counts = new Map<string, number>();
   for (const r of rows) counts.set(correctionKey(r), (counts.get(correctionKey(r)) ?? 0) + 1);
   const counterparts = db.prepare(`SELECT id, source_id AS sourceId, clearing_date AS c, amount_cents AS amount FROM transactions
-    WHERE source = 'applecard' AND account_id = ? AND COALESCE(authorized_date, date) = ? AND bank_description = ?`);
+    WHERE source = 'applecard' AND removed_at IS NULL AND account_id = ? AND COALESCE(authorized_date, date) = ? AND bank_description = ?`);
   rows.forEach((r, i) => {
     if (found[i] || counts.get(correctionKey(r)) !== 1) return;
     const candidates = (counterparts.all(accountId, r.transactionDate, r.description) as NonNullable<Stored>[]).filter((s) => {
-      if (taken.has(s.sourceId)) return false;
+      // A clearing-date-only change is indistinguishable from a separate identical purchase.
+      if (taken.has(s.sourceId) || s.amount === r.amountCents) return false;
       // The source hash retains Apple's type; the ledger has no separate type column.
       const base = baseOf({ ...r, amountCents: s.amount });
       for (let n = 0; ; n += 1) {
@@ -164,8 +165,7 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
     if (candidates.length !== 1) return;
     const row = candidates[0]!;
     if (cutover && r.transactionDate < cutover) return;
-    if (row.amount !== r.amountCents) db.prepare('UPDATE transactions SET source_id = ? WHERE id = ?').run(ids[i]!, row.id);
-    else ids[i] = row.sourceId;
+    db.prepare('UPDATE transactions SET source_id = ? WHERE id = ?').run(ids[i]!, row.id);
     taken.add(row.sourceId);
     found[i] = row;
   });

@@ -71,12 +71,34 @@ test('a complete refresh prunes only missing trades in its accounts and date win
   copy.run('boundary', account, '2024-03-15');
   copy.run('future', account, '2026-03-16');
   copy.run('other-trade', 'other', '2026-03-01');
-  plaid.investmentTxns.transactions = [];
+  plaid.investmentTxns.transactions = [plaid.investmentTxns.transactions[0]!];
   plaid.failNextInvestmentTxns('PRODUCT_NOT_READY');
   await syncItem(deps, 'i1');
   assert.equal(rows(deps).length, 6, 'failed fetch leaves all trades untouched');
   await syncItem(deps, 'i1');
-  assert.deepEqual((rows(deps) as { id: string }[]).map((r) => r.id), ['future', 'old', 'other-trade']);
+  assert.deepEqual((rows(deps) as { id: string }[]).map((r) => r.id), ['future', 'it1', 'old', 'other-trade']);
+});
+
+test('a successful response with no transactions for a mapped account preserves its history', async () => {
+  const { deps, plaid } = setup();
+  await syncItem(deps, 'i1');
+  const before = rows(deps);
+  const unknown = plaid.investmentTxns.transactions[2]!;
+  for (const transactions of [[], [unknown]]) {
+    plaid.investmentTxns.transactions = transactions;
+    await syncItem(deps, 'i1');
+    assert.deepEqual(rows(deps), before);
+  }
+});
+
+test('a nonempty response prunes only accounts with returned transactions', async () => {
+  const { deps, plaid } = setup();
+  plaid.accounts.push({ ...BROKERAGE, accountId: 'pinv2' });
+  plaid.investmentTxns.transactions.push({ ...plaid.investmentTxns.transactions[0]!, id: 'second', accountId: 'pinv2' });
+  await syncItem(deps, 'i1');
+  plaid.investmentTxns.transactions = [plaid.investmentTxns.transactions[0]!];
+  await syncItem(deps, 'i1');
+  assert.deepEqual((rows(deps) as { id: string }[]).map((r) => r.id), ['it1', 'second']);
 });
 
 test('a failed transaction store rolls pruning back', async () => {

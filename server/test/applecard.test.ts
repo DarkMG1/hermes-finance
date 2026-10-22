@@ -149,7 +149,7 @@ test('re-import fills an uncategorized row from merchant memory learned since, n
 
 const statement = (clearing: string) => `${HEADER}\n09/30/2026,${clearing},SYNTHETIC COFFEE,Synthetic Coffee,Restaurants,Purchase,5.00,Synthetic Person`;
 
-test('a lone row with a corrected clearing date updates the original charge', async () => {
+test('identical same-day purchases in separate imports stay separate when they clear on different days', async () => {
   const { deps } = makeTestDeps();
   const app = buildApp(deps);
   const csvA = statement('09/30/2026');
@@ -157,14 +157,14 @@ test('a lone row with a corrected clearing date updates the original charge', as
   const importCsv = async (csv: string, key: string) => (await post(app, csv, key)).json() as { accountId: string; added: number; updated: number };
   const a = await importCsv(csvA, 'ac-a');
   const b = await importCsv(csvB, 'ac-b');
-  assert.deepEqual([a.added, a.updated, b.added, b.updated], [1, 0, 0, 1]);
+  assert.deepEqual([a.added, a.updated, b.added, b.updated], [1, 0, 1, 0]);
   const count = () => (deps.db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE source = 'applecard'").get() as { n: number }).n;
-  assert.equal(count(), 1);
+  assert.equal(count(), 2);
   const balanceCents = () => (deps.db.prepare('SELECT balance_current_cents AS b FROM accounts WHERE id = ?').get(a.accountId) as { b: number }).b;
-  assert.equal(balanceCents(), 500, 'the correction counts once');
+  assert.equal(balanceCents(), 1000, 'both purchases count');
   const again = [await importCsv(csvA, 'ac-a2'), await importCsv(csvB, 'ac-b2')];
   assert.deepEqual(again.map((r) => [r.added, r.updated]), [[0, 1], [0, 1]], 'either statement re-imported updates, never duplicates');
-  assert.equal(count(), 1);
+  assert.equal(count(), 2);
 });
 
 test('rows imported before clearing dates were stored update on re-import instead of duplicating', async () => {
@@ -265,6 +265,39 @@ test('corrected amounts keep transaction identity and owner edits and resize the
   const again = (await post(app, corrected, 'correction-repeat')).json();
   assert.deepEqual([again.added, again.updated], [0, 1]);
   assert.equal(db.prepare('SELECT balance_current_cents FROM accounts WHERE id = ?').pluck().get(again.accountId), 750);
+});
+
+test('an amount-only correction keeps the original transaction', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  await post(app, statement('09/30/2026'), 'amount-first');
+  const id = deps.db.prepare("SELECT id FROM transactions WHERE source = 'applecard'").pluck().get();
+  const r = await post(app, statement('09/30/2026').replace('5.00', '7.50'), 'amount-next');
+  assert.equal(r.statusCode, 200);
+  assert.deepEqual([r.json().added, r.json().updated], [0, 1]);
+  assert.deepEqual(deps.db.prepare("SELECT id, amount_cents, clearing_date FROM transactions WHERE source = 'applecard'").all(),
+    [{ id, amount_cents: -750, clearing_date: '2026-09-30' }]);
+});
+
+test('owner-removed rows are never correction candidates or ambiguity for a live candidate', async () => {
+  for (const live of [false, true]) {
+    const { deps } = makeTestDeps();
+    const app = buildApp(deps);
+    const first = live ? [statement('09/30/2026'), coffee('10/01/2026').replace('5.00', '6.00')].join('\n') : statement('09/30/2026');
+    await post(app, first, 'removed-first');
+    deps.db.prepare("UPDATE transactions SET removed_at = '2026-10-01T00:00:00Z' WHERE amount_cents = -500").run();
+    const removed = deps.db.prepare('SELECT * FROM transactions WHERE removed_at IS NOT NULL').get();
+    const liveId = deps.db.prepare('SELECT id FROM transactions WHERE removed_at IS NULL').pluck().get();
+    const r = await post(app, statement('10/02/2026').replace('5.00', '7.50'), 'removed-next');
+    assert.equal(r.statusCode, 200);
+    assert.deepEqual([r.json().added, r.json().updated], live ? [0, 1] : [1, 0]);
+    assert.deepEqual(deps.db.prepare('SELECT * FROM transactions WHERE removed_at IS NOT NULL').get(), removed);
+    const active = deps.db.prepare('SELECT id, amount_cents FROM transactions WHERE removed_at IS NULL').all() as { id: string; amount_cents: number }[];
+    assert.equal(active.length, 1);
+    assert.equal(active[0]!.amount_cents, -750);
+    if (live) assert.equal(active[0]!.id, liveId);
+    assert.equal(deps.db.prepare('SELECT balance_current_cents FROM accounts WHERE id = ?').pluck().get(r.json().accountId), 750);
+  }
 });
 
 test('corrections never merge an ambiguous stored pair, a file pair, or another Apple row type', async () => {

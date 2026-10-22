@@ -34,11 +34,13 @@ export async function syncInvestmentTransactions(deps: Deps, itemId: string, tok
     const from = addDays(today, -730);
     const data = await deps.plaid.investmentsTransactionsGet(token, from, today);
     const nowIso = deps.now().toISOString();
+    // shortcut: empty accounts retain withdrawn trades; prune them only with an explicit removal signal.
+    const reportedAccounts = new Set(data.transactions.map((t) => accountIds.get(t.accountId)).filter((id) => id !== undefined));
     db.transaction(() => {
       upsertSecurities(db, data.securities, nowIso);
       db.prepare(`DELETE FROM investment_transactions WHERE account_id IN (SELECT value FROM json_each(?)) AND date BETWEEN ? AND ?
         AND id NOT IN (SELECT value FROM json_each(?))`)
-        .run(JSON.stringify([...accountIds.values()]), from, today, JSON.stringify(data.transactions.map((t) => t.id)));
+        .run(JSON.stringify([...reportedAccounts]), from, today, JSON.stringify(data.transactions.map((t) => t.id)));
       const upsert = db.prepare(`
         INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, price_cents, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

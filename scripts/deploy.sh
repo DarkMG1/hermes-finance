@@ -89,10 +89,20 @@ if [ -n "$prev" ]; then
       done
     fi
     echo "deploy: rollback failed: previous release did not become healthy" >&2
+  elif [ "$before" = unknown ] || [ "$after" = unknown ]; then
+    echo "deploy: could not read the schema version; restore the pre-deploy backup before restarting the previous release" >&2
   else
-    echo "roll back (code only; restore the pre-deploy backup because the schema changed $before -> $after):" >&2
-    echo "  ln -sfn '$prev' '$root/current' && printf 'HERMES_GIT_SHA=%s\n' '$(basename "$prev")' > '$root/release.env' && systemctl --user restart hermes.service" >&2
+    echo "deploy: schema changed $before -> $after; restore the pre-deploy backup before restarting the previous release" >&2
   fi
+  if systemctl --user stop hermes.service; then
+    echo "deploy: hermes.service is stopped" >&2
+  else
+    echo "deploy: could not confirm hermes.service is stopped; check its status before recovery" >&2
+  fi
+  echo "restart previous release (restore the pre-deploy backup first if the schema changed or could not be read):" >&2
+  echo "  ln -sfn '$prev' '$root/current.new' && mv -T '$root/current.new' '$root/current' && printf 'HERMES_GIT_SHA=%s\n' '$(basename "$prev")' > '$root/release.env' && systemctl --user start hermes.service" >&2
+  echo "restart new release:" >&2
+  echo "  ln -sfn '$rel' '$root/current.new' && mv -T '$root/current.new' '$root/current' && printf 'HERMES_GIT_SHA=%s\n' '$sha' > '$root/release.env' && systemctl --user start hermes.service" >&2
 fi
 exit 1
 REMOTE
