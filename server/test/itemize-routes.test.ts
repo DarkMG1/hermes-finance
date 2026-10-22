@@ -253,3 +253,30 @@ test('a hand save without a read leaves readAt null', async () => {
   await save('own', body([['A', 2160, ['me']]]));
   assert.equal((await items('own')).json().readAt, null);
 });
+
+test('a transaction reread rejects concurrent item, extra, split or payer changes', async () => {
+  for (const change of ['items', 'extras', 'split', 'payer']) {
+    const { read, save, items, deps: { db }, reader } = setup();
+    await read('own');
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const reading = new Promise<void>((r) => { started = r; });
+    const original = reader.read.bind(reader);
+    reader.read = async () => { started(); await gate; return original(); };
+    const id = change === 'payer' ? 'paid' : 'own';
+    const pending = read(id).then((r) => r);
+    await reading;
+    if (change === 'payer') db.prepare("UPDATE transactions SET paid_by_person_id = 'p2' WHERE id = 'paid'").run();
+    else {
+      assert.equal((await save('own', body([['Synthetic Bread', 1000, ['me']], ['Synthetic Jam', 1000, ['p1']]], 160))).statusCode, 200);
+      if (change === 'extras') assert.equal((await save('own', { ...body([['Synthetic Bread', 1000, ['me']], ['Synthetic Jam', 1000, ['p1']]], 160), tipCents: 100 })).statusCode, 200);
+      if (change === 'split') db.prepare("UPDATE split_lines SET amount_cents = amount_cents - 1 WHERE transaction_id = 'own' AND person_id IS NULL").run();
+    }
+    const saved = (await items(id)).json();
+    release();
+    const r = await pending;
+    assert.deepEqual([r.statusCode, r.json().code], [409, 'CHANGED'], change);
+    assert.deepEqual((await items(id)).json(), saved, change);
+  }
+});

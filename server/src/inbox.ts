@@ -1,9 +1,9 @@
 import type { InboxList, InboxReceipt, Itemization, LinkedReceipt, SaveItemsBody, Transaction } from '@hermes/shared';
 import type { Db } from './db.ts';
 import type { Deps } from './deps.ts';
-import { localDay } from './days.ts';
+import { addDays, localDay } from './days.ts';
 import { ApiError } from './errors.ts';
-import { applyItems, computeShares, ME, replaceItems, ShareError } from './itemize.ts';
+import { applyItems, computeShares, getItemization, ME, replaceItems, ShareError } from './itemize.ts';
 import { getTransaction, lookups, rowToTransaction, TXN_COLS, type TxnRow } from './ledger.ts';
 import { assertPersonTaggable } from './people.ts';
 import type { ReadResult } from './receipt-reader.ts';
@@ -18,13 +18,15 @@ export type InboxRow = {
   split_applied: number; dismissed_at: string | null;
 };
 type Item = { name: string; amountCents: number; people: string[] };
+const INBOX_COLS = 'id, bytes, captured_at, read_at, read_failed, model, merchant, purchase_date, total_cents, tax_cents, tip_cents, fees_cents, items, tagged, linked_transaction_id, linked_at, split_applied, dismissed_at';
+type InboxMetadata = Omit<InboxRow, 'jpeg'>;
 
 export const getInboxRow = (db: Db, id: string) => db.prepare('SELECT * FROM inbox_receipts WHERE id = ?').get(id) as InboxRow | undefined;
 export const waitingRow = (db: Db, id: string) => {
   const row = getInboxRow(db, id);
   return row && row.linked_at === null ? row : undefined;
 };
-const itemsOf = (row: InboxRow): Item[] => (row.items ? JSON.parse(row.items) as Item[] : []);
+const itemsOf = (row: InboxMetadata): Item[] => (row.items ? JSON.parse(row.items) as Item[] : []);
 
 export function storeRead(db: Db, id: string, r: ReadResult, nowIso: string): boolean {
   return db.prepare(`UPDATE inbox_receipts SET read_at = ?, read_failed = 0, model = ?, merchant = ?, purchase_date = ?, total_cents = ?,
@@ -33,16 +35,11 @@ export function storeRead(db: Db, id: string, r: ReadResult, nowIso: string): bo
       JSON.stringify(r.items.map((i) => ({ ...i, people: [ME] }))), id).changes > 0;
 }
 
-const addDays = (ymd: string, n: number) => {
-  const d = new Date(`${ymd}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + n);
-  return d.toISOString().slice(0, 10);
-};
 const STOP = new Set(['the', 'and', 'inc', 'llc', 'ltd', 'corp', 'company', 'store', 'shop', 'www', 'com']);
 const words = (s: string | null) => new Set((s ?? '').toLowerCase().match(/[a-z]{3,}/g)?.filter((w) => !STOP.has(w)) ?? []);
 const sharesWord = (t: Transaction, store: Set<string>) => [t.payee, t.merchantName, t.bankDescription].some((s) => [...words(s)].some((w) => store.has(w)));
 
-function candidates(db: Db, row: InboxRow, member: Member): { exact: Transaction[]; near: Transaction[] } {
+function candidates(db: Db, row: InboxMetadata, member: Member): { exact: Transaction[]; near: Transaction[] } {
   if (row.total_cents === null || row.total_cents <= 0) return { exact: [], near: [] };
   const day = row.purchase_date ?? row.captured_at.slice(0, 10);
   const rows = db.prepare(`SELECT ${TXN_COLS} FROM transactions t
@@ -58,15 +55,22 @@ function candidates(db: Db, row: InboxRow, member: Member): { exact: Transaction
   return { exact, near };
 }
 
-export function suggestionsFor(db: Db, row: InboxRow, member: Member): Transaction[] {
+export function suggestionsFor(db: Db, row: InboxMetadata, member: Member): Transaction[] {
   const { exact, near } = candidates(db, row, member);
   return [...exact, ...near].sort((a, b) => b.date.localeCompare(a.date)).slice(0, 5);
 }
 
-/** Puts a linked receipt's photo back in the inbox before its transaction loses it; items and tags stay on the inbox row. */
+/** Restores the current receipt and saved tags before its transaction loses them. */
 export function restoreToInbox(db: Db, txnId: string): void {
-  db.prepare(`UPDATE inbox_receipts SET jpeg = (SELECT jpeg FROM receipts WHERE transaction_id = ?), linked_transaction_id = NULL, linked_at = NULL,
-      split_applied = 0, dismissed_at = NULL WHERE linked_transaction_id = ? AND EXISTS (SELECT 1 FROM receipts WHERE transaction_id = ?)`).run(txnId, txnId, txnId);
+  if (!db.prepare('SELECT 1 FROM inbox_receipts WHERE linked_transaction_id = ?').get(txnId)) return;
+  const receipt = db.prepare('SELECT jpeg, bytes, model, applied_lines FROM receipts WHERE transaction_id = ?').get(txnId) as
+    { jpeg: Buffer; bytes: number; model: string | null; applied_lines: string | null } | undefined;
+  if (!receipt) return;
+  const r = getItemization(db, txnId);
+  db.prepare(`UPDATE inbox_receipts SET jpeg = ?, bytes = ?, model = ?, items = ?, tax_cents = ?, tip_cents = ?, fees_cents = ?, total_cents = ?, read_at = ?,
+      tagged = CASE WHEN ? THEN 1 ELSE tagged END, linked_transaction_id = NULL, linked_at = NULL, split_applied = 0, dismissed_at = NULL WHERE linked_transaction_id = ?`)
+    .run(receipt.jpeg, receipt.bytes, receipt.model, JSON.stringify(r.items.map(({ name, amountCents, people }) => ({ name, amountCents, people }))),
+      r.taxCents, r.tipCents, r.feesCents, r.totalCents, r.readAt, receipt.applied_lines === null ? 0 : 1, txnId);
 }
 
 /** A restart mid-read would otherwise show "Reading…" forever. */
@@ -87,7 +91,7 @@ export function matchInbox(deps: Deps, onlyId?: string): number {
       db.prepare('DELETE FROM receipt_items WHERE transaction_id = ?').run(id);
     })();
   }
-  const rows = db.prepare('SELECT * FROM inbox_receipts WHERE linked_at IS NULL AND jpeg IS NOT NULL AND total_cents IS NOT NULL').all() as InboxRow[];
+  const rows = db.prepare(`SELECT ${INBOX_COLS} FROM inbox_receipts WHERE linked_at IS NULL AND jpeg IS NOT NULL AND total_cents IS NOT NULL`).all() as InboxMetadata[];
   const member = memberships(db, localDay(deps.now()));
   const exact = new Map(rows.map((r) => [r.id, candidates(db, r, member).exact]));
   const claims = new Map<string, number>();
@@ -143,11 +147,11 @@ export function linkInbox(deps: Deps, inboxId: string, transactionId: string): L
   })();
 }
 
-const toLinked = (r: InboxRow): LinkedReceipt => ({
+const toLinked = (r: InboxMetadata): LinkedReceipt => ({
   id: r.id, transactionId: r.linked_transaction_id!, merchant: r.merchant, totalCents: r.total_cents, linkedAt: r.linked_at!, splitApplied: r.split_applied === 1,
 });
 
-const status = (r: InboxRow): InboxReceipt['status'] => (r.tagged ? 'read' : r.read_failed ? 'failed' : r.read_at === null ? 'reading' : 'read');
+const status = (r: InboxMetadata): InboxReceipt['status'] => (r.tagged ? 'read' : r.read_failed ? 'failed' : r.read_at === null ? 'reading' : 'read');
 
 /** The payee name already in use for this store: the most specific one whose words start the receipt's ("Acme" for "Acme Wholesale"),
  * the most used on a tie, then alphabetical; else the receipt's own merchant. */
@@ -162,15 +166,15 @@ function payeeFor(known: { payee: string; n: number }[], merchant: string | null
 }
 
 export function listInbox(db: Db, today: string): InboxList {
-  const waiting = db.prepare('SELECT * FROM inbox_receipts WHERE linked_at IS NULL ORDER BY captured_at DESC, id').all() as InboxRow[];
+  const waiting = db.prepare(`SELECT ${INBOX_COLS} FROM inbox_receipts WHERE linked_at IS NULL ORDER BY captured_at DESC, id`).all() as InboxMetadata[];
   // the names shown on charges (a bank row's merchant until renamed); never a person's IOU or Zelle row
   const known = waiting.length ? db.prepare(`SELECT COALESCE(payee, merchant_name) AS payee, COUNT(*) AS n FROM transactions
       WHERE COALESCE(payee, merchant_name) IS NOT NULL AND removed_at IS NULL AND amount_cents < 0 AND person_id IS NULL
         AND NOT EXISTS (SELECT 1 FROM categories c WHERE c.id = category_id AND (c.is_transfer = 1 OR c.is_income = 1))
       GROUP BY 1`).all() as { payee: string; n: number }[] : [];
-  const linked = db.prepare(`SELECT * FROM inbox_receipts WHERE linked_at IS NOT NULL AND dismissed_at IS NULL AND linked_transaction_id IS NOT NULL
+  const linked = db.prepare(`SELECT ${INBOX_COLS} FROM inbox_receipts WHERE linked_at IS NOT NULL AND dismissed_at IS NULL AND linked_transaction_id IS NOT NULL
     AND EXISTS (SELECT 1 FROM receipts WHERE transaction_id = linked_transaction_id)
-    ORDER BY linked_at DESC, id LIMIT 20`).all() as InboxRow[];
+    ORDER BY linked_at DESC, id`).all() as InboxMetadata[];
   const member = memberships(db, today);
   return {
     waiting: waiting.map((r) => ({

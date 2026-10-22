@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getInboxRow, linkInbox, listInbox, markInterruptedReads, matchInbox, saveInboxItems, storeRead } from '../src/inbox.ts';
 import { getTransaction } from '../src/ledger.ts';
-import { makeTestDeps, seedAccount, seedCategory, seedPerson, seedSplit, seedTxn } from './helpers.ts';
+import { applyItems, getItemization } from '../src/itemize.ts';
+import { buildApp } from '../src/app.ts';
+import { AUTH, makeTestDeps, seedAccount, seedCategory, seedPerson, seedSplit, seedTxn } from './helpers.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
 const READ = { items: [{ name: 'Synthetic Bread', amountCents: 400 }, { name: 'Synthetic Jam', amountCents: 600 }], taxCents: 50, tipCents: 0, feesCents: 0,
@@ -230,4 +232,80 @@ test('a receipt with no known store keeps its own name', () => {
   snap('r1');
   storeRead(db, 'r1', { ...READ, merchant: 'Synthetic Bakery' }, 'now');
   assert.equal(listInbox(db, '2026-03-15').waiting[0]!.payee, 'Synthetic Bakery');
+});
+
+test('restoration preserves current itemization and relinks without resurrecting obsolete tags', async () => {
+  for (const readAgain of [false, true]) {
+    const { deps, db, snap, charge, reader } = setup();
+    snap('r1');
+    storeRead(db, 'r1', READ, 'first-read');
+    saveInboxItems(db, 'r1', { items: [{ name: 'Synthetic Bread', amountCents: 1000, people: ['me', 'p1'] }], taxCents: 50, tipCents: 0, feesCents: 0 });
+    charge('old', '2026-03-11', -1050, { pending: true });
+    linkInbox(deps, 'r1', 'old');
+    if (readAgain) {
+      reader.next = { ...READ, items: [{ name: 'Synthetic Pear', amountCents: 1000 }], taxCents: 10, tipCents: 20, feesCents: 30, model: 'new-model' };
+      const r = await buildApp(deps).inject({ method: 'POST', url: '/v1/transactions/old/receipt/read', headers: AUTH });
+      assert.equal(r.statusCode, 200);
+    } else {
+      applyItems(db, 'old', { items: [{ name: 'Synthetic Pear', amountCents: 900, people: ['me'] }], taxCents: 10, tipCents: 100, feesCents: 40 }, deps.now().toISOString());
+    }
+    const current = getItemization(db, 'old');
+    db.prepare("UPDATE transactions SET removed_at = 'gone' WHERE id = 'old'").run();
+    assert.equal(matchInbox(deps), 0);
+    const restored = getInboxRow(db, 'r1')!;
+    assert.deepEqual(JSON.parse(restored.items!), current.items.map(({ name, amountCents, people }) => ({ name, amountCents, people })));
+    assert.deepEqual([restored.tax_cents, restored.tip_cents, restored.fees_cents, restored.total_cents, restored.read_at],
+      [current.taxCents, current.tipCents, current.feesCents, current.totalCents, current.readAt]);
+    assert.equal(restored.tagged, readAgain ? 0 : 1);
+    assert.deepEqual(restored.jpeg, JPEG);
+    charge('new', '2026-03-12', -1050);
+    assert.equal(matchInbox(deps), 1);
+    const linked = getTransaction(db, 'new', '2026-03-15')!;
+    assert.equal(linked.personId, null);
+    assert.deepEqual(linked.splitLines, []);
+    assert.equal(getItemization(db, 'new').items[0]!.name, 'Synthetic Pear');
+  }
+});
+
+test('inbox listing and matching read metadata without materializing receipt photos', (t) => {
+  const { deps, db, snap } = setup();
+  snap('r1');
+  storeRead(db, 'r1', READ, 'now');
+  const prepare = db.prepare.bind(db);
+  let checked = 0;
+  t.mock.method(db, 'prepare', (sql: string) => {
+    const statement = prepare(sql);
+    if (/SELECT .* FROM inbox_receipts WHERE linked_at/s.test(sql)) {
+      const all = statement.all.bind(statement);
+      t.mock.method(statement, 'all', (...args: unknown[]) => {
+        const rows = all(...args) as object[];
+        for (const row of rows) assert.equal('jpeg' in row, false);
+        checked += 1;
+        return rows;
+      });
+    }
+    return statement;
+  });
+  assert.equal(listInbox(db, '2026-03-15').waiting.length, 1);
+  assert.equal(matchInbox(deps), 0);
+  assert.equal(checked, 3);
+});
+
+test('restoration retains inbox tags when the first link kept an existing bank split', () => {
+  const { deps, db, snap, charge } = setup();
+  snap('r1');
+  storeRead(db, 'r1', READ, 'now');
+  const body = { items: [{ name: 'Synthetic Pear', amountCents: 1000, people: ['me', 'p2'] }], taxCents: 50, tipCents: 0, feesCents: 0 };
+  saveInboxItems(db, 'r1', body);
+  charge('old', '2026-03-11', -1050);
+  seedSplit(db, { id: 'l1', transactionId: 'old', amountCents: -500, categoryId: 'cat-food' });
+  seedSplit(db, { id: 'l2', transactionId: 'old', amountCents: -550, categoryId: null, personId: 'p1' });
+  assert.equal(linkInbox(deps, 'r1', 'old').splitApplied, false);
+  db.prepare("UPDATE transactions SET removed_at = 'gone' WHERE id = 'old'").run();
+  matchInbox(deps);
+  assert.equal(getInboxRow(db, 'r1')!.tagged, 1);
+  assert.deepEqual(JSON.parse(getInboxRow(db, 'r1')!.items!), body.items);
+  charge('new', '2026-03-12', -1050);
+  assert.equal(matchInbox(deps), 1);
+  assert.equal(getTransaction(db, 'new', '2026-03-15')!.splitLines.find((l) => l.personId)?.personId, 'p2');
 });

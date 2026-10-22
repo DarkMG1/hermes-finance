@@ -71,10 +71,24 @@ for _ in $(seq 1 30); do
 done
 echo "deploy: /v1/health did not report $sha" >&2
 if [ -n "$prev" ]; then
+  if ! systemctl --user stop hermes.service; then
+    echo "deploy: rollback failed: could not stop the failed service" >&2
+    exit 1
+  fi
   after="$(schema_version "$rel")"
   if [ "$before" != unknown ] && [ "$before" = "$after" ]; then
-    ln -sfn "$prev" "$root/current" && printf 'HERMES_GIT_SHA=%s\n' "$(basename "$prev")" > "$root/release.env" && systemctl --user restart hermes.service
-    echo "deploy: rolled back to $(basename "$prev") (schema unchanged at version $before)" >&2
+    previous_sha="$(basename "$prev")"
+    if ln -sfn "$prev" "$root/current.new" && mv -T "$root/current.new" "$root/current" &&
+      printf 'HERMES_GIT_SHA=%s\n' "$previous_sha" > "$root/release.env" && systemctl --user start hermes.service; then
+      for _ in $(seq 1 30); do
+        if curl -fsS "http://127.0.0.1:${port:-5010}/v1/health" 2>/dev/null | grep -q "\"gitSha\":\"$previous_sha\""; then
+          echo "deploy: rolled back to $previous_sha (schema unchanged at version $before)" >&2
+          exit 1
+        fi
+        sleep 1
+      done
+    fi
+    echo "deploy: rollback failed: previous release did not become healthy" >&2
   else
     echo "roll back (code only; restore the pre-deploy backup because the schema changed $before -> $after):" >&2
     echo "  ln -sfn '$prev' '$root/current' && printf 'HERMES_GIT_SHA=%s\n' '$(basename "$prev")' > '$root/release.env' && systemctl --user restart hermes.service" >&2

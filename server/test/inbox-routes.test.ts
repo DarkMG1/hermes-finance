@@ -201,3 +201,40 @@ test('a background read landing on an untagged row during an explicit read is no
   const r = await post(`/v1/receipts/inbox/${ID}/read`);
   assert.equal(r.statusCode, 200);
 });
+
+test('an inbox reread cannot overwrite concurrent tax, tip or fee saves with unchanged items', async () => {
+  for (const field of ['taxCents', 'tipCents', 'feesCents'] as const) {
+    const { put, post, putItems, db, reader } = setup();
+    await put(ID);
+    await settle();
+    const body = { items: [{ name: 'Synthetic Bread', amountCents: 400, people: ['me'] }], taxCents: 0, tipCents: 0, feesCents: 0 };
+    assert.equal((await putItems(ID, body)).statusCode, 200);
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const reading = new Promise<void>((r) => { started = r; });
+    reader.read = async () => { started(); await gate; return READ; };
+    const pending = post(`/v1/receipts/inbox/${ID}/read`).then((r) => r);
+    await reading;
+    assert.equal((await putItems(ID, { ...body, [field]: 100 })).statusCode, 200);
+    const saved = getInboxRow(db, ID)!;
+    release();
+    const response = await pending;
+    assert.deepEqual([response.statusCode, response.json().code], [409, 'CHANGED'], field);
+    assert.deepEqual(getInboxRow(db, ID), saved);
+  }
+});
+
+test('all recently linked receipts can be listed and dismissed in one pass', async () => {
+  const { db, deps, post, get } = setup();
+  for (let i = 0; i < 21; i += 1) {
+    seedTxn(db, { id: `charge-${i}`, accountId: 'card', date: '2026-03-10', amountCents: -1050 });
+    db.prepare("INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES (?, ?, ?, 'seed')").run(`charge-${i}`, JPEG, JPEG.length);
+    db.prepare('INSERT INTO inbox_receipts (id, bytes, captured_at, linked_at, linked_transaction_id) VALUES (?, ?, ?, ?, ?)')
+      .run(`receipt-${i}`, JPEG.length, deps.now().toISOString(), deps.now().toISOString(), `charge-${i}`);
+  }
+  const linked = (await get('/v1/receipts/inbox')).json().recentlyLinked as { id: string }[];
+  assert.equal(linked.length, 21);
+  for (const row of linked) assert.equal((await post(`/v1/receipts/inbox/${row.id}/dismiss`)).statusCode, 204);
+  assert.deepEqual((await get('/v1/receipts/inbox')).json().recentlyLinked, []);
+});

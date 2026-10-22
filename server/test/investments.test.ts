@@ -334,3 +334,27 @@ test('account filter', async () => {
   assert.equal((await get('/v1/investments/holding-history?key=SYNA&range=all&accountIds=b2')).json().currentCents, 500);
   assert.equal((await get('/v1/investments?other=1')).statusCode, 400);
 });
+
+test('one holding history materializes only snapshots in its security group', (t) => {
+  const { deps } = makeTestDeps();
+  seedHoldings(deps);
+  hsnap(deps, 'b1', 'sa1', '2026-03-12', 1000);
+  hsnap(deps, 'b2', 'sa2', '2026-03-12', 500);
+  hsnap(deps, 'b1', 'sc', '2026-03-12', 99999);
+  const prepare = deps.db.prepare.bind(deps.db);
+  let count = 0;
+  t.mock.method(deps.db, 'prepare', (sql: string) => {
+    const statement = prepare(sql);
+    if (sql.includes('FROM holding_snapshots hs')) {
+      const all = statement.all.bind(statement);
+      t.mock.method(statement, 'all', (...args: unknown[]) => {
+        const rows = all(...args);
+        count += rows.length;
+        return rows;
+      });
+    }
+    return statement;
+  });
+  assert.equal(getHoldingHistory(deps.db, 'SYNA', 'all', '2026-03-15')!.currentCents, 1500);
+  assert.equal(count, 2);
+});

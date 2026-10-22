@@ -146,8 +146,8 @@ export const CreateTransactionBody = z.object({
   });
 export type CreateTransactionBody = z.infer<typeof CreateTransactionBody>;
 
-const Month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'expected YYYY-MM')
-  .refine((s) => s < '9999-01', 'year must be at most 9998');
+const Month = z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/, 'expected YYYY-MM');
+const MonthInput = Month.refine((s) => s < '9999-01', 'year must be at most 9998');
 
 export const ReconcileSummary = z.object({ month: Month, open: z.number().int() });
 export type ReconcileSummary = z.infer<typeof ReconcileSummary>;
@@ -160,7 +160,7 @@ export const Home = z.object({
 });
 export type Home = z.infer<typeof Home>;
 
-export const ReconcileQuery = z.object({ month: Month }).strict();
+export const ReconcileQuery = z.object({ month: MonthInput }).strict();
 export type ReconcileQuery = z.infer<typeof ReconcileQuery>;
 
 /** One month's money-out rows: how many need reconciling, how many are still open, and the open ones oldest first. */
@@ -174,7 +174,7 @@ export const ReconcileBody = z.object({ reconciled: z.boolean(), amountCents: Ce
 export type ReconcileBody = z.infer<typeof ReconcileBody>;
 
 export const SpendingQuery = z.discriminatedUnion('period', [
-  z.object({ period: z.literal('month'), date: Month }),
+  z.object({ period: z.literal('month'), date: MonthInput }),
   z.object({ period: z.literal('year'), date: z.string().regex(/^\d{4}$/).refine((s) => s < '9999', 'year must be at most 9998') }),
 ]);
 export type SpendingQuery = z.infer<typeof SpendingQuery>;
@@ -242,7 +242,7 @@ export type ExpensesPage = z.infer<typeof ExpensesPage>;
  * bank (with name) also matches charges not renamed from that exact bank text; month (YYYY-MM) narrows the rows only, never the months or totals. */
 export const PayeeHistoryQuery = z.object({
   name: z.string().min(1).max(2000).optional(), bank: z.string().min(1).max(2000).optional(), recurringId: Id.optional(),
-  month: Month.optional(),
+  month: MonthInput.optional(),
   cursor: z.string().max(400).optional(), limit: z.coerce.number().int().min(1).max(200).default(50),
 }).strict()
   .refine((q) => (q.name === undefined) !== (q.recurringId === undefined), { message: 'give name or recurringId', path: ['name'] })

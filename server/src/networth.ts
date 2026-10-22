@@ -29,10 +29,6 @@ export function minusMonths(day: string, n: number): string {
   return `${String(ty).padStart(4, '0')}-${pad(tm + 1)}-${pad(Math.min(d, last))}`;
 }
 
-export function nextDay(day: string): string {
-  return addDays(day, 1);
-}
-
 /** Rebuilt from transactions before their first snapshot; every other type holds flat at it. */
 const REBUILT_TYPES = ['depository', 'credit', 'loan'];
 
@@ -68,8 +64,10 @@ export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string
   }
   // investment accounts: estimated from investment transactions and prices before their first snapshot
   const estimates = new Map<string, AccountEstimate>();
+  const seen = new Set<string>();
   for (const s of snaps) {
-    if (s.type !== 'investment' || estimates.has(s.accountId)) continue;
+    if (s.type !== 'investment' || seen.has(s.accountId)) continue;
+    seen.add(s.accountId);
     const est = loadAccountEstimate(db, s.accountId);
     if (est) estimates.set(s.accountId, est);
   }

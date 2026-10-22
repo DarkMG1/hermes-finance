@@ -67,7 +67,8 @@ export function inboxRoutes(app: FastifyInstance, deps: Deps): void {
   app.post<{ Params: { id: string } }>('/v1/receipts/inbox/:id/read', async (req) => {
     const row = waiting(req.params.id);
     if (!deps.receiptReader) throw new ApiError(503, 'READER_NOT_CONFIGURED', 'receipt reading is not set up');
-    const { items, tagged } = row;
+    const state = (r: typeof row) => JSON.stringify([r.items, r.tagged, r.tax_cents, r.tip_cents, r.fees_cents]);
+    const before = state(row);
     let r;
     try {
       r = await deps.receiptReader.read(row.jpeg!);
@@ -76,7 +77,7 @@ export function inboxRoutes(app: FastifyInstance, deps: Deps): void {
       throw new ApiError(502, 'READ_FAILED', "couldn't read the receipt");
     }
     const now = getInboxRow(db, row.id);
-    if (now && now.tagged === 1 && (tagged === 0 || now.items !== items)) throw new ApiError(409, 'CHANGED', 'the items changed while reading');
+    if (now?.tagged === 1 && state(now) !== before) throw new ApiError(409, 'CHANGED', 'the items changed while reading');
     if (!storeRead(db, row.id, r, deps.now().toISOString())) throw new ApiError(404, 'NOT_FOUND', 'inbox receipt not found');
     rematch(row.id);
     const after = getInboxRow(db, row.id)!;

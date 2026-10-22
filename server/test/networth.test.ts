@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.ts';
-import { getNetWorth, localDay, nextDay, snapshotBalances } from '../src/networth.ts';
+import { getNetWorth, localDay, snapshotBalances } from '../src/networth.ts';
+import { addDays } from '../src/days.ts';
 import { syncItem } from '../src/sync/run.ts';
 import { AUTH, makeTestDeps, seedAccount, seedItem, seedTxn } from './helpers.ts';
 import type { Db } from '../src/db.ts';
@@ -75,7 +76,7 @@ test('history advances calendar days across years below 100', () => {
   const { deps: { db } } = makeTestDeps();
   seedAccount(db, { id: 'a1', balanceCents: 100 });
   snap(db, 'a1', '0099-12-31', 100);
-  assert.equal(nextDay('0099-12-31'), '0100-01-01');
+  assert.equal(addDays('0099-12-31', 1), '0100-01-01');
   assert.deepEqual(getNetWorth(db, 'all', '0100-01-02').points.map((p) => p.date), ['0099-12-31', '0100-01-01', '0100-01-02']);
 });
 
@@ -263,4 +264,18 @@ test('a snapshot dated after today is ignored, with its transactions', () => {
   assert.equal(h.currentCents, 1000);
   assert.equal(h.changeCents, 0);
   assert.equal(h.estimatedThrough, null);
+});
+
+test('net worth probes a missing investment estimate once per account', (t) => {
+  const { deps: { db } } = makeTestDeps();
+  seedAccount(db, { id: 'inv', type: 'investment', balanceCents: 100 });
+  for (const day of ['2026-03-01', '2026-03-02', '2026-03-03']) snap(db, 'inv', day, 100);
+  const prepare = db.prepare.bind(db);
+  let probes = 0;
+  t.mock.method(db, 'prepare', (sql: string) => {
+    if (sql.includes('MIN(date) AS d FROM holding_syncs')) probes += 1;
+    return prepare(sql);
+  });
+  assert.equal(getNetWorth(db, '1m', '2026-03-15').currentCents, 100);
+  assert.equal(probes, 1);
 });

@@ -3,7 +3,7 @@ import type { Db } from './db.ts';
 import type { Deps } from './deps.ts';
 import { holdingKey, loadAccountEstimate } from './backfill.ts';
 import { addDays } from './days.ts';
-import { localDay, MONTHS, minusMonths, nextDay } from './networth.ts';
+import { localDay, MONTHS, minusMonths } from './networth.ts';
 import { PlaidError, type PlaidHoldings, type PlaidSecurity } from './plaid/port.ts';
 
 const CONSENT = new Set(['ADDITIONAL_CONSENT_REQUIRED', 'ACCESS_NOT_GRANTED']);
@@ -31,10 +31,14 @@ export async function syncInvestmentTransactions(deps: Deps, itemId: string, tok
   const { db } = deps;
   try {
     const today = localDay(deps.now());
-    const data = await deps.plaid.investmentsTransactionsGet(token, addDays(today, -730), today);
+    const from = addDays(today, -730);
+    const data = await deps.plaid.investmentsTransactionsGet(token, from, today);
     const nowIso = deps.now().toISOString();
     db.transaction(() => {
       upsertSecurities(db, data.securities, nowIso);
+      db.prepare(`DELETE FROM investment_transactions WHERE account_id IN (SELECT value FROM json_each(?)) AND date BETWEEN ? AND ?
+        AND id NOT IN (SELECT value FROM json_each(?))`)
+        .run(JSON.stringify([...accountIds.values()]), from, today, JSON.stringify(data.transactions.map((t) => t.id)));
       const upsert = db.prepare(`
         INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, price_cents, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -175,20 +179,19 @@ const inAccounts = (ids: string[] | undefined) => (ids ? `AND a.id IN (${ids.map
  */
 export function getHoldingHistory(db: Db, key: string, range: NetWorthQuery['range'], today: string, accountIds?: string[]): NetWorthHistory | null {
   const ids = accountIds ?? [];
-  const all = db.prepare(`
-    SELECT hs.account_id AS accountId, hs.security_id AS securityId, hs.date, hs.value_cents AS cents, s.ticker, s.type, s.is_cash AS isCash
-    FROM holding_snapshots hs JOIN accounts a ON a.id = hs.account_id JOIN securities s ON s.id = hs.security_id
-    WHERE a.hidden = 0 AND hs.date <= ? ${inAccounts(accountIds)} ORDER BY hs.date`).all(today, ...ids) as
-    { accountId: string; securityId: string; date: string; cents: number; ticker: string | null; type: string | null; isCash: number }[];
-  const mine = all.filter((r) => holdingKey(r) === key);
+  const group = (db.prepare('SELECT id AS securityId, ticker, type, is_cash AS isCash FROM securities').all() as
+    { securityId: string; ticker: string | null; type: string | null; isCash: number }[]).filter((s) => holdingKey(s) === key).map((s) => s.securityId);
+  const mine = db.prepare(`
+    SELECT hs.account_id AS accountId, hs.date, hs.value_cents AS cents
+    FROM holding_snapshots hs JOIN accounts a ON a.id = hs.account_id
+    WHERE a.hidden = 0 AND hs.date <= ? AND hs.security_id IN (SELECT value FROM json_each(?)) ${inAccounts(accountIds)} ORDER BY hs.date`)
+    .all(today, JSON.stringify(group), ...ids) as { accountId: string; date: string; cents: number }[];
   const first = mine[0];
   if (!first) return null;
   const synced = new Set((db.prepare(`
     SELECT hs.account_id AS accountId, hs.date FROM holding_syncs hs JOIN accounts a ON a.id = hs.account_id
     WHERE a.hidden = 0 AND hs.date <= ? ${inAccounts(accountIds)}`)
     .all(today, ...ids) as { accountId: string; date: string }[]).map((r) => `${r.accountId}|${r.date}`));
-  const group = (db.prepare('SELECT id AS securityId, ticker, type, is_cash AS isCash FROM securities').all() as
-    { securityId: string; ticker: string | null; type: string | null; isCash: number }[]).filter((s) => holdingKey(s) === key).map((s) => s.securityId);
   // accounts that traded the group before their anchor count too, even with no snapshot of it (sold out before the first sync)
   const traded = (db.prepare(`
     SELECT DISTINCT t.account_id AS accountId FROM investment_transactions t JOIN accounts a ON a.id = t.account_id
@@ -207,7 +210,7 @@ export function getHoldingHistory(db: Db, key: string, range: NetWorthQuery['ran
   const latest = new Map<string, number>();
   const points: NetWorthHistory['points'] = [];
   let estimatedThrough: string | null = null;
-  for (let day = firstDay; day <= today; day = nextDay(day)) {
+  for (let day = firstDay; day <= today; day = addDays(day, 1)) {
     let estimated = false;
     for (const a of accounts) {
       const est = estimates.get(a);
