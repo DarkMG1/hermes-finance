@@ -15,8 +15,8 @@ export const TXN_COLS = 'id, account_id, source, source_id, date, amount_cents, 
   + 'paid_by_person_id, repayment_dismissed, reconciled_at, reconciled_cents, forgiven';
 
 /** What a list of rows needs from the rest of the ledger, read once for the whole list. */
-// member: pass one memberships(db) to share the Recurring read across several lists
-export function lookups(db: Db, rows: TxnRow[], member = memberships(db)) {
+// member: pass one memberships(db, today) to share the Recurring read across several lists
+export function lookups(db: Db, rows: TxnRow[], member: ReturnType<typeof memberships>) {
   const { spending, billable } = historyLines(db, rows);
   const ids = JSON.stringify(rows.map((r) => r.id));
   const splits = new Map<string, SplitLine[]>();
@@ -32,7 +32,7 @@ export function lookups(db: Db, rows: TxnRow[], member = memberships(db)) {
   return { spending, splits, receipts, recurring: member(rows.filter((r) => r.amount_cents < 0 && r.person_id === null && r.forgiven === 0 && billable.has(r.id))) };
 }
 
-export function rowToTransaction(db: Db, r: TxnRow, { spending, recurring, splits, receipts } = lookups(db, [r])): Transaction {
+export function rowToTransaction(r: TxnRow, { spending, recurring, splits, receipts }: ReturnType<typeof lookups>): Transaction {
   const splitLines = splits.get(r.id) ?? [];
   const payee = r.payee ?? r.merchant_name ?? r.bank_description;
   return {
@@ -68,9 +68,9 @@ export function listCategories(db: Db): Category[] {
   return rows.map((c) => ({ id: c.id, name: c.name, groupName: c.group_name, isIncome: c.is_income === 1, isTransfer: c.is_transfer === 1, hidden: c.hidden === 1 }));
 }
 
-export function getTransaction(db: Db, id: string): Transaction | null {
+export function getTransaction(db: Db, id: string, today: string): Transaction | null {
   const row = db.prepare(`SELECT ${TXN_COLS} FROM transactions WHERE id = ? AND removed_at IS NULL`).get(id) as TxnRow | undefined;
-  return row ? rowToTransaction(db, row) : null;
+  return row ? rowToTransaction(row, lookups(db, [row], memberships(db, today))) : null;
 }
 
 function encodeCursor(date: string, id: string): string { return Buffer.from(JSON.stringify([date, id])).toString('base64url'); }
@@ -82,7 +82,7 @@ function decodeCursor(c: string): [string, string] {
   throw new ApiError(400, 'INVALID_REQUEST', 'cursor: invalid cursor', 'cursor');
 }
 
-export function listTransactions(db: Db, q: ListTransactionsQuery): TransactionPage {
+export function listTransactions(db: Db, q: ListTransactionsQuery, today: string): TransactionPage {
   const where = ['removed_at IS NULL'];
   const args: unknown[] = [];
   if (q.accountId) { where.push('account_id = ?'); args.push(q.accountId); }
@@ -116,9 +116,9 @@ export function listTransactions(db: Db, q: ListTransactionsQuery): TransactionP
     .all(...args, q.limit + 1) as TxnRow[];
   const page = rows.slice(0, q.limit);
   const last = page[page.length - 1];
-  const l = lookups(db, page);
+  const l = lookups(db, page, memberships(db, today));
   return {
-    transactions: page.map((r) => rowToTransaction(db, r, l)),
+    transactions: page.map((r) => rowToTransaction(r, l)),
     nextCursor: rows.length > q.limit && last ? encodeCursor(last.date, last.id) : null,
   };
 }
@@ -244,9 +244,9 @@ export function liveNetWorthCents(db: Db): number {
   return accounts.reduce((sum, a) => sum + (NEGATIVE_TYPES.has(a.type) ? -a.b : a.b), 0);
 }
 
-export function getHome(db: Db): Omit<Home, 'owedToYouCents' | 'youOweCents' | 'repaymentSuggestions' | 'toReconcile'> {
+export function getHome(db: Db, today: string): Omit<Home, 'owedToYouCents' | 'youOweCents' | 'repaymentSuggestions' | 'toReconcile'> {
   const netWorthCents = liveNetWorthCents(db);
-  const recent = listTransactions(db, { limit: 10 }).transactions;
+  const recent = listTransactions(db, { limit: 10 }, today).transactions;
   const reconnect = (db.prepare("SELECT id, institution_name FROM items WHERE status = 'login_required' ORDER BY institution_name").all() as { id: string; institution_name: string }[])
     .map((i) => ({ itemId: i.id, institutionName: i.institution_name }));
   return { netWorthCents, recent, reconnect };

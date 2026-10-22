@@ -1,14 +1,12 @@
 import type { NetWorthHistory, NetWorthQuery } from '@hermes/shared';
 import type { Db } from './db.ts';
+import { addDays } from './days.ts';
 import { type AccountEstimate, loadAccountEstimate } from './backfill.ts';
 import { liveNetWorthCents, NEGATIVE_TYPES } from './ledger.ts';
 
-const pad = (n: number) => String(n).padStart(2, '0');
+export { localDay } from './days.ts';
 
-/** The owner's day: the date in the process time zone (the TZ env var). */
-export function localDay(d: Date): string {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
+const pad = (n: number) => String(n).padStart(2, '0');
 
 /** Records today's balances; an unavailable linked account contributes zero without losing its history. A later call overwrites. */
 export function snapshotBalances(db: Db, day: string): void {
@@ -32,8 +30,7 @@ export function minusMonths(day: string, n: number): string {
 }
 
 export function nextDay(day: string): string {
-  const [y, m, d] = day.split('-').map(Number) as [number, number, number];
-  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+  return addDays(day, 1);
 }
 
 /** Rebuilt from transactions before their first snapshot; every other type holds flat at it. */
@@ -94,7 +91,7 @@ export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string
   let estimatedThrough: string | null = null;
   let i = 0;
   let j = 0;
-  for (let day = earliest; day <= today; day = nextDay(day)) {
+  for (let day = earliest; day <= today; day = addDays(day, 1)) {
     for (; j < moves.length && moves[j]!.date <= day; j += 1) {
       const m = moves[j]!;
       latest.set(m.accountId, latest.get(m.accountId)! + m.cents);

@@ -1,5 +1,7 @@
 import type { HistoryEntry, PeopleSettings, Person, PersonDetail, RepaymentSuggestion } from '@hermes/shared';
 import type { Db } from './db.ts';
+import { localDay } from './days.ts';
+import { memberships } from './recurring.ts';
 import { ApiError } from './errors.ts';
 import { TXN_COLS, lookups, rowToTransaction, type TxnRow } from './ledger.ts';
 
@@ -106,8 +108,8 @@ function repayments(db: Db, now: Date, people = listPeople(db, false).filter((p)
 
 export function suggestions(db: Db, now: Date): RepaymentSuggestion[] {
   const found = repayments(db, now);
-  const l = lookups(db, found.map((f) => f.r));
-  return found.map((f) => ({ transaction: rowToTransaction(db, f.r, l), personId: f.personId }));
+  const l = lookups(db, found.map((f) => f.r), memberships(db, localDay(now)));
+  return found.map((f) => ({ transaction: rowToTransaction(f.r, l), personId: f.personId }));
 }
 
 /** Home shares one balance read and counts suggestions without building Transactions. */

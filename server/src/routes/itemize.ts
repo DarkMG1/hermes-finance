@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { SaveItemsBody } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
+import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { applyItems, getItemization, ME, replaceItems } from '../itemize.ts';
@@ -17,7 +18,7 @@ export function itemizeRoutes(app: FastifyInstance, deps: Deps): void {
   app.post<{ Params: { id: string } }>('/v1/transactions/:id/receipt/read', async (req) => {
     const id = req.params.id;
     assertReceipt(id);
-    const txn = getTransaction(db, id)!;
+    const txn = getTransaction(db, id, localDay(deps.now()))!;
     if (txn.amountCents >= 0) throw new ApiError(409, 'NOT_MONEY_OUT', 'only money out can be itemized');
     const reader = deps.receiptReader;
     if (!reader) throw new ApiError(503, 'READER_NOT_CONFIGURED', 'receipt reading is not set up');
@@ -52,7 +53,7 @@ export function itemizeRoutes(app: FastifyInstance, deps: Deps): void {
     const r = idempotentWrite(deps, req, () => {
       const id = req.params.id;
       assertReceipt(id);
-      if (getTransaction(db, id)!.amountCents >= 0) throw new ApiError(409, 'NOT_MONEY_OUT', 'only money out can be itemized');
+      if (getTransaction(db, id, localDay(deps.now()))!.amountCents >= 0) throw new ApiError(409, 'NOT_MONEY_OUT', 'only money out can be itemized');
       return { status: 200, body: applyItems(db, id, body, deps.now().toISOString()) };
     });
     return reply.code(r.status).send(r.body);

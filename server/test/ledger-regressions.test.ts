@@ -17,13 +17,13 @@ test('legacy split replacements cannot erase names or people; explicit nulls cle
   seedTxn(deps.db, { id: 't', accountId: 'manual', date: '2026-03-01', amountCents: -200 });
   seedSplit(deps.db, { id: 'a', transactionId: 't', amountCents: -100, categoryId: null, payee: 'Synthetic Lamp' });
   seedSplit(deps.db, { id: 'b', transactionId: 't', amountCents: -100, categoryId: null, personId: 'p' });
-  const before = getTransaction(deps.db, 't');
+  const before = getTransaction(deps.db, 't', '2026-03-15');
   const full = [{ amountCents: -100, categoryId: null, personId: null, payee: null }, { amountCents: -100, categoryId: null, personId: null, payee: null }];
   for (const missing of ['personId', 'payee'] as const) {
     const lines = full.map((l) => ({ ...l, [missing]: undefined }));
     const res = await app.inject({ method: 'PUT', url: '/v1/transactions/t/splits', headers: w(missing), payload: { lines } });
     assert.deepEqual([res.statusCode, res.json().code], [409, 'APP_OUTDATED']);
-    assert.deepEqual(getTransaction(deps.db, 't'), before);
+    assert.deepEqual(getTransaction(deps.db, 't', '2026-03-15'), before);
   }
   const cleared = await app.inject({ method: 'PUT', url: '/v1/transactions/t/splits', headers: w('clear'), payload: { lines: full } });
   assert.equal(cleared.statusCode, 200);
@@ -37,10 +37,10 @@ test('an archived person can retain their role but cannot move from For to Paid 
   seedTxn(deps.db, { id: 'for', accountId: 'manual', date: '2026-03-01', amountCents: -200, personId: 'p' });
   seedTxn(deps.db, { id: 'paid', accountId: 'manual', date: '2026-03-01', amountCents: -200, paidByPersonId: 'p' });
   for (const [id, payload] of [['for', { personId: null, paidByPersonId: 'p' }], ['paid', { paidByPersonId: null, personId: 'p' }]] as const) {
-    const before = getTransaction(deps.db, id);
+    const before = getTransaction(deps.db, id, '2026-03-15');
     const res = await app.inject({ method: 'PATCH', url: `/v1/transactions/${id}`, headers: w(id), payload });
     assert.equal(res.statusCode, 400);
-    assert.deepEqual(getTransaction(deps.db, id), before);
+    assert.deepEqual(getTransaction(deps.db, id, '2026-03-15'), before);
   }
   assert.equal((await app.inject({ method: 'PATCH', url: '/v1/transactions/paid', headers: w('keep'), payload: { paidByPersonId: 'p' } })).statusCode, 200);
   deps.db.prepare("INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES ('paid', x'ffd8ff', 3, 'seed')").run();
@@ -60,7 +60,7 @@ test('a collapsed split keeps the winning name, category and person, or the pare
     seedSplit(deps.db, { id: `${id}-a`, transactionId: id, amountCents: -99, categoryId, personId, payee: name });
     seedSplit(deps.db, { id: `${id}-b`, transactionId: id, amountCents: -1, categoryId: null });
     fitSplitToAmount(deps.db, id, 'now');
-    const row = getTransaction(deps.db, id)!;
+    const row = getTransaction(deps.db, id, '2026-03-15')!;
     assert.deepEqual([row.payee, row.categoryId, row.personId, row.splitLines], [name ?? 'Synthetic Parent', categoryId, personId ?? null, []]);
   }
 });
@@ -155,7 +155,7 @@ test('transaction pages batch split and receipt reads without losing metadata or
   const prepare = deps.db.prepare.bind(deps.db);
   let reads = 0;
   t.mock.method(deps.db, 'prepare', (sql: string) => { reads += 1; return prepare(sql); });
-  const page = listTransactions(deps.db, { limit: 200 });
+  const page = listTransactions(deps.db, { limit: 200 }, '2026-03-15');
   assert.equal(page.transactions.length, 200);
   assert.equal(page.nextCursor, null);
   assert.ok(reads < 20, `${reads} queries for one page`);
@@ -177,7 +177,7 @@ test('itemization caps combined participants at 20 and its saved split can be ed
   assert.equal(SaveItemsBody.safeParse(body).success, false);
   assert.equal((await app.inject({ method: 'PUT', url: '/v1/transactions/t/receipt/items', headers: w('too-many'), payload: body })).statusCode, 400);
   assert.throws(() => writeSplit(deps.db, 't', -2100, Array.from({ length: 21 }, () => ({ amountCents: -100, categoryId: null })), 'items', 'now'));
-  assert.deepEqual(getTransaction(deps.db, 't')!.splitLines, []);
+  assert.deepEqual(getTransaction(deps.db, 't', '2026-03-15')!.splitLines, []);
   body.items[0]!.people = people.slice(0, 19);
   const saved = await app.inject({ method: 'PUT', url: '/v1/transactions/t/receipt/items', headers: w('valid'), payload: body });
   assert.equal(saved.statusCode, 200);

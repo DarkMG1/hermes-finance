@@ -3,7 +3,6 @@ import type { Db } from './db.ts';
 import type { Deps } from './deps.ts';
 import { PlaidError } from './plaid/port.ts';
 import { addDays } from './days.ts';
-import { localDay } from './networth.ts';
 
 const cents = (dollars: number) => Math.round(dollars * 100);
 // same transfer rule as cashflow/reconcile: card payments and transfers out aren't bills
@@ -142,7 +141,7 @@ export type MemberRow = { id: string; source: string; source_id: string | null; 
 /** Reads the visible Recurring items once (ended ones included) and returns which one each row's charge is in the History of: a posted Plaid
  * charge belongs to a stream with ids by id alone; any other row by exact name, or as a manual item's source charge while History falls back
  * to it. Callers pass only rows History can list (owner money out). */
-export function memberships(db: Db, today = localDay(new Date())): (rows: MemberRow[]) => Map<string, NonNullable<Transaction['recurring']>> {
+export function memberships(db: Db, today: string): (rows: MemberRow[]) => Map<string, NonNullable<Transaction['recurring']>> {
   let visible: Bill[] | null = null;
   return (rows) => {
     const out = new Map<string, NonNullable<Transaction['recurring']>>();

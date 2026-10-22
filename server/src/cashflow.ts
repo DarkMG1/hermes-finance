@@ -214,7 +214,8 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
     { payee: string | null; merchant_name: string | null; bank_description: string }[]).some((t) => [t.payee, t.merchant_name, t.bank_description].some(hit))) {
     collect((l) => ({ named: l.transaction_id === source && l.total < 0 && l.amount < 0 && l.name, whole: true }));
   }
-  const ordered = [...rows.values()].sort((a, b) => b.at[0].localeCompare(a.at[0]) || b.at[1].localeCompare(a.at[1]) || b.at[2] - a.at[2]);
+  const ordered = [...rows.values()].sort((a, b) => a.at[0] < b.at[0] ? 1 : a.at[0] > b.at[0] ? -1
+    : a.at[1] < b.at[1] ? 1 : a.at[1] > b.at[1] ? -1 : b.at[2] - a.at[2]);
   const months = Array.from({ length: 12 }, (_, i) => ({ month: monthBack(today, 11 - i), cents: 0 }));
   // a row someone else paid stores the owner's share; its receipt shows the whole charge
   const paidBy = new Map((db.prepare(`SELECT ri.transaction_id AS id, SUM(ri.amount_cents) + COALESCE(MAX(r.tax_cents), 0) + COALESCE(MAX(r.tip_cents), 0)

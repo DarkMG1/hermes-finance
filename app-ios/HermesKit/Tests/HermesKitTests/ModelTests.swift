@@ -63,7 +63,8 @@ func json(_ value: some Encodable) throws -> String {
 
 @Test func splitsBodySendsNullCategoriesAndOmitsEmptyNotes() throws {
     let body = PutSplitsBody(lines: [.init(amountCents: -1245, categoryId: nil, notes: nil), .init(amountCents: -1245, categoryId: "c1", notes: "n")])
-    #expect(try json(body) == #"{"lines":[{"amountCents":-1245,"categoryId":null},{"amountCents":-1245,"categoryId":"c1","notes":"n"}]}"#)
+    #expect(try json(body) == #"{"lines":[{"amountCents":-1245,"categoryId":null,"payee":null,"personId":null},"#
+        + #"{"amountCents":-1245,"categoryId":"c1","notes":"n","payee":null,"personId":null}]}"#)
 }
 
 @Test func linkSessionBodyMatchesTheServerUnion() throws {

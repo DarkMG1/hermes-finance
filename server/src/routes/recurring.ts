@@ -49,7 +49,7 @@ export function recurringRoutes(app: FastifyInstance, deps: Deps): void {
   app.post('/v1/recurring', async (req, reply) => {
     const body = parseBody(CreateRecurringBody, req.body);
     const r = idempotentWrite(deps, req, () => {
-      const t = getTransaction(db, body.transactionId);
+      const t = getTransaction(db, body.transactionId, localDay(deps.now()));
       if (!t) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
       if (t.amountCents >= 0) throw new ApiError(409, 'NOT_MONEY_OUT', 'only money out can recur');
       const matchText = normalizeName(t.payee);

@@ -1,6 +1,7 @@
 import type { InboxList, InboxReceipt, Itemization, LinkedReceipt, SaveItemsBody, Transaction } from '@hermes/shared';
 import type { Db } from './db.ts';
 import type { Deps } from './deps.ts';
+import { localDay } from './days.ts';
 import { ApiError } from './errors.ts';
 import { applyItems, computeShares, ME, replaceItems, ShareError } from './itemize.ts';
 import { getTransaction, lookups, rowToTransaction, TXN_COLS, type TxnRow } from './ledger.ts';
@@ -49,7 +50,7 @@ function candidates(db: Db, row: InboxRow, member: Member): { exact: Transaction
         AND NOT EXISTS (SELECT 1 FROM receipts r WHERE r.transaction_id = t.id)
       ORDER BY t.date DESC, t.created_at DESC, t.id DESC`).all(addDays(day, -1), addDays(day, 5)) as TxnRow[];
   const l = lookups(db, rows, member);
-  const txns = rows.map((r) => rowToTransaction(db, r, l));
+  const txns = rows.map((r) => rowToTransaction(r, l));
   const total = row.total_cents;
   const store = words(row.merchant);
   const exact = txns.filter((t) => -t.amountCents === total);
@@ -87,7 +88,7 @@ export function matchInbox(deps: Deps, onlyId?: string): number {
     })();
   }
   const rows = db.prepare('SELECT * FROM inbox_receipts WHERE linked_at IS NULL AND jpeg IS NOT NULL AND total_cents IS NOT NULL').all() as InboxRow[];
-  const member = memberships(db);
+  const member = memberships(db, localDay(deps.now()));
   const exact = new Map(rows.map((r) => [r.id, candidates(db, r, member).exact]));
   const claims = new Map<string, number>();
   for (const ts of exact.values()) for (const t of ts) claims.set(t.id, (claims.get(t.id) ?? 0) + 1);
@@ -112,7 +113,7 @@ export function linkInbox(deps: Deps, inboxId: string, transactionId: string): L
   return db.transaction(() => {
     const row = waitingRow(db, inboxId);
     if (!row || !row.jpeg) throw new ApiError(404, 'NOT_FOUND', 'inbox receipt not found');
-    const txn = getTransaction(db, transactionId);
+    const txn = getTransaction(db, transactionId, localDay(deps.now()));
     if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
     if (txn.amountCents >= 0) throw new ApiError(409, 'NOT_MONEY_OUT', 'only money out can have a receipt from the inbox');
     if (txn.hasReceipt) throw new ApiError(409, 'HAS_RECEIPT', 'this transaction already has a receipt');
@@ -160,7 +161,7 @@ function payeeFor(known: { payee: string; n: number }[], merchant: string | null
   return best?.payee ?? merchant;
 }
 
-export function listInbox(db: Db): InboxList {
+export function listInbox(db: Db, today: string): InboxList {
   const waiting = db.prepare('SELECT * FROM inbox_receipts WHERE linked_at IS NULL ORDER BY captured_at DESC, id').all() as InboxRow[];
   // the names shown on charges (a bank row's merchant until renamed); never a person's IOU or Zelle row
   const known = waiting.length ? db.prepare(`SELECT COALESCE(payee, merchant_name) AS payee, COUNT(*) AS n FROM transactions
@@ -170,7 +171,7 @@ export function listInbox(db: Db): InboxList {
   const linked = db.prepare(`SELECT * FROM inbox_receipts WHERE linked_at IS NOT NULL AND dismissed_at IS NULL AND linked_transaction_id IS NOT NULL
     AND EXISTS (SELECT 1 FROM receipts WHERE transaction_id = linked_transaction_id)
     ORDER BY linked_at DESC, id LIMIT 20`).all() as InboxRow[];
-  const member = memberships(db);
+  const member = memberships(db, today);
   return {
     waiting: waiting.map((r) => ({
       id: r.id, capturedAt: r.captured_at, status: status(r), merchant: r.merchant, purchaseDate: r.purchase_date, totalCents: r.total_cents,

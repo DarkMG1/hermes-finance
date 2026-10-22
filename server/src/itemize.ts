@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Itemization, SaveItemsBody, Transaction } from '@hermes/shared';
 import type { Db } from './db.ts';
+import { localDay } from './days.ts';
 import { ApiError } from './errors.ts';
 import { getTransaction } from './ledger.ts';
 import { assertPersonTaggable } from './people.ts';
@@ -103,7 +104,7 @@ export function replaceItems(db: Db, txnId: string, items: { name: string; amoun
 
 /** The items save: split (own purchase) or my share ("they paid"). The receipt exists; the row is live and money out. */
 export function applyItems(db: Db, id: string, body: SaveItemsBody, nowIso: string): Transaction {
-  const txn = getTransaction(db, id)!;
+  const txn = getTransaction(db, id, localDay(new Date(nowIso)))!;
   const payer = txn.paidByPersonId;
   body.items.forEach((item, i) => item.people.forEach((p) => {
     if (p === ME) return;
@@ -143,5 +144,5 @@ export function applyItems(db: Db, id: string, body: SaveItemsBody, nowIso: stri
   replaceItems(db, id, body.items);
   db.prepare('UPDATE receipts SET tax_cents = ?, tip_cents = ?, fees_cents = ?, applied_lines = ? WHERE transaction_id = ?')
     .run(body.taxCents, body.tipCents, body.feesCents, JSON.stringify(currentLines(db, id)), id);
-  return getTransaction(db, id)!;
+  return getTransaction(db, id, localDay(new Date(nowIso)))!;
 }

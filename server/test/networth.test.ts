@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.ts';
-import { getNetWorth, localDay, snapshotBalances } from '../src/networth.ts';
+import { getNetWorth, localDay, nextDay, snapshotBalances } from '../src/networth.ts';
 import { syncItem } from '../src/sync/run.ts';
 import { AUTH, makeTestDeps, seedAccount, seedItem, seedTxn } from './helpers.ts';
 import type { Db } from '../src/db.ts';
@@ -70,6 +70,14 @@ test('an Apple Card import snapshots the card balance', async () => {
 
 const snap = (db: Db, accountId: string, date: string, cents: number) =>
   db.prepare('INSERT INTO balance_snapshots (account_id, date, balance_cents) VALUES (?, ?, ?)').run(accountId, date, cents);
+
+test('history advances calendar days across years below 100', () => {
+  const { deps: { db } } = makeTestDeps();
+  seedAccount(db, { id: 'a1', balanceCents: 100 });
+  snap(db, 'a1', '0099-12-31', 100);
+  assert.equal(nextDay('0099-12-31'), '0100-01-01');
+  assert.deepEqual(getNetWorth(db, 'all', '0100-01-02').points.map((p) => p.date), ['0099-12-31', '0100-01-01', '0100-01-02']);
+});
 
 test('history carries balances forward, subtracts credit, and skips hidden accounts', () => {
   const { deps } = makeTestDeps();
