@@ -10,6 +10,7 @@ struct ActivityView: View {
     @State private var items: [LedgerTransaction] = []
     @State private var paging = PageCursor<TransactionQuery>()
     @State private var loading = false
+    @State private var needsManualLoad = false
     @State private var error: String?
     @State private var lastLoad: Loaded<TransactionPage>?
     @State private var selected: LedgerTransaction?
@@ -37,7 +38,9 @@ struct ActivityView: View {
                             if transaction.id == items.last?.id, cursor != nil { Task { await load(reset: false) } }
                         }
                 }
-                if cursor != nil && !loading { Button("Load more") { Task { await load(reset: false) } } }
+                if cursor != nil && !loading && (error != nil || needsManualLoad) {
+                    Button("Load more") { Task { await load(reset: false) } }
+                }
                 // before the first answer an empty list means nothing yet, not no transactions
                 if loading || (lastLoad == nil && error == nil) { ProgressView().frame(maxWidth: .infinity) }
                 if !loading && items.isEmpty && error == nil && lastLoad != nil {
@@ -128,9 +131,14 @@ struct ActivityView: View {
         do {
             let fresh = try await reader.read("/v1/transactions/\(id)", as: LedgerTransaction.self).value
             guard gen == generation, requested == filters, !Task.isCancelled else { return }
-            if requested.matchesFilters(fresh) { items.refreshTransaction(fresh) } else { items.removeAll { $0.id == id } }
+            let previousLastID = items.last?.id
+            if requested.matchesFilters(fresh) {
+                items.refreshTransaction(fresh, allLoaded: cursor == nil)
+            } else { items.removeAll { $0.id == id } }
+            needsManualLoad = needsManualLoad || items.last?.id != previousLastID
         } catch ClientError.api(status: 404, _) {
             guard gen == generation, requested == filters, !Task.isCancelled else { return }
+            if items.last?.id == id { needsManualLoad = true }
             items.removeAll { $0.id == id }
         } catch {
             guard gen == generation, requested == filters, !Task.isCancelled else { return }
@@ -140,7 +148,7 @@ struct ActivityView: View {
 
     private func load(reset: Bool) async {
         guard let reader = model.reader, reset || (!loading && cursor != nil) else { return }
-        if reset { generation += 1; items = []; paging.reset() }
+        if reset { generation += 1; paging.reset() }
         let gen = generation
         let requested = filters
         loading = true
@@ -150,7 +158,10 @@ struct ActivityView: View {
         do {
             let page = try await reader.read("/v1/transactions", query: request.items, as: TransactionPage.self)
             guard gen == generation, requested == filters, !Task.isCancelled else { return }
+            let previousLastID = items.last?.id
             items = (reset ? [] : items).appendingPage(page.value.transactions)
+            // An unchanged last row won't appear again to request the next page.
+            needsManualLoad = items.last?.id == previousLastID
             paging.didLoad(requested, nextCursor: page.value.nextCursor)
             lastLoad = page
             error = nil

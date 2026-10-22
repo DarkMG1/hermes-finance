@@ -15,6 +15,7 @@ struct PayeeHistoryView: View {
     @State private var rows: [PayeeHistoryRow] = []
     @State private var cursor: String?
     @State private var loading = false
+    @State private var needsManualLoad = false
     @State private var generation = 0
     @State private var error: String?
     @State private var opened: LedgerTransaction?
@@ -76,7 +77,9 @@ struct PayeeHistoryView: View {
                             if row.id == rows.last?.id, cursor != nil { Task { await load(reset: false) } }
                         }
                     }
-                    if cursor != nil && !loading { Button("Load more") { Task { await load(reset: false) } } }
+                    if cursor != nil && !loading && (error != nil || needsManualLoad) {
+                        Button("Load more") { Task { await load(reset: false) } }
+                    }
                     if rows.isEmpty { Text("No charges found").textStyle(.subhead, color: Palette.secondaryText) }
                 } header: {
                     // the same filter as tapping a bar, reachable by VoiceOver
@@ -164,7 +167,10 @@ struct PayeeHistoryView: View {
         do {
             let page = try await reader.read("/v1/payee-history", query: query, as: PayeeHistory.self)
             guard gen == generation, !Task.isCancelled else { return true }
+            let previousLastID = rows.last?.id
             rows = (reset ? [] : rows).appendingPage(page.value.rows)
+            // An unchanged last row won't appear again to request the next page.
+            needsManualLoad = rows.last?.id == previousLastID
             loadedMonth = requested
             cursor = page.value.nextCursor
             lastLoad = page

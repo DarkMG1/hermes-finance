@@ -43,33 +43,53 @@ private func row(_ id: String, _ date: String = "2026-03-10", account: String = 
 
 @Test func dateEditsReinsertWithinLoadedWindowUsingDescendingIDForTies() {
     var rows = [row("z", "2026-03-12"), row("m", "2026-03-11"), row("a", "2026-03-10")]
-    rows.refreshTransaction(row("a", "2026-03-11"))
+    rows.refreshTransaction(row("a", "2026-03-11"), allLoaded: false)
     #expect(rows.map(\.id) == ["z", "m", "a"])
-    rows.refreshTransaction(row("a", "2026-03-13"))
+    rows.refreshTransaction(row("a", "2026-03-13"), allLoaded: false)
     #expect(rows.map(\.id) == ["a", "z", "m"])
-    rows.refreshTransaction(row("z", "2026-03-11"))
+    rows.refreshTransaction(row("z", "2026-03-11"), allLoaded: false)
     #expect(rows.map(\.id) == ["a", "z", "m"])
-    rows.refreshTransaction(row("a", "2026-03-11"))
+    rows.refreshTransaction(row("a", "2026-03-11"), allLoaded: false)
     #expect(rows.map(\.id) == ["z", "m"])
 }
 
 @Test func dateEditsBelowOldBoundaryDropWithoutReplacingLoadedPages() {
     var rows = [row("z", "2026-03-12"), row("m", "2026-03-11"), row("a", "2026-03-10")]
-    rows.refreshTransaction(row("a", "2026-03-09"))
+    rows.refreshTransaction(row("a", "2026-03-09"), allLoaded: false)
     #expect(rows.map(\.id) == ["z", "m"])
-    rows.refreshTransaction(row("z", "2026-03-10"))
+    rows.refreshTransaction(row("z", "2026-03-10"), allLoaded: false)
     #expect(rows.map(\.id) == ["m"])
-    rows.refreshTransaction(row("m", "2026-03-10"))
+    rows.refreshTransaction(row("m", "2026-03-10"), allLoaded: false)
     #expect(rows.isEmpty)
-    rows.refreshTransaction(row("missing", "2026-03-13"))
+    rows.refreshTransaction(row("missing", "2026-03-13"), allLoaded: false)
     #expect(rows.isEmpty)
 }
 
-@Test func nonDateEditsReplaceInPlaceIncludingTheLastRow() {
+@Test func fullyLoadedDateEditsKeepRowsBelowTheOldBoundaryInSortedOrder() {
+    var rows = [row("z", "2026-03-12"), row("m", "2026-03-11"), row("a", "2026-03-10")]
+    let oldest = row("a", "2026-03-09")
+    rows.refreshTransaction(oldest, allLoaded: true)
+    #expect(rows == [row("z", "2026-03-12"), row("m", "2026-03-11"), oldest])
+    rows.refreshTransaction(row("z", "2026-03-08"), allLoaded: true)
+    #expect(rows.map(\.id) == ["m", "a", "z"])
+    rows.refreshTransaction(row("z", "2026-03-11"), allLoaded: true)
+    #expect(rows.map(\.id) == ["z", "m", "a"])
+}
+
+@Test func fullyLoadedSingleRowSurvivesAnEarlierDateEdit() {
+    var rows = [row("a")]
+    let edited = row("a", "2026-03-01")
+    rows.refreshTransaction(edited, allLoaded: true)
+    #expect(rows == [edited])
+    rows.refreshTransaction(row("missing"), allLoaded: true)
+    #expect(rows == [edited])
+}
+
+@Test(arguments: [false, true]) func nonDateEditsReplaceInPlaceIncludingTheLastRow(allLoaded: Bool) {
     var rows = [row("z"), row("a")]
     let edited = row("a", category: "c2")
-    rows.refreshTransaction(edited)
+    rows.refreshTransaction(edited, allLoaded: allLoaded)
     #expect(rows == [row("z"), edited])
-    rows.refreshTransaction(row("missing"))
+    rows.refreshTransaction(row("missing"), allLoaded: allLoaded)
     #expect(rows == [row("z"), edited])
 }

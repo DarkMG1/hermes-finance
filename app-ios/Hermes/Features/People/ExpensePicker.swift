@@ -63,7 +63,7 @@ struct ExpensePicker: View {
 
     private func load(reset: Bool) async {
         guard let reader = model.reader, reset || (!loading && cursor != nil) else { return }
-        if reset { generation += 1; items = []; paging.reset() }
+        if reset { generation += 1; paging.reset() }
         let gen = generation
         let requested = query
         loading = true

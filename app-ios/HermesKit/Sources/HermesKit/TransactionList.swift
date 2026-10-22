@@ -8,12 +8,12 @@ public extension Array where Element: Identifiable {
 }
 
 public extension Array where Element == LedgerTransaction {
-    /// A moved row stays only if it still sorts inside the previously loaded window.
-    mutating func refreshTransaction(_ fresh: LedgerTransaction) {
+    /// A moved row stays within the loaded window, or anywhere when all rows are loaded.
+    mutating func refreshTransaction(_ fresh: LedgerTransaction, allLoaded: Bool) {
         guard let index = firstIndex(where: { $0.id == fresh.id }), let boundary = last else { return }
         if self[index].date == fresh.date { self[index] = fresh; return }
         remove(at: index)
-        guard fresh.date > boundary.date || (fresh.date == boundary.date && fresh.id >= boundary.id) else { return }
+        guard allLoaded || fresh.date > boundary.date || (fresh.date == boundary.date && fresh.id >= boundary.id) else { return }
         let position = firstIndex { $0.date < fresh.date || ($0.date == fresh.date && $0.id < fresh.id) } ?? endIndex
         insert(fresh, at: position)
     }

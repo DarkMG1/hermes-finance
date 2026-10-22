@@ -26,7 +26,9 @@ struct InboxReceiptView: View {
     @State private var linkWrites = WriteGuard()
     @State private var linkTarget: String?
     @State private var payment = PendingWrite<CreateTransactionBody>()
-    /// Paid by added the transaction but the link failed: retry just the link.
+    /// Keep a created expense for link retries even after a definitive link rejection.
+    @State private var createdPayment: LedgerTransaction?
+    /// Lock competing actions only while the link's outcome is unknown.
     @State private var unlinked: LedgerTransaction?
 
     var body: some View {
@@ -68,8 +70,8 @@ struct InboxReceiptView: View {
                         Button("Link") { if let t = pickedToConfirm { Task { await link(t) } } }
                     }
                     .disabled(payment.guardState.unresolved || unlinked != nil)
-                if let unlinked {
-                    Button("Retry link to \(unlinked.payee)") { Task { await link(unlinked, thenItemize: true) } }
+                if let retry = unlinked ?? createdPayment {
+                    Button("Retry link to \(retry.payee)") { Task { await link(retry, thenItemize: createdPayment?.id == retry.id) } }
                 } else if payment.guardState.unresolved, let personId = payment.body?.paidByPersonId {
                     Button("Retry paid by \(model.personName(personId))") { Task { await paidBy(personId) } }
                 } else {
@@ -137,9 +139,10 @@ struct InboxReceiptView: View {
     }
 
     private func link(_ t: LedgerTransaction, thenItemize: Bool = false) async {
-        guard !busy, !payment.guardState.unresolved, unlinked == nil || (unlinked?.id == t.id && thenItemize),
+        guard !busy, !payment.guardState.unresolved, unlinked == nil || unlinked?.id == t.id,
               let client = model.client else { return }
-        if thenItemize { unlinked = t }
+        if thenItemize { createdPayment = t }
+        unlinked = t
         if linkTarget != t.id { linkWrites = WriteGuard(); linkTarget = t.id }
         busy = true
         defer { busy = false }
@@ -147,6 +150,7 @@ struct InboxReceiptView: View {
             let result = try await client.linkInboxReceipt(id: receipt.id, transactionId: t.id, idempotencyKey: linkWrites.key)
             linkWrites.didSucceed()
             unlinked = nil
+            createdPayment = nil
             await onChange()
             // tags that couldn't be applied: show the itemizing so the owner sees the shares weren't set
             guard thenItemize || (receipt.tagged && !result.splitApplied) else { dismiss(); return }
@@ -156,6 +160,7 @@ struct InboxReceiptView: View {
             if payer == nil { itemizing = .transaction(fresh ?? t) }
         } catch {
             linkWrites.didFail(error)
+            if !linkWrites.unresolved { unlinked = nil }
             if case .api(404, _) = error as? ClientError { await refresh() }
             self.error = linkWrites.unresolved ? "Couldn't confirm the link. Try again; it won't link twice." : errorMessage(error)
         }
@@ -163,7 +168,7 @@ struct InboxReceiptView: View {
 
     /// Logs the receipt total, retaining the submitted body until confirmed; after creation only the link is retried.
     private func paidBy(_ personId: String) async {
-        guard !busy, unlinked == nil, let client = model.client else { return }
+        guard !busy, unlinked == nil, createdPayment == nil, let client = model.client else { return }
         guard let total = receipt.totalCents ?? payment.body.map({ -$0.amountCents }) else { return }
         let body = payment.prepare(CreateTransactionBody(date: DayText.ymd(day), amountCents: -total,
                                                          payee: receipt.payee ?? receipt.merchant ?? "Receipt",
