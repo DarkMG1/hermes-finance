@@ -36,3 +36,12 @@ public struct PageCursor<Query: Equatable & Sendable>: Sendable {
 
     public mutating func didLoad(_ requested: Query, nextCursor: String?) { query = requested; cursor = nextCursor }
 }
+
+/// A successful reload must not erase the explanation for a failed write.
+public struct RequestErrors: Sendable {
+    public var read: String?
+    public var write: String?
+    public var message: String? { write ?? read }
+
+    public init() {}
+}

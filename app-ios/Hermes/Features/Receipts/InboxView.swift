@@ -26,12 +26,16 @@ struct InboxView: View {
                             Text("Waiting to upload").textStyle(.body)
                             Spacer()
                             Button("Retry") { Task { await queue.retryAll(client: model.client); await load() } }
+                                .disabled(queue.uploading.contains(id))
                         }
-                        .swipeActions { Button("Delete", role: .destructive) { deletingUpload = id } }
+                        .swipeActions {
+                            if !queue.uploading.contains(id) { Button("Delete", role: .destructive) { deletingUpload = id } }
+                        }
                         .confirmationDialog("Delete this receipt?", isPresented: Binding(get: { deletingUpload == id },
                                                                                           set: { if !$0 { deletingUpload = nil } }),
                                             titleVisibility: .visible) {
                             Button("Delete", role: .destructive) { queue.delete(id) }
+                                .disabled(queue.uploading.contains(id))
                         }
                     }
                 }

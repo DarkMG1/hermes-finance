@@ -11,6 +11,10 @@ public struct ReconcileList: Codable, Sendable {
     public let total: Int
     public let open: Int
     public let transactions: [LedgerTransaction]
+
+    public func excludingPendingChecks(_ ids: Set<String>) -> [LedgerTransaction] {
+        transactions.filter { !ids.contains($0.id) }
+    }
 }
 
 public struct ReconcileMonths: Codable, Sendable {

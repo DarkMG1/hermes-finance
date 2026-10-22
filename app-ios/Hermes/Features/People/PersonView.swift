@@ -6,6 +6,7 @@ struct PersonView: View {
     @Environment(AppModel.self) private var model
     let personId: String
     @State private var state: LoadState<PersonDetail> = .loading
+    @State private var loadGeneration = OpenGeneration()
     @State private var opening: LedgerTransaction?
     @State private var openGeneration = OpenGeneration()
     @State private var editing: Person?
@@ -193,13 +194,14 @@ struct PersonView: View {
 
     private func load() async {
         guard let reader = model.reader else { return }
+        let gen = loadGeneration.next()
         do {
             let loaded = try await reader.read("/v1/people/\(personId)", as: PersonDetail.self)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, loadGeneration.accepts(gen, presented: false) else { return }
             state = .loaded(loaded)
             error = nil
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, loadGeneration.accepts(gen, presented: false) else { return }
             state = .failed(errorMessage(error))
         }
     }
