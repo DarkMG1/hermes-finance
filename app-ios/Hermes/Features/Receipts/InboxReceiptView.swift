@@ -25,8 +25,7 @@ struct InboxReceiptView: View {
     @State private var linked: LedgerTransaction?
     @State private var linkWrites = WriteGuard()
     @State private var linkTarget: String?
-    @State private var payWrites = WriteGuard()
-    @State private var payTarget: String?
+    @State private var payment = PendingWrite<CreateTransactionBody>()
     /// Paid by added the transaction but the link failed: retry just the link.
     @State private var unlinked: LedgerTransaction?
 
@@ -59,7 +58,7 @@ struct InboxReceiptView: View {
                             }
                     }
                 }
-                .disabled(busy)
+                .disabled(busy || payment.guardState.unresolved || unlinked != nil)
             }
             Section {
                 Button("Link to transaction…") { picking = true }
@@ -68,26 +67,32 @@ struct InboxReceiptView: View {
                                         titleVisibility: .visible) {
                         Button("Link") { if let t = pickedToConfirm { Task { await link(t) } } }
                     }
+                    .disabled(payment.guardState.unresolved || unlinked != nil)
                 if let unlinked {
                     Button("Retry link to \(unlinked.payee)") { Task { await link(unlinked, thenItemize: true) } }
+                } else if payment.guardState.unresolved, let personId = payment.body?.paidByPersonId {
+                    Button("Retry paid by \(model.personName(personId))") { Task { await paidBy(personId) } }
                 } else {
                     Button("Paid by…") { choosingPayer = true }
                         .confirmationDialog("Who paid?", isPresented: $choosingPayer) {
                             ForEach(model.people.filter { !$0.archived }) { person in
-                                Button(person.name) { if receipt.totalCents != nil { Task { await paidBy(person) } } else { payer = person } }
+                                Button(person.name) { if receipt.totalCents != nil { Task { await paidBy(person.id) } } else { payer = person } }
                             }
                         }
                 }
                 Button("Itemize") { itemizing = .inbox(receipt.id) }
+                    .disabled(payment.guardState.unresolved || unlinked != nil)
                 // dialogs on their buttons: on the List they float mid-screen over the photo
                 Button("Read again") { if receipt.tagged { confirmReread = true } else { Task { await readAgain() } } }
                     .confirmationDialog("Read the receipt again?", isPresented: $confirmReread, titleVisibility: .visible) {
                         Button("Read again", role: .destructive) { Task { await readAgain() } }
                     } message: { Text("Replaces the items and who had them.") }
+                    .disabled(payment.guardState.unresolved || unlinked != nil)
                 Button("Delete", role: .destructive) { confirmDelete = true }
                     .confirmationDialog("Delete this receipt?", isPresented: $confirmDelete, titleVisibility: .visible) {
                         Button("Delete", role: .destructive) { Task { await delete() } }
                     }
+                    .disabled(payment.guardState.unresolved || unlinked != nil)
             }
             .disabled(busy)
             InlineError(message: error)
@@ -132,7 +137,9 @@ struct InboxReceiptView: View {
     }
 
     private func link(_ t: LedgerTransaction, thenItemize: Bool = false) async {
-        guard let client = model.client else { return }
+        guard !busy, !payment.guardState.unresolved, unlinked == nil || (unlinked?.id == t.id && thenItemize),
+              let client = model.client else { return }
+        if thenItemize { unlinked = t }
         if linkTarget != t.id { linkWrites = WriteGuard(); linkTarget = t.id }
         busy = true
         defer { busy = false }
@@ -149,28 +156,29 @@ struct InboxReceiptView: View {
             if payer == nil { itemizing = .transaction(fresh ?? t) }
         } catch {
             linkWrites.didFail(error)
-            unlinked = linkWrites.unresolved && thenItemize ? t : nil
             if case .api(404, _) = error as? ClientError { await refresh() }
             self.error = linkWrites.unresolved ? "Couldn't confirm the link. Try again; it won't link twice." : errorMessage(error)
         }
     }
 
-    /// Logs the receipt total as paid by `person`, links the receipt, and opens Itemize, whose save sets your share.
-    private func paidBy(_ person: Person) async {
-        guard let client = model.client, let total = receipt.totalCents else { return }
-        if payTarget != person.id { payWrites = WriteGuard(); payTarget = person.id }
+    /// Logs the receipt total, retaining the submitted body until confirmed; after creation only the link is retried.
+    private func paidBy(_ personId: String) async {
+        guard !busy, unlinked == nil, let client = model.client else { return }
+        guard let total = receipt.totalCents ?? payment.body.map({ -$0.amountCents }) else { return }
+        let body = payment.prepare(CreateTransactionBody(date: DayText.ymd(day), amountCents: -total,
+                                                         payee: receipt.payee ?? receipt.merchant ?? "Receipt",
+                                                         categoryId: nil, notes: nil, paidByPersonId: personId))
         busy = true
         do {
-            let created = try await client.createTransaction(
-                CreateTransactionBody(date: DayText.ymd(day), amountCents: -total, payee: receipt.payee ?? receipt.merchant ?? "Receipt",
-                                      categoryId: nil, notes: nil, paidByPersonId: person.id), idempotencyKey: payWrites.key)
-            payWrites.didSucceed()
+            let created = try await client.createTransaction(body, idempotencyKey: payment.guardState.key)
+            payment.guardState.didSucceed()
+            unlinked = created
             busy = false
             await link(created, thenItemize: true)
         } catch {
-            payWrites.didFail(error)
+            payment.guardState.didFail(error)
             busy = false
-            self.error = payWrites.unresolved ? "Couldn't confirm the save. Try again; it won't be added twice." : errorMessage(error)
+            self.error = payment.guardState.unresolved ? "Couldn't confirm the save. Try again; it won't be added twice." : errorMessage(error)
         }
     }
 

@@ -10,7 +10,7 @@ struct RecurringSheet: View {
     @State private var name = ""
     @State private var frequency = "monthly"
     @State private var writes = WriteGuard()
-    @State private var cancelWrites = WriteGuard()
+    @State private var cancellation = PendingWrite<Bool>()
     @State private var busy = false
     @State private var error: String?
     @State private var loaded = false
@@ -22,18 +22,19 @@ struct RecurringSheet: View {
     private var dirty: Bool { patch.name != nil || patch.frequency != nil }
 
     var body: some View {
-        Sheet(title: "Recurring", canSave: dirty, busy: busy, unresolved: writes.unresolved || cancelWrites.unresolved, dirty: dirty,
-              onCancel: { if writes.unresolved || cancelWrites.unresolved { Task { await onDone() } }; dismiss() },
+        Sheet(title: "Recurring", canSave: dirty && !cancellation.guardState.unresolved, busy: busy,
+              unresolved: writes.unresolved || cancellation.guardState.unresolved, dirty: dirty,
+              onCancel: { if writes.unresolved || cancellation.guardState.unresolved { Task { await onDone() } }; dismiss() },
               onSave: { Task { await send(patch, guard: $writes) } }
         ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
                 Field(label: "Name") { TextField("Name", text: $name) }
-                    .disabled(busy || writes.unresolved)
+                    .disabled(writes.unresolved || cancellation.guardState.unresolved)
                 Picker("Repeats", selection: $frequency) {
                     if item.frequency == "unknown" { Text(RecurringFrequency.label("unknown")).tag("unknown") }
                     ForEach(RecurringFrequency.writable, id: \.self) { Text(RecurringFrequency.label($0)).tag($0) }
                 }
-                .disabled(busy || writes.unresolved)
+                .disabled(writes.unresolved || cancellation.guardState.unresolved)
                 LabeledContent("Last charge") {
                     Text("\(DayText.display(item.lastDate)) · \(Money.format(item.lastCents))")
                 }
@@ -45,9 +46,12 @@ struct RecurringSheet: View {
                 InlineError(message: error)
                 // older servers don't send `ended` and reject it in a PATCH
                 if item.ended != nil {
-                    HButton(title: item.cancelled == true ? "Not cancelled" : "Mark as cancelled", kind: .secondary, busy: busy) {
-                        Task { await send(PatchRecurringBody(ended: item.cancelled != true), guard: $cancelWrites) }
+                    HButton(title: cancellation.guardState.unresolved ? "Retry \(cancellation.body == true ? "cancellation" : "undoing cancellation")"
+                            : item.cancelled == true ? "Not cancelled" : "Mark as cancelled", kind: .secondary, busy: busy) {
+                        let ended = cancellation.prepare(item.cancelled != true)
+                        Task { await send(PatchRecurringBody(ended: ended), guard: $cancellation.guardState) }
                     }
+                    .disabled(writes.unresolved)
                     // the separator under this button runs edge to edge, not from the label's inset
                     .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                 }
@@ -55,11 +59,13 @@ struct RecurringSheet: View {
                     HButton(title: item.hidden ? "Show again" : "Not recurring", kind: .destructive, busy: busy) {
                         Task { await send(PatchRecurringBody(hidden: !item.hidden)) }
                     }
+                    .disabled(writes.unresolved || cancellation.guardState.unresolved)
                 } else {
                     HButton(title: "Delete", kind: .destructive, busy: busy) { confirmDelete = true }
                         .confirmationDialog("Delete this recurring item?", isPresented: $confirmDelete, titleVisibility: .visible) {
                             Button("Delete", role: .destructive) { Task { await run(nil) { try await $0.deleteRecurring(id: item.id) } } }
                         }
+                        .disabled(writes.unresolved || cancellation.guardState.unresolved)
                 }
             } footer: {
                 if item.cancelled == true {

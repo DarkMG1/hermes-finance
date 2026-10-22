@@ -7,6 +7,7 @@ struct PersonView: View {
     let personId: String
     @State private var state: LoadState<PersonDetail> = .loading
     @State private var opening: LedgerTransaction?
+    @State private var openGeneration = OpenGeneration()
     @State private var editing: Person?
     @State private var adding: Adding?
     @State private var picked: LedgerTransaction?
@@ -79,6 +80,7 @@ struct PersonView: View {
         }
         .refreshable { await load() }
         .task { await load() }
+        .onDisappear { _ = openGeneration.next() }
         .sheet(item: $opening) { transaction in
             TransactionDetailSheet(transaction: transaction) { await load() }
         }
@@ -176,10 +178,15 @@ struct PersonView: View {
 
     private func open(_ transactionId: String) async {
         guard let reader = model.reader else { return }
+        let gen = openGeneration.next()
         do {
-            opening = try await reader.read("/v1/transactions/\(transactionId)", as: LedgerTransaction.self).value
+            let transaction = try await reader.read("/v1/transactions/\(transactionId)", as: LedgerTransaction.self).value
+            guard !Task.isCancelled, openGeneration.accepts(gen, presented: opening != nil || editing != nil || adding != nil
+                                                           || splitting != nil || forgiving != nil) else { return }
+            opening = transaction
             error = nil
         } catch {
+            guard !Task.isCancelled, openGeneration.accepts(gen, presented: opening != nil) else { return }
             self.error = errorMessage(error)
         }
     }

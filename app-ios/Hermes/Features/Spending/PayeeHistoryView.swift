@@ -76,6 +76,7 @@ struct PayeeHistoryView: View {
                             if row.id == rows.last?.id, cursor != nil { Task { await load(reset: false) } }
                         }
                     }
+                    if cursor != nil && !loading { Button("Load more") { Task { await load(reset: false) } } }
                     if rows.isEmpty { Text("No charges found").textStyle(.subhead, color: Palette.secondaryText) }
                 } header: {
                     // the same filter as tapping a bar, reachable by VoiceOver
@@ -163,7 +164,7 @@ struct PayeeHistoryView: View {
         do {
             let page = try await reader.read("/v1/payee-history", query: query, as: PayeeHistory.self)
             guard gen == generation, !Task.isCancelled else { return true }
-            rows = reset ? page.value.rows : rows + page.value.rows
+            rows = (reset ? [] : rows).appendingPage(page.value.rows)
             loadedMonth = requested
             cursor = page.value.nextCursor
             lastLoad = page

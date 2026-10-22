@@ -21,6 +21,7 @@ struct Sheet<Content: View>: View {
         NavigationStack {
             ScrollViewReader { scroller in
                 Form { content.environment(\.sheetScroller, scroller) }
+                    .disabled(busy)
                     .themedForm()
                     .safeAreaInset(edge: .top) { pinned }
                     // no keyboard bar: on iOS 26 it is see-through but still takes taps meant for the field behind it
