@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.ts';
 import { startScheduler } from '../src/scheduler.ts';
 import { syncAll, syncItem } from '../src/sync/run.ts';
+import { getNetWorth } from '../src/networth.ts';
+import { liveNetWorthCents } from '../src/ledger.ts';
 import { txn } from './fake-plaid.ts';
-import { makeTestDeps, AUTH, seedItem } from './helpers.ts';
+import { makeTestDeps, AUTH, seedAccount, seedItem } from './helpers.ts';
 
 function setup() {
   const { deps, plaid } = makeTestDeps();
@@ -54,6 +56,64 @@ test('a crash before commit leaves no data and the old cursor', async () => {
   assert.equal(count(), 0);
   assert.equal(item().cursor, null);
   assert.equal(item().status, 'error');
+});
+
+for (const perAccount of [false, true]) test(`a pre-cutover correction retires both source and pending rows atomically (account cutover: ${perAccount})`, async () => {
+  const { deps, plaid, item, count } = setup();
+  const queue = (added: ReturnType<typeof txn>[], modified: ReturnType<typeof txn>[], cursor: string) =>
+    plaid.queueSync([{ added, modified, removed: [], nextCursor: cursor, hasMore: false }]);
+  queue([txn({ transactionId: 'pending', pending: true, date: '2026-03-01' }),
+    txn({ transactionId: 'posted', pendingTransactionId: 'pending', date: '2026-03-01' })], [], 'before');
+  assert.equal((await syncItem(deps, 'i1')).result, 'ok');
+  if (perAccount) deps.db.prepare("UPDATE accounts SET cutover_date = '2026-03-01'").run();
+  else deps.db.prepare("INSERT INTO settings (key, value) VALUES ('cutover_date', '2026-03-01')").run();
+  // Include a predecessor that an older ingestion path left active.
+  deps.db.prepare("UPDATE transactions SET removed_at = NULL WHERE source_id = 'pending'").run();
+  deps.db.exec("CREATE TRIGGER fail_page BEFORE INSERT ON sync_pages BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END");
+  const corrected = txn({ transactionId: 'posted', pendingTransactionId: perAccount ? null : 'pending', date: '2026-02-28', amount: 9.5 });
+  queue([], [corrected], 'after');
+  assert.equal((await syncItem(deps, 'i1')).result, 'error');
+  assert.equal(item().cursor, 'before');
+  assert.equal(count(), 2);
+  deps.db.exec('DROP TRIGGER fail_page');
+  queue([], [corrected], 'after');
+  assert.equal((await syncItem(deps, 'i1')).result, 'ok');
+  assert.equal(item().cursor, 'after');
+  assert.equal(count(), 0);
+  assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM transactions').get() as { n: number }).n, 2);
+});
+
+test('a missing account loses its balance and net-worth contribution, keeps history and returns when reported again', async () => {
+  const { deps, plaid } = setup();
+  const { db } = deps;
+  seedItem(deps, { id: 'i2', plaidItemId: 'pi2', institutionName: 'Synthetic Other Bank', accessToken: 'tok-2' });
+  seedAccount(db, { id: 'other', itemId: 'i2', plaidAccountId: 'pa-other', balanceCents: 800 });
+  const reported = plaid.accounts;
+  plaid.queueSync([{ added: [txn({ transactionId: 'kept' })], modified: [], removed: [], nextCursor: 'c1', hasMore: false }]);
+  assert.equal((await syncItem(deps, 'i1')).result, 'ok');
+  deps.now = () => new Date('2026-03-16T12:00:00Z');
+  const account = () => db.prepare("SELECT id, hidden, balance_current_cents, balance_available_cents FROM accounts WHERE plaid_account_id = 'pa1'").get() as
+    { id: string; hidden: number; balance_current_cents: number | null; balance_available_cents: number | null };
+  const originalId = account().id;
+  const accountsGet = plaid.accountsGet.bind(plaid);
+  plaid.accountsGet = async () => { throw new Error('synthetic failure'); };
+  assert.equal((await syncItem(deps, 'i1')).result, 'error');
+  assert.equal(account().balance_current_cents, 10000);
+  plaid.accountsGet = accountsGet;
+  plaid.accounts = [];
+  assert.equal((await syncItem(deps, 'i1')).result, 'ok');
+  assert.deepEqual(account(), { id: originalId, hidden: 0, balance_current_cents: null, balance_available_cents: null });
+  assert.equal(liveNetWorthCents(db), 800);
+  const history = getNetWorth(db, 'all', '2026-03-16');
+  assert.deepEqual(history.points.slice(-2), [{ date: '2026-03-15', netWorthCents: 10800 }, { date: '2026-03-16', netWorthCents: 800 }]);
+  assert.equal(history.currentCents, 800);
+  assert.equal((db.prepare("SELECT removed_at FROM transactions WHERE source_id = 'kept'").get() as { removed_at: string | null }).removed_at, null);
+  deps.now = () => new Date('2026-03-17T12:00:00Z');
+  plaid.accounts = reported;
+  assert.equal((await syncItem(deps, 'i1')).result, 'ok');
+  assert.equal(account().id, originalId);
+  assert.equal(account().balance_current_cents, 10000);
+  assert.deepEqual(getNetWorth(db, 'all', '2026-03-17').points.slice(-3).map((p) => p.netWorthCents), [10800, 800, 10800]);
 });
 
 test('login required marks only that item, others still sync', async () => {

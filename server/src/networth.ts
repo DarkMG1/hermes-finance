@@ -10,11 +10,12 @@ export function localDay(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-/** Records today's balance for every account that has one; a later call the same day overwrites. */
+/** Records today's balances; an unavailable linked account contributes zero without losing its history. A later call overwrites. */
 export function snapshotBalances(db: Db, day: string): void {
   db.prepare(`
     INSERT INTO balance_snapshots (account_id, date, balance_cents)
-    SELECT id, ?, balance_current_cents FROM accounts WHERE balance_current_cents IS NOT NULL
+    SELECT id, ?, COALESCE(balance_current_cents, 0) FROM accounts
+      WHERE balance_current_cents IS NOT NULL OR (item_id IS NOT NULL AND balance_at IS NOT NULL)
     ON CONFLICT (account_id, date) DO UPDATE SET balance_cents = excluded.balance_cents`).run(day);
 }
 

@@ -40,6 +40,19 @@ private func itemJSON() throws -> Data {
     #expect(json.keys.sorted() == ["hidden"])
 }
 
+@Test func renamingIrregularBillOmitsFrequencyUntilChanged() throws {
+    var json = try #require(JSONSerialization.jsonObject(with: try itemJSON()) as? [String: Any])
+    json["frequency"] = "unknown"
+    let item = try JSONDecoder().decode(RecurringItem.self, from: JSONSerialization.data(withJSONObject: json))
+    let untouched = PatchRecurringBody(item: item, name: item.name, frequency: item.frequency)
+    #expect(untouched.name == nil && untouched.frequency == nil)
+    let renamed = PatchRecurringBody(item: item, name: " Synthetic Wren ", frequency: item.frequency)
+    let encoded = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(renamed)) as? [String: String])
+    #expect(encoded == ["name": "Synthetic Wren"])
+    let changed = PatchRecurringBody(item: item, name: item.name, frequency: "monthly")
+    #expect(changed.name == nil && changed.frequency == "monthly")
+}
+
 @Test func endedDecodesAndIsSent() async throws {
     var json = try #require(JSONSerialization.jsonObject(with: try itemJSON()) as? [String: Any])
     json["ended"] = nil

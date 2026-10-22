@@ -46,6 +46,32 @@ test('mark as recurring, rename, change interval, hide, show again, delete', asy
   assert.equal((await send('PATCH', '/v1/recurring/s-off', { hidden: false })).statusCode, 404);
 });
 
+test('renaming an irregular bill preserves its interval, prediction and monthly total', async () => {
+  const { get, send, db } = setup();
+  db.prepare("UPDATE recurring_streams SET frequency = 'unknown', next_date = NULL WHERE stream_id = 's-tv'").run();
+  const renamed = await send('PATCH', '/v1/recurring/s-tv', { name: 'Synthetic Wren' });
+  assert.equal(renamed.statusCode, 200);
+  assert.deepEqual([renamed.json().frequency, renamed.json().nextDate, renamed.json().monthlyCents], ['unknown', null, null]);
+  assert.equal((await get('/v1/recurring')).monthlyTotalCents, 0);
+  assert.equal((await send('PATCH', '/v1/recurring/s-tv', { frequency: 'unknown' })).statusCode, 400);
+});
+
+test('bill source fallback and matching refunds page in cursor order and average from the oldest month', async () => {
+  const { get, send, db } = setup();
+  const id = (await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly' })).json().id as string;
+  db.prepare("UPDATE transactions SET payee = 'Synthetic Wren' WHERE id = 'sub'").run();
+  seedCategory(db, { id: 'c-synthetic', name: 'Synthetic Category' });
+  for (const refund of ['refund-old', 'refund-new']) seedTxn(db, { id: refund, accountId: 'a1', date: '2026-01-10', amountCents: 100, payee: 'Synthetic Music', categoryId: 'c-synthetic' });
+  const first = await get(`/v1/payee-history?recurringId=${id}&limit=1`);
+  assert.deepEqual(first.rows.map((r: { transactionId: string }) => r.transactionId), ['sub']);
+  assert.deepEqual([first.totalCents, first.averageCents], [899, 300]);
+  const second = await get(`/v1/payee-history?recurringId=${id}&limit=1&cursor=${first.nextCursor}`);
+  assert.deepEqual(second.rows.map((r: { transactionId: string }) => r.transactionId), ['refund-new']);
+  const third = await get(`/v1/payee-history?recurringId=${id}&limit=1&cursor=${second.nextCursor}`);
+  assert.deepEqual(third.rows.map((r: { transactionId: string }) => r.transactionId), ['refund-old']);
+  assert.equal(third.nextCursor, null);
+});
+
 test('refusals: money in, already recurring (Plaid name), bad frequency; replay creates once', async () => {
   const { get, send } = setup();
   assert.equal((await send('POST', '/v1/recurring', { transactionId: 'refund', frequency: 'monthly' })).statusCode, 409);

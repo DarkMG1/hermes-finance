@@ -85,6 +85,36 @@ test('pending to posted works when the pending removal arrives in a later page',
   assert.ok(row('pend1')?.removed_at);
 });
 
+for (const [renamed, postedName] of [[false, 'Synthetic Posted'], [true, 'Synthetic Posted'], [false, '#1234']] as const)
+test(`a pending bill follows its posted source and repairs old links (${renamed}, ${postedName})`, async () => {
+  const { deps, apply, row } = setup();
+  const app = buildApp(deps);
+  apply([page({ added: [txn({ transactionId: 'pend', pending: true, merchantName: 'Synthetic Pending' })] })]);
+  const pendingId = row('pend')!.id;
+  const made = await app.inject({ method: 'POST', url: '/v1/recurring', headers: { ...AUTH, 'idempotency-key': 'bill' },
+    payload: { transactionId: pendingId, frequency: 'monthly' } });
+  assert.equal(made.statusCode, 201);
+  const id = made.json().id as string;
+  if (renamed) deps.db.prepare("UPDATE transactions SET payee = 'Synthetic Wren' WHERE id = ?").run(pendingId);
+  apply([page({ added: [txn({ transactionId: 'post', pendingTransactionId: 'pend', merchantName: postedName })] })]);
+  const postedId = row('post')!.id;
+  const link = () => deps.db.prepare('SELECT source_transaction_id, match_text FROM recurring_manual WHERE id = ?').get(id);
+  const expected = { source_transaction_id: postedId, match_text: renamed || postedName === '#1234' ? 'synthetic pending' : 'synthetic posted' };
+  assert.deepEqual(link(), expected);
+  // An already-promoted row from an older build is repaired even when Plaid sends no changes.
+  deps.db.prepare("UPDATE recurring_manual SET source_transaction_id = ?, match_text = 'synthetic pending' WHERE id = ?").run(pendingId, id);
+  apply([page({})]);
+  assert.deepEqual(link(), expected);
+  const get = async (url: string) => (await app.inject({ method: 'GET', url, headers: AUTH })).json();
+  assert.ok((await get('/v1/recurring')).items.some((i: { id: string }) => i.id === id));
+  assert.deepEqual((await get(`/v1/payee-history?recurringId=${id}`)).rows.map((r: { transactionId: string }) => r.transactionId), [postedId]);
+  assert.equal((await get(`/v1/transactions/${postedId}`)).recurring.id, id);
+  if (!renamed && postedName !== '#1234') {
+    apply([page({ added: [txn({ transactionId: 'next', date: '2026-04-10', merchantName: 'Synthetic Posted' })] })]);
+    assert.equal((await get('/v1/recurring')).items.find((i: { id: string }) => i.id === id).lastDate, '2026-04-10');
+  }
+});
+
 test('rows dated before the cutover date are skipped', () => {
   const { apply, row } = setup();
   apply([page({ added: [txn({ transactionId: 'old', date: '2026-02-28' }), txn({ transactionId: 'new', date: '2026-03-01' })] })], '2026-03-01');

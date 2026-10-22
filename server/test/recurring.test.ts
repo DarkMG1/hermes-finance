@@ -1,7 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { addInterval, getRecurring, normalizeName, refreshRecurring } from '../src/recurring.ts';
-import { makeTestDeps, seedAccount, seedItem, seedTxn } from './helpers.ts';
+import { addInterval, getRecurring, memberships, normalizeName, refreshRecurring } from '../src/recurring.ts';
+import { getPayeeHistory } from '../src/cashflow.ts';
+import { addDays } from '../src/days.ts';
+import { makeTestDeps, seedAccount, seedItem, seedPerson, seedTxn } from './helpers.ts';
 
 const stream = (id: string, extra: object = {}) => ({ streamId: id, name: 'Synthetic Stream', frequency: 'MONTHLY', averageAmount: 15.49, lastAmount: 15.49,
   lastDate: '2026-03-01', nextDate: '2026-04-01', isActive: true, status: 'MATURE', category: null, transactionIds: ['t-a', 't-b'], ...extra });
@@ -32,6 +34,49 @@ test('normalizeName and addInterval', () => {
   assert.equal(addInterval('2026-03-15', 'semi_monthly'), '2026-03-30');
   assert.equal(addInterval('2026-03-15', 'biweekly'), '2026-03-29');
   assert.equal(addInterval('2026-03-15', 'unknown'), null);
+  assert.equal(addDays('0099-12-31', 1), '0100-01-01');
+  assert.equal(addInterval('0099-12-31', 'weekly'), '0100-01-07');
+});
+
+test('a source corrected to an inflow stops being a bill or a fallback History charge', () => {
+  const { deps: { db } } = makeTestDeps();
+  seedAccount(db, { id: 'a1' });
+  seedTxn(db, { id: 'src', accountId: 'a1', date: '2026-03-02', amountCents: -1234, payee: 'Synthetic Wren', categoryId: null });
+  db.prepare("INSERT INTO recurring_manual (id, name, match_text, frequency, source_transaction_id, created_at) VALUES ('man', 'Synthetic Quill', 'synthetic quill', 'monthly', 'src', 'x')").run();
+  assert.equal(getRecurring(db, '2026-03-15', false).items.length, 1);
+  db.prepare("UPDATE transactions SET amount_cents = 1234, plaid_category = 'FOOD_AND_DRINK_COFFEE' WHERE id = 'src'").run();
+  assert.deepEqual(getRecurring(db, '2026-03-15', false), { items: [], upcoming: [], monthlyTotalCents: 0, dueThisWeek: 0 });
+  assert.deepEqual(getPayeeHistory(db, { recurringId: 'man', limit: 200 }, '2026-03-15').rows, []);
+});
+
+test('person-tagged charges neither set a bill price nor suppress its source fallback', () => {
+  const { deps: { db } } = makeTestDeps();
+  seedAccount(db, { id: 'a1' });
+  seedPerson(db, { id: 'p1', name: 'Synthetic Quill' });
+  seedTxn(db, { id: 'src', accountId: 'a1', date: '2026-03-02', amountCents: -1400, payee: 'Synthetic Wren' });
+  seedTxn(db, { id: 'tagged', accountId: 'a1', date: '2026-03-14', amountCents: -8800, payee: 'Synthetic Wren', personId: 'p1' });
+  db.prepare("INSERT INTO recurring_manual (id, name, match_text, frequency, source_transaction_id, created_at) VALUES ('man', 'Synthetic Wren', 'synthetic wren', 'monthly', 'src', 'x')").run();
+  const item = () => getRecurring(db, '2026-03-15', false).items[0]!;
+  assert.deepEqual([item().lastDate, item().lastCents, item().amountCents], ['2026-03-02', 1400, 1400]);
+  db.prepare("UPDATE transactions SET payee = 'Synthetic Moss' WHERE id = 'src'").run();
+  assert.equal(item().lastCents, 1400);
+  assert.deepEqual(getPayeeHistory(db, { recurringId: 'man', limit: 200 }, '2026-03-15').rows.map((r) => r.transactionId), ['src']);
+  db.prepare("UPDATE transactions SET person_id = 'p1' WHERE id = 'src'").run();
+  assert.equal(getRecurring(db, '2026-03-15', false).items.length, 0);
+});
+
+test('membership prefers a live same-name bill by the list day, while explicit stream ids win', () => {
+  const { deps, deps: { db } } = makeTestDeps();
+  seedItem(deps, { id: 'i1', plaidItemId: 'pi1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
+  const insert = db.prepare("INSERT INTO recurring_streams VALUES (?, 'i1', 'Synthetic Wren', ?, 1400, 1400, ?, NULL, 1, 'mature', 'x', ?)");
+  insert.run('missed', 'monthly', '2026-01-01', '["posted"]');
+  insert.run('live', 'annually', '2025-06-01', '[]');
+  assert.deepEqual(getRecurring(db, '2026-03-15', false).items.map((i) => [i.id, i.ended]), [['missed', true], ['live', false]]);
+  const rows = [{ id: 'manual', source: 'manual', source_id: null, pending: 0, payee: 'Synthetic Wren', merchant_name: null, bank_description: 'SYNTHETIC' },
+    { id: 'posted', source: 'plaid', source_id: 'posted', pending: 0, payee: 'Synthetic Wren', merchant_name: null, bank_description: 'SYNTHETIC' }];
+  const member = memberships(db, '2026-03-15')(rows);
+  assert.equal(member.get('manual')?.id, 'live');
+  assert.equal(member.get('posted')?.id, 'missed');
 });
 
 test('read model: active plaid streams with overrides, manual items, price up, monthly total, windows', () => {

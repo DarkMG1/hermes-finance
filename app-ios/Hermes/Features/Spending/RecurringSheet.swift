@@ -16,10 +16,8 @@ struct RecurringSheet: View {
     @State private var loaded = false
     @State private var confirmDelete = false
 
-    private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var patch: PatchRecurringBody {
-        PatchRecurringBody(name: !trimmedName.isEmpty && trimmedName != item.name ? trimmedName : nil,
-                           frequency: frequency != item.frequency ? frequency : nil)
+        PatchRecurringBody(item: item, name: name, frequency: frequency)
     }
     private var dirty: Bool { patch.name != nil || patch.frequency != nil }
 
@@ -32,6 +30,7 @@ struct RecurringSheet: View {
                 Field(label: "Name") { TextField("Name", text: $name) }
                     .disabled(busy || writes.unresolved)
                 Picker("Repeats", selection: $frequency) {
+                    if item.frequency == "unknown" { Text(RecurringFrequency.label("unknown")).tag("unknown") }
                     ForEach(RecurringFrequency.writable, id: \.self) { Text(RecurringFrequency.label($0)).tag($0) }
                 }
                 .disabled(busy || writes.unresolved)
@@ -76,7 +75,7 @@ struct RecurringSheet: View {
             guard !loaded else { return }
             loaded = true
             name = item.name
-            frequency = item.frequency == "unknown" ? "monthly" : item.frequency
+            frequency = item.frequency
         }
     }
 

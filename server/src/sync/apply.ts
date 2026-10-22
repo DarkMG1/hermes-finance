@@ -4,6 +4,7 @@ import type { PlaidAccount, PlaidTxn, SyncPage } from '../plaid/port.ts';
 import { plaidAmountToCents } from '../money.ts';
 import { fillFromMemory, fitSplitToAmount, merchantMemory } from '../ledger.ts';
 import { nameZellePayees } from '../zelle.ts';
+import { normalizeName } from '../recurring.ts';
 
 export type ApplyCounts = { added: number; modified: number; removed: number };
 
@@ -28,6 +29,9 @@ export function upsertAccounts(db: Db, itemId: string, accounts: PlaidAccount[],
     stmt.run({ id: randomUUID(), itemId, plaidAccountId: a.accountId, name: a.name, mask: a.mask, type: a.type, subtype: a.subtype,
       cur: toCents(a.currentBalance), avail: toCents(a.availableBalance), at: nowIso });
   }
+  db.prepare(`UPDATE accounts SET balance_current_cents = NULL, balance_available_cents = NULL
+    WHERE item_id = ? AND NOT EXISTS (SELECT 1 FROM json_each(?) WHERE value = accounts.plaid_account_id)`)
+    .run(itemId, JSON.stringify(accounts.map((a) => a.accountId)));
   // rows parked on a placeholder before Plaid said the account is an investment one; sync skips investment rows from here on
   db.prepare(`UPDATE transactions SET removed_at = ?, updated_at = ? WHERE source = 'plaid' AND removed_at IS NULL
     AND account_id IN (SELECT id FROM accounts WHERE item_id = ? AND type = 'investment')`).run(nowIso, nowIso, itemId);
@@ -67,7 +71,7 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
   const mappedCategory = db.prepare('SELECT category_id FROM plaid_category_map WHERE plaid_category = ?');
   const remembered = merchantMemory(db);
   const checkSuperseded = db.prepare("SELECT id FROM transactions WHERE source = 'plaid' AND pending_source_id = ?");
-  const getRow = db.prepare("SELECT id, date, date_owner_set, category_id, category_owner_set, payee, notes, person_id, repayment_dismissed FROM transactions WHERE source = 'plaid' AND source_id = ?");
+  const getRow = db.prepare("SELECT id, date, date_owner_set, category_id, category_owner_set, payee, notes, person_id, repayment_dismissed, pending_source_id FROM transactions WHERE source = 'plaid' AND source_id = ?");
   const upsert = db.prepare(`
     INSERT INTO transactions (id, account_id, source, source_id, date, authorized_date, amount_cents, bank_description, merchant_name,
       plaid_category, pending, pending_source_id, category_id, category_owner_set, payee, notes, person_id, repayment_dismissed, date_owner_set, created_at, updated_at)
@@ -85,7 +89,12 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
   const counts: ApplyCounts = { added: 0, modified: 0, removed: 0 };
   const write = (t: PlaidTxn): boolean => {
     const cutover = cutoverFor(t.accountId);
-    if (cutover && t.date < cutover) return false;
+    if (cutover && t.date < cutover) {
+      counts.removed += markRemoved.run(opts.nowIso, opts.nowIso, t.transactionId).changes;
+      const pending = t.pendingTransactionId ?? (getRow.get(t.transactionId) as { pending_source_id: string | null } | undefined)?.pending_source_id;
+      if (pending) counts.removed += markRemoved.run(opts.nowIso, opts.nowIso, pending).changes;
+      return false;
+    }
     // investment accounts count toward net worth by balance alone; their buys, sells and dividends aren't spending
     if (isInvestment.get(t.accountId)) return false;
     // If this is a pending row that is superseded by a posted row, don't insert/update it
@@ -149,6 +158,16 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
     for (const t of p.modified) if (write(t)) counts.modified += 1;
     for (const r of p.removed) counts.removed += markRemoved.run(opts.nowIso, opts.nowIso, r.transactionId).changes;
   }
+  // Also repairs bills promoted before this pass existed; owner-renamed match text stays intact.
+  const promoted = db.prepare(`SELECT m.id, m.match_text, p.id AS posted_id,
+      COALESCE(t.payee, t.merchant_name, t.bank_description) AS pending_name,
+      COALESCE(p.payee, p.merchant_name, p.bank_description) AS posted_name
+    FROM recurring_manual m JOIN transactions t ON t.id = m.source_transaction_id AND t.source = 'plaid'
+    JOIN transactions p ON p.source = 'plaid' AND p.pending_source_id = t.source_id AND p.pending = 0 AND p.removed_at IS NULL
+    JOIN accounts a ON a.id = p.account_id WHERE a.item_id = ?`).all(opts.itemId) as
+    { id: string; match_text: string; posted_id: string; pending_name: string; posted_name: string }[];
+  const moveBill = db.prepare('UPDATE recurring_manual SET source_transaction_id = ?, match_text = ? WHERE id = ?');
+  for (const r of promoted) moveBill.run(r.posted_id, r.match_text === normalizeName(r.pending_name) ? normalizeName(r.posted_name) || r.match_text : r.match_text, r.id);
   // new rows get their name, and history is backfilled on the first sync after deploy
   nameZellePayees(db, opts.nowIso);
   fillFromMemory(db, opts.nowIso);

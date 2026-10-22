@@ -2,6 +2,8 @@ import type { RecurringItem, RecurringList, Transaction } from '@hermes/shared';
 import type { Db } from './db.ts';
 import type { Deps } from './deps.ts';
 import { PlaidError } from './plaid/port.ts';
+import { addDays } from './days.ts';
+import { localDay } from './networth.ts';
 
 const cents = (dollars: number) => Math.round(dollars * 100);
 // same transfer rule as cashflow/reconcile: card payments and transfers out aren't bills
@@ -35,11 +37,6 @@ export const bankText = (b: string) => b.toLowerCase().replace(/\s+/g, ' ').trim
 const DAYS: Record<string, number> = { weekly: 7, biweekly: 14, semi_monthly: 15 };
 const MONTHS: Record<string, number> = { monthly: 1, annually: 12 };
 const FACTOR: Record<string, number> = { weekly: 52 / 12, biweekly: 26 / 12, semi_monthly: 2, monthly: 1, annually: 1 / 12 };
-
-const addDays = (ymd: string, n: number) => {
-  const [y, m, d] = ymd.split('-').map(Number) as [number, number, number];
-  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
-};
 
 /** k intervals after ymd, counted from ymd so month-end days don't drift. */
 export function addInterval(ymd: string, frequency: string, k = 1): string | null {
@@ -82,7 +79,7 @@ type OutRow = { date: string; amount_cents: number; names: Set<string> };
 // ponytail: one full scan of money-out rows per call; filter in SQL or index a normalized column if it gets slow
 function moneyOut(db: Db): OutRow[] {
   return (db.prepare(`SELECT date, amount_cents, payee, merchant_name, bank_description FROM transactions
-      WHERE removed_at IS NULL AND amount_cents < 0 ORDER BY date DESC, id DESC`).all() as
+      WHERE removed_at IS NULL AND amount_cents < 0 AND person_id IS NULL ORDER BY date DESC, id DESC`).all() as
     { date: string; amount_cents: number; payee: string | null; merchant_name: string | null; bank_description: string }[])
     .map((t) => ({ date: t.date, amount_cents: t.amount_cents, names: new Set([t.payee, t.merchant_name, t.bank_description].map((n) => (n ? normalizeName(n) : ''))) }));
 }
@@ -92,7 +89,7 @@ function manualItem(db: Db, m: ManualRow, out: OutRow[], today: string): { item:
   let rows = out.filter((t) => t.names.has(m.match_text)).slice(0, 6);
   const fallback = !rows.length;
   if (fallback && m.source_transaction_id) {
-    rows = db.prepare('SELECT date, amount_cents FROM transactions WHERE id = ? AND removed_at IS NULL')
+    rows = db.prepare('SELECT date, amount_cents FROM transactions WHERE id = ? AND removed_at IS NULL AND amount_cents < 0 AND person_id IS NULL')
       .all(m.source_transaction_id) as OutRow[];
   }
   if (!rows.length) return null;
@@ -145,13 +142,13 @@ export type MemberRow = { id: string; source: string; source_id: string | null; 
 /** Reads the visible Recurring items once (ended ones included) and returns which one each row's charge is in the History of: a posted Plaid
  * charge belongs to a stream with ids by id alone; any other row by exact name, or as a manual item's source charge while History falls back
  * to it. Callers pass only rows History can list (owner money out). */
-export function memberships(db: Db): (rows: MemberRow[]) => Map<string, NonNullable<Transaction['recurring']>> {
+export function memberships(db: Db, today = localDay(new Date())): (rows: MemberRow[]) => Map<string, NonNullable<Transaction['recurring']>> {
   let visible: Bill[] | null = null;
   return (rows) => {
     const out = new Map<string, NonNullable<Transaction['recurring']>>();
     if (!rows.length) return out;
-    // which item a row belongs to doesn't depend on the day; a charge's own stream id comes first, and an ended twin yields to a live one
-    visible ??= bills(db, '0000-01-01').filter((b) => !b.item.hidden).sort((a, b) => Number(a.item.ended) - Number(b.item.ended));
+    // a charge's own stream id comes first, and an ended twin yields to a live one
+    visible ??= bills(db, today).filter((b) => !b.item.hidden).sort((a, b) => Number(a.item.ended) - Number(b.item.ended));
     for (const r of rows) {
       const posted = r.source === 'plaid' && r.pending === 0 && r.source_id !== null;
       const names = [r.payee, r.merchant_name, r.bank_description].map((s) => (s ? normalizeName(s) : '')).filter(Boolean);

@@ -43,6 +43,12 @@ public struct PatchRecurringBody: Codable, Sendable {
         self.frequency = frequency
         self.ended = ended
     }
+
+    public init(item: RecurringItem, name: String, frequency: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.init(name: !trimmed.isEmpty && trimmed != item.name ? trimmed : nil,
+                  frequency: frequency != item.frequency ? frequency : nil)
+    }
 }
 
 public struct CreateRecurringBody: Codable, Sendable {

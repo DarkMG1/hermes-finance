@@ -372,7 +372,7 @@ export type RecurringItem = z.infer<typeof RecurringItem>;
 export const RecurringList = z.object({ upcoming: z.array(RecurringItem), items: z.array(RecurringItem), monthlyTotalCents: Cents, dueThisWeek: z.number().int() });
 export type RecurringList = z.infer<typeof RecurringList>;
 export const PatchRecurringBody = z.object({ hidden: z.boolean().optional(), name: z.string().trim().min(1).max(100).nullable().optional(), frequency: WritableFrequency.optional(),
-  /** true: cancelled as of its last charge (a newer charge brings it back); false: not cancelled. */
+  /** true: cancelled as of max(today, lastDate); only a charge strictly after that date revives it. false: not cancelled. */
   ended: z.boolean().optional() })
   .strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
 export type PatchRecurringBody = z.infer<typeof PatchRecurringBody>;
