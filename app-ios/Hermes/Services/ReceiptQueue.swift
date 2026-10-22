@@ -13,15 +13,12 @@ final class ReceiptQueue {
         return ReceiptQueueStore(directory: base.appending(path: "ReceiptQueue", directoryHint: .isDirectory))
     }()
 
-    @discardableResult
-    func selectServer(_ server: URL?, migratingLegacy: Bool = false) -> Bool {
+    func selectServer(_ server: URL?) {
         error = nil
         do {
-            try store.selectServer(server, migratingLegacy: migratingLegacy)
-            return true
+            try store.selectServer(server)
         } catch {
             self.error = "Couldn't open the saved receipt photos."
-            return false
         }
     }
 
@@ -41,6 +38,7 @@ final class ReceiptQueue {
     }
 
     func retryAll(client: APIClient?) async {
+        do { try store.reload() } catch { self.error = "Couldn't open the saved receipt photos." }
         let generation = store.generation
         for id in pending {
             guard generation == store.generation, !Task.isCancelled else { return }
@@ -57,7 +55,7 @@ final class ReceiptQueue {
     /// Keep the local photo until this connection's upload succeeds.
     @discardableResult
     private func upload(_ id: String, client: APIClient?) async -> Bool {
-        guard let client, client.baseURL == store.serverURL, let upload = store.beginUpload(id) else { return false }
+        guard let client, store.isForServer(client.baseURL), let upload = store.beginUpload(id) else { return false }
         defer { store.endUpload(upload) }
         guard let jpeg = try? Data(contentsOf: upload.file) else { return false }
         do {

@@ -19,12 +19,12 @@ public struct ReceiptQueueStore: Sendable {
 
     public init(directory: URL) { root = directory }
 
-    public mutating func selectServer(_ server: URL?, migratingLegacy: Bool = false) throws {
+    public mutating func selectServer(_ server: URL?, migratingLegacy: Bool = true) throws {
         generation += 1
-        serverURL = server
+        serverURL = server?.receiptServerURL
         pending = []
         directory = nil
-        guard let server else { return }
+        guard let server = serverURL else { return }
         let key = SHA256.hash(data: Data(server.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
         let directory = root.appending(path: key, directoryHint: .isDirectory)
         #if os(iOS)
@@ -34,23 +34,38 @@ public struct ReceiptQueueStore: Sendable {
         #endif
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: attributes)
         self.directory = directory
+        try reload(migratingLegacy: migratingLegacy)
+    }
+
+    public func isForServer(_ server: URL) -> Bool { server.receiptServerURL == serverURL }
+
+    public mutating func reload(migratingLegacy: Bool = true) throws {
+        guard let directory else { return }
+        var migrationError: Error?
         if migratingLegacy {
-            for file in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) where file.pathExtension == "jpg" {
-                try FileManager.default.moveItem(at: file, to: directory.appending(path: file.lastPathComponent))
+            do {
+                for file in try FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) where file.pathExtension == "jpg" {
+                    do {
+                        try FileManager.default.moveItem(at: file, to: directory.appending(path: file.lastPathComponent))
+                    } catch { migrationError = error }
+                }
+            } catch {
+                migrationError = error
             }
         }
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.creationDateKey])
         pending = files.filter { $0.pathExtension == "jpg" }
             .sorted { $0.receiptCreationDate > $1.receiptCreationDate }
             .map { $0.deletingPathExtension().lastPathComponent }
+        if let migrationError { throw migrationError }
     }
 
     public func file(_ id: String) -> URL? { directory?.appending(path: "\(id).jpg") }
 
     public mutating func add(_ jpeg: Data, id: String, server: URL? = nil) throws {
-        if let server, server != serverURL {
+        if let server, !isForServer(server) {
             var original = ReceiptQueueStore(directory: root)
-            try original.selectServer(server)
+            try original.selectServer(server, migratingLegacy: false)
             try original.add(jpeg, id: id)
             return
         }
@@ -89,5 +104,13 @@ public struct ReceiptQueueStore: Sendable {
 }
 
 private extension URL {
+    var receiptServerURL: URL {
+        guard var components = URLComponents(url: self, resolvingAgainstBaseURL: true) else { return self }
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        while components.percentEncodedPath.hasSuffix("/") { components.percentEncodedPath.removeLast() }
+        return components.url ?? self
+    }
+
     var receiptCreationDate: Date { (try? resourceValues(forKeys: [.creationDateKey]))?.creationDate ?? .distantPast }
 }

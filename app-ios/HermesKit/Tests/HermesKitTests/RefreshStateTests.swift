@@ -31,3 +31,15 @@ import Testing
     // A refused check can show the current server row again.
     #expect(list.excludingPendingChecks([]).contains { $0.id == checked.id })
 }
+
+@Test func reconcileMonthCounterUsesVisibleRowsWhileSummaryStillCountsPendingChecks() throws {
+    let list = try JSONDecoder().decode(ReconcileList.self, from: fixture("reconcile"))
+    let summaries = try JSONDecoder().decode(ReconcileMonths.self, from: fixture("reconcile-months")).months
+    let checked = try #require(list.transactions.first)
+    let rows = list.excludingPendingChecks([checked.id])
+    #expect(ReconcileMonth.openCount(list.month, loadedMonth: list.month, rows: rows, summaries: summaries) == list.open - 1)
+    let none = list.excludingPendingChecks(Set(list.transactions.map(\.id)))
+    #expect(ReconcileMonth.openCount(list.month, loadedMonth: list.month, rows: none, summaries: summaries) == 0)
+    #expect(ReconcileMonth.openCount(list.month, loadedMonth: nil, rows: rows, summaries: summaries) == list.open)
+    #expect(ReconcileMonth.openCount("2025-01", loadedMonth: list.month, rows: rows, summaries: summaries) == nil)
+}

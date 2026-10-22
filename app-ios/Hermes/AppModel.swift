@@ -48,7 +48,7 @@ final class AppModel {
         }
         guard let token = keychain.read("apiToken") else { return }
         try? keychain.write("apiToken", token)
-        configure(url: url, token: token, migratingReceipts: true)
+        configure(url: url, token: token)
     }
 
     var serverURL: String { UserDefaults.standard.string(forKey: "serverURL") ?? "" }
@@ -60,8 +60,6 @@ final class AppModel {
         let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
         _ = try await APIClient(baseURL: url, token: trimmedToken, transport: URLSessionTransport()).accounts()
         try keychain.write("apiToken", trimmedToken)
-        // Unscoped photos without a saved origin must never be adopted by a newly entered server.
-        UserDefaults.standard.set(true, forKey: "receiptQueueScoped")
         UserDefaults.standard.set(url.absoluteString, forKey: "serverURL")
         configure(url: url, token: trimmedToken)
         await refreshReferenceData()
@@ -71,7 +69,6 @@ final class AppModel {
         session += 1
         referenceRefresh.invalidate()
         receiptQueue.selectServer(nil)
-        UserDefaults.standard.set(true, forKey: "receiptQueueScoped")
         URLCache.shared.removeAllCachedResponses()
         keychain.delete("apiToken")
         UserDefaults.standard.removeObject(forKey: "serverURL")
@@ -112,11 +109,10 @@ final class AppModel {
         return "\(amountCents < 0 ? "Owed" : "Repaid") · \(personName(personId))"
     }
 
-    private func configure(url: URL, token: String, migratingReceipts: Bool = false) {
+    private func configure(url: URL, token: String) {
         session += 1
         referenceRefresh.invalidate()
-        let migrate = migratingReceipts && !UserDefaults.standard.bool(forKey: "receiptQueueScoped")
-        if receiptQueue.selectServer(url, migratingLegacy: migrate) { UserDefaults.standard.set(true, forKey: "receiptQueueScoped") }
+        receiptQueue.selectServer(url)
         let client = APIClient(baseURL: url, token: token, transport: URLSessionTransport())
         self.client = client
         reader = Reader(client: client, cache: cache)

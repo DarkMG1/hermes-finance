@@ -78,7 +78,7 @@ struct ReconcileView: View {
         return Menu {
             Picker("Month", selection: Binding(get: { month ?? current }, set: { month = $0 })) {
                 ForEach(options, id: \.self) { option in
-                    let open = months.first { $0.month == option }?.open
+                    let open = ReconcileMonth.openCount(option, loadedMonth: loadedMonth, rows: rows, summaries: months)
                     Text(open.map { "\(ReconcileMonth.title(option)) · \($0)" } ?? ReconcileMonth.title(option)).tag(option)
                 }
             }

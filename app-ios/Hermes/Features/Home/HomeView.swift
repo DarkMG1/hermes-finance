@@ -20,6 +20,7 @@ struct HomeView: View {
     @State private var showingInbox = false
     @State private var handledSnaps = 0
     @State private var loadGeneration = OpenGeneration()
+    @State private var referencesLoaded = false
 
     var body: some View {
         Screen(title: "Home") {
@@ -103,13 +104,17 @@ struct HomeView: View {
                 }
                 Card {
                     Text("Recent").textStyle(.headline)
-                    if loaded.value.recent.isEmpty {
-                        Text("No transactions yet").textStyle(.subhead, color: Palette.secondaryText)
-                    }
-                    ForEach(loaded.value.recent) { transaction in
-                        Button { selected = transaction } label: { TransactionRow(transaction: transaction) }
-                            .buttonStyle(.plain)
-                        if transaction.id != loaded.value.recent.last?.id { Divider().overlay(Palette.separator) }
+                    if referencesLoaded {
+                        if loaded.value.recent.isEmpty {
+                            Text("No transactions yet").textStyle(.subhead, color: Palette.secondaryText)
+                        }
+                        ForEach(loaded.value.recent) { transaction in
+                            Button { selected = transaction } label: { TransactionRow(transaction: transaction) }
+                                .buttonStyle(.plain)
+                            if transaction.id != loaded.value.recent.last?.id { Divider().overlay(Palette.separator) }
+                        }
+                    } else {
+                        ProgressView()
                     }
                 }
             }
@@ -225,7 +230,10 @@ struct HomeView: View {
             guard !Task.isCancelled, loadGeneration.accepts(gen, presented: false) else { return }
             state = .failed(errorMessage(error))
         }
-        _ = await (references, holdings)
+        await references
+        guard !Task.isCancelled, loadGeneration.accepts(gen, presented: false) else { return }
+        referencesLoaded = true
+        await holdings
     }
 
     private func loadInvestments(reader: Reader, generation: Int) async {

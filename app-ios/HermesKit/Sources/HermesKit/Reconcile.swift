@@ -22,6 +22,10 @@ public struct ReconcileMonths: Codable, Sendable {
 }
 
 public enum ReconcileMonth {
+    public static func openCount(_ month: String, loadedMonth: String?, rows: [LedgerTransaction], summaries: [ReconcileSummary]) -> Int? {
+        month == loadedMonth ? rows.count : summaries.first { $0.month == month }?.open
+    }
+
     /// "2026-09" → "September 2026".
     public static func title(_ month: String) -> String {
         let parts = month.split(separator: "-").compactMap { Int($0) }
