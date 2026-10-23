@@ -274,3 +274,16 @@ test('a newly reported null balance never becomes a zero snapshot anchor', async
   assert.deepEqual(deps.db.prepare('SELECT * FROM balance_snapshots').all(), []);
   assert.deepEqual(getNetWorth(deps.db, 'all', '2026-03-15').points, []);
 });
+
+test('a reported null balance writes a zero snapshot when the account already has history', async () => {
+  const { deps, plaid } = setup();
+  assert.equal((await syncItem(deps, 'i1')).result, 'ok');
+  deps.now = () => new Date('2026-03-16T12:00:00Z');
+  plaid.accounts[0]!.currentBalance = null;
+  plaid.accounts[0]!.availableBalance = null;
+  assert.equal((await syncItem(deps, 'i1')).result, 'ok');
+  assert.deepEqual(deps.db.prepare('SELECT date, balance_cents FROM balance_snapshots ORDER BY date').all(), [
+    { date: '2026-03-15', balance_cents: 10000 },
+    { date: '2026-03-16', balance_cents: 0 },
+  ]);
+});

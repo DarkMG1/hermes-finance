@@ -185,6 +185,7 @@ struct InboxReceiptView: View {
         } catch {
             payment.guardState.didFail(error)
             busy = false
+            if case .api(404, _) = error as? ClientError { await refresh() }
             self.error = payment.guardState.unresolved ? "Couldn't confirm the save. Try again; it won't be added twice." : errorMessage(error)
         }
     }
