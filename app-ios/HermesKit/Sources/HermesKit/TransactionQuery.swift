@@ -1,6 +1,6 @@
 import Foundation
 
-public struct TransactionQuery: Sendable, Equatable {
+public struct TransactionQuery: Sendable, Hashable {
     public var accountId: String?
     public var categoryId: String?
     public var personId: String?
@@ -14,6 +14,14 @@ public struct TransactionQuery: Sendable, Equatable {
         self.q = q
         self.personId = personId
         self.cursor = cursor
+    }
+
+    /// Matches the server's account/category/person filters; text search still needs a server reload.
+    public func matchesFilters(_ transaction: LedgerTransaction) -> Bool {
+        (accountId == nil || transaction.accountId == accountId)
+            && (categoryId == nil || transaction.categoryId == categoryId || transaction.splitLines.contains { $0.categoryId == categoryId })
+            && (personId == nil || transaction.personId == personId || transaction.paidByPersonId == personId
+                || transaction.splitLines.contains { $0.personId == personId })
     }
 
     /// The server caps q at 100 UTF-16 units; cut on a character boundary so an emoji is never split.

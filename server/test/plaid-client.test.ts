@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import type { LinkTokenGetSessionsResponse } from 'plaid';
-import { buildLinkTokenRequest, mapLinkSessions } from '../src/plaid/client.ts';
+import { PlaidApi, type LinkTokenGetSessionsResponse } from 'plaid';
+import { makeTestDeps } from './helpers.ts';
+import { buildLinkTokenRequest, createPlaidClient, mapLinkSessions } from '../src/plaid/client.ts';
 
 const T = '2026-03-15T12:00:00Z';
 const exited: LinkTokenGetSessionsResponse = { link_session_id: 'ls-exit', finished_at: T, exit: { error: null, metadata: null } };
@@ -46,4 +47,38 @@ test('link tokens ask for Investments: optional on create, consent on update onl
   const consent = buildLinkTokenRequest({ mode: 'update', accessToken: 'tok', addInvestments: true });
   assert.deepEqual(consent.additional_consented_products, ['investments']);
   assert.equal(consent.products, undefined);
+});
+
+test('investment pagination returns response account coverage, including empty accounts', async (t) => {
+  const { deps } = makeTestDeps();
+  const pages = [
+    { accounts: [{ account_id: 'pinv' }, { account_id: 'empty' }], investment_transactions: [{ investment_transaction_id: 't1', account_id: 'pinv', date: '2026-03-01', type: 'buy', quantity: 1, amount: 10 }], securities: [], total_investment_transactions: 2 },
+    { accounts: [{ account_id: 'empty' }, { account_id: 'pinv' }], investment_transactions: [{ investment_transaction_id: 't2', account_id: 'pinv', date: '2026-03-02', type: 'buy', quantity: 1, amount: 10 }], securities: [], total_investment_transactions: 2 },
+  ];
+  const offsets: number[] = [];
+  t.mock.method(PlaidApi.prototype, 'investmentsTransactionsGet', async (request: { options: { offset: number } }) => {
+    offsets.push(request.options.offset);
+    return { data: pages.shift()! };
+  });
+  const result = await createPlaidClient(deps.config).investmentsTransactionsGet('synthetic-token', '2026-03-01', '2026-03-15');
+  assert.deepEqual(result.accountIds, ['pinv', 'empty']);
+  assert.deepEqual(result.transactions.map((r) => r.id), ['t1', 't2']);
+  assert.deepEqual(offsets, [0, 1]);
+});
+
+for (const incomplete of ['empty page', 'failed page', 'coverage changed', 'total changed', 'duplicate'])
+test(`investment pagination rejects an incomplete fetch: ${incomplete}`, async (t) => {
+  const { deps } = makeTestDeps();
+  const trade = { investment_transaction_id: 't1', account_id: 'pinv', date: '2026-03-01', type: 'buy', quantity: 1, amount: 10 };
+  let calls = 0;
+  t.mock.method(PlaidApi.prototype, 'investmentsTransactionsGet', async () => {
+    calls += 1;
+    if (calls === 2 && incomplete === 'failed page') throw new Error('synthetic failure');
+    return { data: {
+      accounts: [{ account_id: calls === 2 && incomplete === 'coverage changed' ? 'other' : 'pinv' }],
+      investment_transactions: calls === 1 || incomplete === 'duplicate' ? [trade] : [], securities: [],
+      total_investment_transactions: calls === 2 && incomplete === 'total changed' ? 1 : 2,
+    } };
+  });
+  await assert.rejects(createPlaidClient(deps.config).investmentsTransactionsGet('synthetic-token', '2026-03-01', '2026-03-15'));
 });

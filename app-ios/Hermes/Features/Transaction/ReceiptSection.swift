@@ -1,5 +1,4 @@
 import HermesKit
-import PhotosUI
 import SwiftUI
 import UIKit
 import VisionKit
@@ -21,11 +20,7 @@ struct ReceiptSection: View {
     @State private var loadError: String?
     /// Deleted here, so `hadReceipt` no longer holds.
     @State private var removed = false
-    @State private var pickerItem: PhotosPickerItem?
     @State private var choosingSource = false
-    @State private var choosingPhoto = false
-    @State private var takingPhoto = false
-    @State private var scanning = false
     @State private var viewing = false
     @State private var confirmDelete = false
 
@@ -57,55 +52,8 @@ struct ReceiptSection: View {
                 if busy { ProgressView() } else { Text((hadReceipt && !removed) || image != nil ? "Replace receipt" : "Add receipt") }
             }
             .disabled(busy || loading)
-            .confirmationDialog("Receipt", isPresented: $choosingSource) {
-                if VNDocumentCameraViewController.isSupported {
-                    Button("Scan receipt") { scanning = true }
-                }
-                if UIImagePickerController.isSourceTypeAvailable(.camera) {
-                    Button("Take photo") { takingPhoto = true }
-                }
-                Button("Choose photo") { choosingPhoto = true }
-            }
             // on the Button, not the Group: in a Form each Group child is its own row and would get its own copy
-            .photosPicker(isPresented: $choosingPhoto, selection: $pickerItem, matching: .images)
-            .onChange(of: pickerItem) { _, item in
-                guard let item else { return }
-                pickerItem = nil
-                guard !busy else { return }
-                busy = true
-                Task {
-                    defer { busy = false }
-                    guard let data = try? await item.loadTransferable(type: Data.self), let picked = UIImage(data: data) else {
-                        error = "Couldn't read that photo."
-                        return
-                    }
-                    await upload(picked)
-                }
-            }
-            .fullScreenCover(isPresented: $takingPhoto) {
-                CameraPicker { photo in
-                    takingPhoto = false
-                    guard let photo, !busy else { return }
-                    busy = true
-                    Task {
-                        defer { busy = false }
-                        await upload(photo)
-                    }
-                }
-                .ignoresSafeArea()
-            }
-            .fullScreenCover(isPresented: $scanning) {
-                DocumentScanner { scan in
-                    scanning = false
-                    guard let scan, !busy else { return }
-                    busy = true
-                    Task {
-                        defer { busy = false }
-                        await upload(scan, scan: true)
-                    }
-                }
-                .ignoresSafeArea()
-            }
+            .receiptCamera(isPresented: $choosingSource, busy: $busy, onImage: { photo, scan in await upload(photo, scan: scan) })
             .task { await load() }
             if image != nil {
                 Button("Delete receipt", role: .destructive) { confirmDelete = true }

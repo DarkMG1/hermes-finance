@@ -75,7 +75,7 @@ test('migration 016 marks every money-out row before 2026-09-01, whatever the ru
   }
   seedAll(db);
   seedTxn(db, { id: 'september', accountId: 'chk', date: '2026-09-01', amountCents: -500, categoryId: 'food' });
-  assert.equal(migrate(db), 22);
+  assert.equal(migrate(db), 23);
   const ids = (sql: string) => (db.prepare(sql).all() as { id: string }[]).map((r) => r.id);
   const moneyOutBefore = ids("SELECT id FROM transactions WHERE date < '2026-09-01' AND amount_cents < 0 ORDER BY id");
   assert.ok(moneyOutBefore.includes('xfer-cat'));
@@ -90,14 +90,14 @@ test('Transaction reports reconciled only while the amount matches, and hasRecei
   const { deps } = makeTestDeps();
   seedAccount(deps.db, { id: 'chk' });
   seedTxn(deps.db, { id: 't1', accountId: 'chk', date: '2026-03-01', amountCents: -500 });
-  assert.equal(getTransaction(deps.db, 't1')?.reconciled, false);
-  assert.equal(getTransaction(deps.db, 't1')?.hasReceipt, false);
+  assert.equal(getTransaction(deps.db, 't1', '2026-03-15')?.reconciled, false);
+  assert.equal(getTransaction(deps.db, 't1', '2026-03-15')?.hasReceipt, false);
   deps.db.prepare("UPDATE transactions SET reconciled_at = 'x', reconciled_cents = -500 WHERE id = 't1'").run();
-  assert.equal(getTransaction(deps.db, 't1')?.reconciled, true);
+  assert.equal(getTransaction(deps.db, 't1', '2026-03-15')?.reconciled, true);
   deps.db.prepare("UPDATE transactions SET amount_cents = -650 WHERE id = 't1'").run();
-  assert.equal(getTransaction(deps.db, 't1')?.reconciled, false);
+  assert.equal(getTransaction(deps.db, 't1', '2026-03-15')?.reconciled, false);
   deps.db.prepare("INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES ('t1', x'FFD8FF00', 4, 'x')").run();
-  assert.equal(getTransaction(deps.db, 't1')?.hasReceipt, true);
+  assert.equal(getTransaction(deps.db, 't1', '2026-03-15')?.hasReceipt, true);
 });
 
 function api() {
@@ -161,7 +161,7 @@ test('marking with the amount the owner saw: a stale amount is 409 and writes no
   const stale = await mark('feb-a', true, 'k-stale', -150);
   assert.equal(stale.statusCode, 409);
   assert.equal(stale.json().code, 'AMOUNT_CHANGED');
-  assert.equal(getTransaction(deps.db, 'feb-a')?.reconciled, false);
+  assert.equal(getTransaction(deps.db, 'feb-a', '2026-03-15')?.reconciled, false);
   assert.equal((await get('/v1/reconcile?month=2026-02')).open, 2);
   const ok = await mark('feb-a', true, 'k-match', -200);
   assert.equal(ok.statusCode, 200);

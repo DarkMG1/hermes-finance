@@ -8,8 +8,9 @@ struct ActivityView: View {
     @State private var categoryId: String?
     @State private var personId: String?
     @State private var items: [LedgerTransaction] = []
-    @State private var cursor: String?
+    @State private var paging = PageCursor<TransactionQuery>()
     @State private var loading = false
+    @State private var needsManualLoad = false
     @State private var error: String?
     @State private var lastLoad: Loaded<TransactionPage>?
     @State private var selected: LedgerTransaction?
@@ -37,6 +38,9 @@ struct ActivityView: View {
                             if transaction.id == items.last?.id, cursor != nil { Task { await load(reset: false) } }
                         }
                 }
+                if cursor != nil && !loading && (error != nil || needsManualLoad) {
+                    Button("Load more") { Task { await load(reset: false) } }
+                }
                 // before the first answer an empty list means nothing yet, not no transactions
                 if loading || (lastLoad == nil && error == nil) { ProgressView().frame(maxWidth: .infinity) }
                 if !loading && items.isEmpty && error == nil && lastLoad != nil {
@@ -59,7 +63,7 @@ struct ActivityView: View {
                     .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close") { choosingCategory = false } } }
             }
         }
-        .task(id: filterKey) {
+        .task(id: filters) {
             // typing waits for a pause; the first load doesn't
             if lastLoad != nil { try? await Task.sleep(for: .milliseconds(300)) }
             guard !Task.isCancelled else { return }
@@ -87,7 +91,8 @@ struct ActivityView: View {
     // investment accounts have no transactions; they only count toward net worth
     private var filterAccounts: [Account] { model.accounts.filter { !$0.hidden && $0.type != "investment" } }
 
-    private var filterKey: String { "\(query)|\(accountId ?? "")|\(categoryId ?? "")|\(personId ?? "")" }
+    private var filters: TransactionQuery { TransactionQuery(accountId: accountId, categoryId: categoryId, q: query, personId: personId) }
+    private var cursor: String? { paging.next(for: filters) }
 
     private var filterChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -118,38 +123,50 @@ struct ActivityView: View {
     }
 
     /// Re-reads one edited row in place: reloading from the first page drops the later pages and jumps the list.
-    /// A changed date is the exception, since the row moves across the paging cursor.
     private func refresh(_ id: String) async {
         guard let reader = model.reader else { return }
+        if !query.trimmingCharacters(in: .whitespaces).isEmpty { await load(reset: true); return }
+        let requested = filters
+        let gen = generation
         do {
             let fresh = try await reader.read("/v1/transactions/\(id)", as: LedgerTransaction.self).value
-            guard let index = items.firstIndex(where: { $0.id == id }) else { return }
-            // a new date moves the row across the paging cursor, so the loaded pages are stale
-            if fresh.date != items[index].date { await load(reset: true); return }
-            items[index] = fresh
+            guard gen == generation, requested == filters, !Task.isCancelled else { return }
+            let previousLastID = items.last?.id
+            if requested.matchesFilters(fresh) {
+                items.refreshTransaction(fresh, allLoaded: cursor == nil)
+            } else { items.removeAll { $0.id == id } }
+            needsManualLoad = needsManualLoad || items.last?.id != previousLastID
         } catch ClientError.api(status: 404, _) {
+            guard gen == generation, requested == filters, !Task.isCancelled else { return }
+            if items.last?.id == id { needsManualLoad = true }
             items.removeAll { $0.id == id }
         } catch {
+            guard gen == generation, requested == filters, !Task.isCancelled else { return }
             self.error = errorMessage(error)
         }
     }
 
     private func load(reset: Bool) async {
-        guard let reader = model.reader, reset || !loading else { return }
-        if reset { generation += 1 }
+        guard let reader = model.reader, reset || (!loading && cursor != nil) else { return }
+        if reset { generation += 1; paging.reset() }
         let gen = generation
+        let requested = filters
         loading = true
         defer { if gen == generation { loading = false } }
-        let request = TransactionQuery(accountId: accountId, categoryId: categoryId, q: query, cursor: reset ? nil : cursor, personId: personId)
+        var request = requested
+        request.cursor = cursor
         do {
             let page = try await reader.read("/v1/transactions", query: request.items, as: TransactionPage.self)
-            guard gen == generation, !Task.isCancelled else { return }
-            items = reset ? page.value.transactions : items + page.value.transactions
-            cursor = page.value.nextCursor
+            guard gen == generation, requested == filters, !Task.isCancelled else { return }
+            let previousLastID = items.last?.id
+            items = (reset ? [] : items).appendingPage(page.value.transactions)
+            // An unchanged last row won't appear again to request the next page.
+            needsManualLoad = items.last?.id == previousLastID
+            paging.didLoad(requested, nextCursor: page.value.nextCursor)
             lastLoad = page
             error = nil
         } catch {
-            guard gen == generation, !Task.isCancelled else { return }
+            guard gen == generation, requested == filters, !Task.isCancelled else { return }
             self.error = errorMessage(error)
         }
     }

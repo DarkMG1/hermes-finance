@@ -28,13 +28,13 @@ test('put, get, replace and delete a receipt', async () => {
   const got = await get('t1');
   assert.equal(got.headers['content-type'], 'image/jpeg');
   assert.deepEqual(got.rawPayload, JPEG);
-  assert.equal(getTransaction(deps.db, 't1')?.hasReceipt, true);
+  assert.equal(getTransaction(deps.db, 't1', '2026-03-15')?.hasReceipt, true);
   const other = Buffer.from([0xff, 0xd8, 0xff, 9]);
   await put('t1', other);
   assert.deepEqual((await get('t1')).rawPayload, other);
   assert.equal((await del('t1')).statusCode, 204);
   assert.equal((await del('t1')).statusCode, 204, 'delete is idempotent');
-  assert.equal(getTransaction(deps.db, 't1')?.hasReceipt, false);
+  assert.equal(getTransaction(deps.db, 't1', '2026-03-15')?.hasReceipt, false);
 });
 
 test('rejects non-JPEG bodies, other content types, oversize bodies and unknown rows', async () => {

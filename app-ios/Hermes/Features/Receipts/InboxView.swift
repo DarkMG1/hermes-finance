@@ -11,6 +11,7 @@ struct InboxView: View {
     @State private var deletingUpload: String?
     @State private var snapping = false
     @State private var itemizing: LedgerTransaction?
+    @State private var openGeneration = OpenGeneration()
 
     var body: some View {
         List {
@@ -25,12 +26,16 @@ struct InboxView: View {
                             Text("Waiting to upload").textStyle(.body)
                             Spacer()
                             Button("Retry") { Task { await queue.retryAll(client: model.client); await load() } }
+                                .disabled(queue.uploading.contains(id))
                         }
-                        .swipeActions { Button("Delete", role: .destructive) { deletingUpload = id } }
+                        .swipeActions {
+                            if !queue.uploading.contains(id) { Button("Delete", role: .destructive) { deletingUpload = id } }
+                        }
                         .confirmationDialog("Delete this receipt?", isPresented: Binding(get: { deletingUpload == id },
                                                                                           set: { if !$0 { deletingUpload = nil } }),
                                             titleVisibility: .visible) {
                             Button("Delete", role: .destructive) { queue.delete(id) }
+                                .disabled(queue.uploading.contains(id))
                         }
                     }
                 }
@@ -87,6 +92,7 @@ struct InboxView: View {
         }
         .refreshable { await queue.retryAll(client: model.client); await load() }
         .task { await load() }
+        .onDisappear { _ = openGeneration.next() }
         // while anything is being read, look again every few seconds
         .task(id: list?.waiting.contains { $0.status == "reading" } == true) {
             while list?.waiting.contains(where: { $0.status == "reading" }) == true, !Task.isCancelled {
@@ -120,10 +126,14 @@ struct InboxView: View {
 
     private func open(_ linked: LinkedReceipt) async {
         guard let reader = model.reader else { return }
+        let gen = openGeneration.next()
         do {
-            itemizing = try await reader.read("/v1/transactions/\(linked.transactionId)", as: LedgerTransaction.self).value
+            let transaction = try await reader.read("/v1/transactions/\(linked.transactionId)", as: LedgerTransaction.self).value
+            guard !Task.isCancelled, openGeneration.accepts(gen, presented: itemizing != nil || snapping) else { return }
+            itemizing = transaction
             await dismiss(linked)
         } catch {
+            guard !Task.isCancelled, openGeneration.accepts(gen, presented: itemizing != nil || snapping) else { return }
             self.error = errorMessage(error)
         }
     }

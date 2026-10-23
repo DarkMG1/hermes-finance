@@ -41,3 +41,52 @@ import Testing
     let request = try #require(transport.requests.first)
     #expect(request.method == "PUT" && request.url.path() == "/v1/receipts/inbox/r1/items" && request.headers["Idempotency-Key"] == "k")
 }
+
+@Test func rejectedReceiptLinkKeepsCreatedPaymentLockedForRetry() throws {
+    let created = try JSONDecoder().decode(LedgerTransaction.self, from: fixture("transaction"))
+    var pending = PendingReceiptLink()
+    #expect(pending.target == nil && pending.allows("other"))
+    pending.createdPayment = created
+    pending.unlinked = created
+    var writes = WriteGuard()
+    let key = writes.key
+    writes.didFail(ClientError.transport("timed out"))
+    #expect(writes.unresolved && writes.key == key)
+    #expect(pending.target?.id == created.id && pending.allows(created.id) && !pending.allows("other"))
+
+    writes.didFail(ClientError.api(status: 409, body: APIErrorBody(code: "HAS_RECEIPT", message: "already linked")))
+    if !writes.unresolved { pending.unlinked = nil }
+    #expect(!writes.unresolved && pending.unlinked == nil)
+    #expect(pending.target?.id == created.id && pending.allows(created.id) && !pending.allows("other"))
+    writes.didSucceed()
+    pending = PendingReceiptLink()
+    #expect(pending.target == nil && pending.allows("other"))
+}
+
+@Test func rejectedExistingChargeLinkReleasesItsTarget() throws {
+    let charge = try JSONDecoder().decode(LedgerTransaction.self, from: fixture("transaction"))
+    var pending = PendingReceiptLink()
+    pending.unlinked = charge
+    #expect(pending.target?.id == charge.id && !pending.allows("other"))
+    var writes = WriteGuard()
+    writes.didFail(ClientError.api(status: 404, body: APIErrorBody(code: "NOT_FOUND", message: "not found")))
+    if !writes.unresolved { pending.unlinked = nil }
+    #expect(pending.target == nil && pending.allows("other"))
+}
+
+@Test func paidByCreationSendsItsInboxReceiptAndDecodesTheLinkedTransaction() async throws {
+    var json = try #require(JSONSerialization.jsonObject(with: fixture("transaction")) as? [String: Any])
+    json["hasReceipt"] = true
+    let response = try JSONSerialization.data(withJSONObject: json)
+    let transport = FakeTransport([.success(HTTPResponse(status: 201, body: response))])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    let body = CreateTransactionBody(date: "2026-03-10", amountCents: -600, payee: "Synthetic Quill",
+                                     categoryId: nil, notes: nil, paidByPersonId: "p1", inboxReceiptId: "r1")
+    let created = try await client.createTransaction(body, idempotencyKey: "paid")
+    #expect(created.hasReceipt == true)
+    let request = try #require(transport.requests.first)
+    #expect(request.url.path() == "/v1/transactions" && request.headers["Idempotency-Key"] == "paid")
+    let encoded = try #require(request.body)
+    let sent = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+    #expect(sent["inboxReceiptId"] as? String == "r1" && sent["paidByPersonId"] as? String == "p1")
+}

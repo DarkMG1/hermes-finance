@@ -17,7 +17,7 @@ export function zellePayee(text: string): string | null {
 /** Names Zelle rows still showing the bank's text. Payees the owner set are left alone; running it again changes nothing. */
 export function nameZellePayees(db: Db, nowIso: string): number {
   const rows = db.prepare(`SELECT id, bank_description AS text FROM transactions
-    WHERE removed_at IS NULL AND bank_description LIKE 'zelle%' AND (payee IS NULL OR payee = bank_description)`).all() as
+    WHERE removed_at IS NULL AND payee_owner_set = 0 AND bank_description LIKE 'zelle%' AND (payee IS NULL OR payee = bank_description)`).all() as
     { id: string; text: string }[];
   const rename = db.prepare('UPDATE transactions SET payee = ?, updated_at = ? WHERE id = ?');
   let named = 0;

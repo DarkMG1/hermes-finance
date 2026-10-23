@@ -1,7 +1,9 @@
 import type { Reconcile, ReconcileMonths, Transaction } from '@hermes/shared';
 import type { Db } from './db.ts';
+import { localDay, periodRange } from './days.ts';
+import { memberships } from './recurring.ts';
 import { ApiError } from './errors.ts';
-import { getTransaction, lookups, periodRange, rowToTransaction, TXN_COLS, type TxnRow } from './ledger.ts';
+import { getTransaction, lookups, rowToTransaction, TXN_COLS, type TxnRow } from './ledger.ts';
 
 // Money out the owner should look at once a month, including their share of what someone else paid. Over alias `t` (transactions).
 export const NEEDS_RECONCILE = `(
@@ -22,14 +24,14 @@ export const NEEDS_RECONCILE = `(
 // marked, and the bank hasn't changed the amount since
 export const OPEN = '(t.reconciled_at IS NULL OR t.reconciled_cents != t.amount_cents)';
 
-export function getReconcile(db: Db, month: string): Reconcile {
+export function getReconcile(db: Db, month: string, today: string): Reconcile {
   const { from, toExclusive } = periodRange({ period: 'month', date: month });
   const { n } = db.prepare(`SELECT COUNT(*) AS n FROM transactions t WHERE t.date >= ? AND t.date < ? AND ${NEEDS_RECONCILE}`)
     .get(from, toExclusive) as { n: number };
   const rows = db.prepare(`SELECT ${TXN_COLS} FROM transactions t WHERE t.date >= ? AND t.date < ? AND ${NEEDS_RECONCILE} AND ${OPEN}
     ORDER BY t.date, t.created_at, t.rowid`).all(from, toExclusive) as TxnRow[];
-  const l = lookups(db, rows);
-  return { month, total: n, open: rows.length, transactions: rows.map((r) => rowToTransaction(db, r, l)) };
+  const l = lookups(db, rows, memberships(db, today));
+  return { month, total: n, open: rows.length, transactions: rows.map((r) => rowToTransaction(r, l)) };
 }
 
 export function reconcileMonths(db: Db): ReconcileMonths {
@@ -52,8 +54,8 @@ export function setReconciled(db: Db, id: string, reconciled: boolean, nowIso: s
       : db.prepare('UPDATE transactions SET reconciled_at = ?, reconciled_cents = amount_cents WHERE id = ? AND removed_at IS NULL AND amount_cents = ?')
         .run(nowIso, id, amountCents).changes;
   if (changes === 0) {
-    if (reconciled && amountCents !== undefined && getTransaction(db, id)) throw new ApiError(409, 'AMOUNT_CHANGED', 'the amount changed since you looked');
+    if (reconciled && amountCents !== undefined && getTransaction(db, id, localDay(new Date(nowIso)))) throw new ApiError(409, 'AMOUNT_CHANGED', 'the amount changed since you looked');
     throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
   }
-  return getTransaction(db, id)!;
+  return getTransaction(db, id, localDay(new Date(nowIso)))!;
 }

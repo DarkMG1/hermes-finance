@@ -13,14 +13,15 @@ struct WhoOwesView: View {
     @State private var showSettled = false
     @State private var writes: [String: WriteGuard] = [:]
     @State private var busyIds: Set<String> = []
-    @State private var error: String?
+    @State private var errors = RequestErrors()
+    @State private var loadGeneration = OpenGeneration()
 
     var body: some View {
         Screen(title: "IOUs") {
             // swiftlint:disable:next multiple_closures_with_trailing_closure
             LoadingContent(state: state, retry: { Task { await load() } }) { loaded in
                 LastUpdated(loaded: loaded)
-                InlineError(message: error)
+                InlineError(message: errors.message)
                 if !suggestions.isEmpty {
                     Card {
                         Text("Possible repayments").textStyle(.headline)
@@ -51,7 +52,7 @@ struct WhoOwesView: View {
             }
         }
         .refreshable { await load() }
-        .task { await load() }
+        .task { await load(coalescing: true) }
         .sheet(item: $selected) { transaction in
             TransactionDetailSheet(transaction: transaction) { await load() }
         }
@@ -136,37 +137,50 @@ struct WhoOwesView: View {
     private func perform(_ slot: String, lock: String, _ write: (APIClient, String) async throws -> Void) async {
         guard let client = model.client, !busyIds.contains(lock) else { return }
         busyIds.insert(lock)
+        errors.write = nil
         defer { busyIds.remove(lock) }
         var writeGuard = writes[slot] ?? WriteGuard()
         do {
             try await write(client, writeGuard.key)
             writeGuard.didSucceed()
-            error = nil
         } catch {
             writeGuard.didFail(error)
-            self.error = writeGuard.unresolved ? "Couldn't confirm. Try again." : errorMessage(error)
+            errors.write = writeGuard.unresolved ? "Couldn't confirm. Try again." : errorMessage(error)
         }
         writes[slot] = writeGuard
         await load()
     }
 
-    private func load() async {
+    private func load(coalescing: Bool = false) async {
         guard let reader = model.reader else { return }
+        let gen = loadGeneration.next()
+        async let references: Void = model.refreshReferenceData(coalescing: coalescing)
+        async let supporting: Void = loadSupporting(reader: reader, generation: gen)
         do {
             let people = try await reader.read("/v1/people", as: [Person].self)
-            var found: Loaded<[RepaymentSuggestion]>?
-            var suggestionsError: Error?
-            do { found = try await reader.read("/v1/people/suggestions", as: [RepaymentSuggestion].self) } catch { suggestionsError = error }
-            let loadedSettings = try? await reader.read("/v1/people/settings", as: PeopleSettings.self)
-            await model.refreshReferenceData()
-            guard !Task.isCancelled else { return }
-            suggestions = found?.value ?? []
-            settings = loadedSettings?.value ?? settings
-            error = suggestionsError.map { errorMessage($0) }
+            guard !Task.isCancelled, loadGeneration.accepts(gen, presented: false) else { return }
             state = .loaded(people)
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, loadGeneration.accepts(gen, presented: false) else { return }
             state = .failed(errorMessage(error))
         }
+        _ = await (references, supporting)
+    }
+
+    private func loadSupporting(reader: Reader, generation: Int) async {
+        async let loadedSettings = try? reader.read("/v1/people/settings", as: PeopleSettings.self)
+        do {
+            let found = try await reader.read("/v1/people/suggestions", as: [RepaymentSuggestion].self)
+            guard !Task.isCancelled, loadGeneration.accepts(generation, presented: false) else { return }
+            suggestions = found.value
+            errors.read = nil
+        } catch {
+            guard !Task.isCancelled, loadGeneration.accepts(generation, presented: false) else { return }
+            suggestions = []
+            errors.read = errorMessage(error)
+        }
+        let loaded = await loadedSettings
+        guard !Task.isCancelled, loadGeneration.accepts(generation, presented: false) else { return }
+        settings = loaded?.value ?? settings
     }
 }

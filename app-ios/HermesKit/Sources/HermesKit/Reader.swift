@@ -35,11 +35,12 @@ public struct Reader: Sendable {
         keyParts.queryItems = query.isEmpty ? nil : query
         // keyed by server too, so one server's cached data is never served for another
         let key = client.baseURL.absoluteString + path + "?" + (keyParts.percentEncodedQuery ?? "")
+        let request = cache.beginRead(key: key, generation: generation)
         do {
             let data = try await client.getData(path, query: query)
             let value: Value = try client.decode(data)
             let savedAt = now()
-            cache.store(data, key: key, savedAt: savedAt, generation: generation)
+            if !Task.isCancelled { cache.store(data, key: key, savedAt: savedAt, generation: generation, request: request) }
             return Loaded(value: value, savedAt: savedAt, fromCache: false)
         } catch let error as ClientError {
             guard Self.isServerDown(error), let hit = cache.load(key: key) else { throw error }

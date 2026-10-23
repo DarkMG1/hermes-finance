@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { syncItem } from '../src/sync/run.ts';
-import { makeTestDeps, seedItem } from './helpers.ts';
+import { makeTestDeps, seedAccount, seedItem } from './helpers.ts';
 import type { Deps } from '../src/deps.ts';
 import type { FakePlaid } from './fake-plaid.ts';
 
@@ -15,6 +15,7 @@ function setup(): { deps: Deps; plaid: FakePlaid } {
   t.plaid.accounts = [BROKERAGE];
   t.plaid.holdings = { securities: [SEC], holdings: [{ accountId: 'pinv', securityId: 'sa', quantity: 3, price: 100, value: 300, costBasis: 250 }] };
   t.plaid.investmentTxns = {
+    accountIds: ['pinv'],
     securities: [SEC, SOLD],
     transactions: [
       { id: 'it1', accountId: 'pinv', securityId: 'sa', date: '2026-03-01', type: 'buy', subtype: 'buy', quantity: 3, amount: 250, price: 83.33 },
@@ -58,3 +59,60 @@ test('no transactions fetch without a successful holdings fetch', async () => {
   assert.deepEqual(plaid.investmentTxnCalls, []);
 });
 
+
+test('a complete refresh prunes only missing trades in its accounts and date window', async () => {
+  const { deps, plaid } = setup();
+  await syncItem(deps, 'i1');
+  const db = deps.db;
+  const account = db.prepare("SELECT id FROM accounts WHERE plaid_account_id = 'pinv'").pluck().get() as string;
+  const copy = db.prepare(`INSERT INTO investment_transactions SELECT ?, ?, security_id, ?, type, subtype, quantity, amount_cents, price_cents, updated_at
+    FROM investment_transactions WHERE id = 'it1'`);
+  seedAccount(db, { id: 'other', type: 'investment' });
+  copy.run('old', account, '2024-03-14');
+  copy.run('boundary', account, '2024-03-15');
+  copy.run('future', account, '2026-03-16');
+  copy.run('other-trade', 'other', '2026-03-01');
+  plaid.investmentTxns.transactions = [plaid.investmentTxns.transactions[0]!];
+  plaid.failNextInvestmentTxns('PRODUCT_NOT_READY');
+  await syncItem(deps, 'i1');
+  assert.equal(rows(deps).length, 6, 'failed fetch leaves all trades untouched');
+  await syncItem(deps, 'i1');
+  assert.deepEqual((rows(deps) as { id: string }[]).map((r) => r.id), ['future', 'it1', 'old', 'other-trade']);
+});
+
+test('a complete empty response prunes covered accounts but leaves uncovered accounts alone', async () => {
+  const { deps, plaid } = setup();
+  await syncItem(deps, 'i1');
+  const before = rows(deps);
+  plaid.investmentTxns.transactions = [];
+  plaid.investmentTxns.accountIds = [];
+  await syncItem(deps, 'i1');
+  assert.deepEqual(rows(deps), before);
+  plaid.investmentTxns.accountIds = ['pinv'];
+  plaid.failNextInvestmentTxns('PRODUCT_NOT_READY');
+  await syncItem(deps, 'i1');
+  assert.deepEqual(rows(deps), before);
+  await syncItem(deps, 'i1');
+  assert.deepEqual(rows(deps), []);
+});
+
+test('a nonempty response uses account coverage even for accounts with no returned transactions', async () => {
+  const { deps, plaid } = setup();
+  plaid.accounts.push({ ...BROKERAGE, accountId: 'pinv2' });
+  plaid.investmentTxns.accountIds.push('pinv2');
+  plaid.investmentTxns.transactions.push({ ...plaid.investmentTxns.transactions[0]!, id: 'second', accountId: 'pinv2' });
+  await syncItem(deps, 'i1');
+  plaid.investmentTxns.transactions = [plaid.investmentTxns.transactions[0]!];
+  await syncItem(deps, 'i1');
+  assert.deepEqual((rows(deps) as { id: string }[]).map((r) => r.id), ['it1']);
+});
+
+test('a failed transaction store rolls pruning back', async () => {
+  const { deps, plaid } = setup();
+  await syncItem(deps, 'i1');
+  const before = rows(deps);
+  deps.db.exec("CREATE TRIGGER synthetic_store_failure BEFORE INSERT ON investment_transactions BEGIN SELECT RAISE(ABORT, 'synthetic store failure'); END");
+  plaid.investmentTxns.transactions = [plaid.investmentTxns.transactions[0]!];
+  await syncItem(deps, 'i1');
+  assert.deepEqual(rows(deps), before);
+});

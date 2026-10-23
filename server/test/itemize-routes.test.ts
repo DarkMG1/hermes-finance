@@ -86,7 +86,7 @@ test('own purchase: saving splits into my line (owner category) and each person'
   const { save, items, deps } = setup();
   const r = await save('own', body([['Synthetic Bread', 1000, ['me']], ['Synthetic Jam', 1000, ['p1']]], 160));
   assert.equal(r.statusCode, 200);
-  const t = getTransaction(deps.db, 'own')!;
+  const t = getTransaction(deps.db, 'own', '2026-03-15')!;
   assert.deepEqual(t.splitLines.map((l) => [l.amountCents, l.categoryId, l.personId]), [[-1080, 'cat-food', null], [-1080, null, 'p1']]);
   assert.equal(t.amountCents, -2160);
   const it = (await items('own')).json();
@@ -99,12 +99,12 @@ test('own purchase: all mine clears the split and keeps the owner category; one 
   const { save, deps } = setup();
   await save('own', body([['A', 1000, ['me']], ['B', 1000, ['p1']]]));
   await save('own', body([['A', 2000, ['me']]]));
-  let t = getTransaction(deps.db, 'own')!;
+  let t = getTransaction(deps.db, 'own', '2026-03-15')!;
   assert.deepEqual(t.splitLines, []);
   assert.equal(t.categoryId, 'cat-food');
   assert.equal(t.personId, null);
   await save('own', body([['A', 2000, ['p1']]]));
-  t = getTransaction(deps.db, 'own')!;
+  t = getTransaction(deps.db, 'own', '2026-03-15')!;
   assert.deepEqual(t.splitLines, []);
   assert.equal(t.personId, 'p1');
   assert.equal(t.categoryId, null);
@@ -114,7 +114,7 @@ test('they paid: saving sets the row to my share', async () => {
   const { save, deps } = setup();
   const r = await save('paid', body([['Synthetic Tofu', 1500, ['me']], ['Synthetic Rice', 2000, ['me', 'p1']], ['Synthetic Fish', 800, ['p1']]]));
   assert.equal(r.statusCode, 200);
-  const t = getTransaction(deps.db, 'paid')!;
+  const t = getTransaction(deps.db, 'paid', '2026-03-15')!;
   assert.equal(t.amountCents, -2500);
   assert.equal(t.paidByPersonId, 'p1');
   assert.deepEqual(t.splitLines, []);
@@ -126,7 +126,7 @@ test('they paid: all theirs (my share zero) or a third person is refused and cha
   assert.equal(allTheirs.statusCode, 400);
   const third = await save('paid', body([['Synthetic Fish', 800, ['me', 'p2']]]));
   assert.equal(third.statusCode, 400);
-  assert.equal(getTransaction(deps.db, 'paid')!.amountCents, -1000);
+  assert.equal(getTransaction(deps.db, 'paid', '2026-03-15')!.amountCents, -1000);
   assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM receipt_items').get() as { n: number }).n, 0);
 });
 
@@ -186,7 +186,7 @@ test('a pending row can be itemized', async () => {
   seedTxn(deps.db, { id: 'pend', accountId: 'card', date: '2026-03-14', amountCents: -2000, source: 'plaid', sourceId: 's-pend', pending: true });
   deps.db.prepare("INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES ('pend', ?, 5, 'seed')").run(JPEG);
   assert.equal((await save('pend', body([['A', 1000, ['me']], ['B', 1000, ['p2']]]))).statusCode, 200);
-  assert.equal(getTransaction(deps.db, 'pend')!.splitLines.length, 2);
+  assert.equal(getTransaction(deps.db, 'pend', '2026-03-15')!.splitLines.length, 2);
 });
 
 test('an existing split keeps its owner category from the first line without a person', async () => {
@@ -195,7 +195,7 @@ test('an existing split keeps its owner category from the first line without a p
   seedSplit(deps.db, { id: 'l1', transactionId: 'own', amountCents: -1160, categoryId: 'cat-food' });
   seedSplit(deps.db, { id: 'l2', transactionId: 'own', amountCents: -1000, categoryId: null, personId: 'p1' });
   await save('own', body([['A', 1080, ['me']], ['B', 1080, ['p2']]]));
-  assert.deepEqual(getTransaction(deps.db, 'own')!.splitLines.map((l) => [l.categoryId, l.personId]), [['cat-food', null], [null, 'p2']]);
+  assert.deepEqual(getTransaction(deps.db, 'own', '2026-03-15')!.splitLines.map((l) => [l.categoryId, l.personId]), [['cat-food', null], [null, 'p2']]);
 });
 
 test('a photo replaced during the read answers 409 and stores nothing', async () => {
@@ -252,4 +252,37 @@ test('a hand save without a read leaves readAt null', async () => {
   const { save, items } = setup();
   await save('own', body([['A', 2160, ['me']]]));
   assert.equal((await items('own')).json().readAt, null);
+});
+
+test('a transaction reread rejects concurrent item, extra, split or payer changes', async () => {
+  for (const change of ['items', 'extras', 'split', 'payer', 'edited split']) {
+    const { read, save, items, deps: { db }, reader } = setup();
+    await read('own');
+    if (change === 'edited split') {
+      await save('own', body([['Synthetic Bread', 2160, ['me', 'p1']]]));
+      db.prepare("UPDATE split_lines SET amount_cents = amount_cents - 1 WHERE transaction_id = 'own' AND person_id IS NULL").run();
+      assert.equal((await items('own')).json().handEdited, true);
+    }
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const reading = new Promise<void>((r) => { started = r; });
+    const original = reader.read.bind(reader);
+    reader.read = async () => { started(); await gate; return original(); };
+    const id = change === 'payer' ? 'paid' : 'own';
+    const pending = read(id).then((r) => r);
+    await reading;
+    if (change === 'payer') db.prepare("UPDATE transactions SET paid_by_person_id = 'p2' WHERE id = 'paid'").run();
+    else if (change === 'edited split') db.prepare("UPDATE split_lines SET amount_cents = amount_cents - 1 WHERE transaction_id = 'own' AND person_id IS NULL").run();
+    else {
+      assert.equal((await save('own', body([['Synthetic Bread', 1000, ['me']], ['Synthetic Jam', 1000, ['p1']]], 160))).statusCode, 200);
+      if (change === 'extras') assert.equal((await save('own', { ...body([['Synthetic Bread', 1000, ['me']], ['Synthetic Jam', 1000, ['p1']]], 160), tipCents: 100 })).statusCode, 200);
+      if (change === 'split') db.prepare("UPDATE split_lines SET amount_cents = amount_cents - 1 WHERE transaction_id = 'own' AND person_id IS NULL").run();
+    }
+    const saved = (await items(id)).json();
+    release();
+    const r = await pending;
+    assert.deepEqual([r.statusCode, r.json().code], [409, 'CHANGED'], change);
+    assert.deepEqual((await items(id)).json(), saved, change);
+  }
 });

@@ -7,7 +7,7 @@ export function holdingKey(s: { securityId: string; ticker: string | null; type:
   return s.ticker ? s.ticker.toUpperCase() : s.securityId;
 }
 
-export type DayValue = { totalCents: number; cashCents: number; bySecurity: Map<string, number> };
+type DayValue = { totalCents: number; cashCents: number; bySecurity: Map<string, number> };
 export type AccountEstimate = { accountId: string; anchor: string; earliest: string; valueOn(day: string): DayValue };
 
 type Sec = { id: string; ticker: string | null; type: string | null; isCash: number };
@@ -75,6 +75,26 @@ export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate 
   /** Π split factors for split dates in (day, anchor]: converts a day's units into today's. */
   const splitsAfter = (ticker: string | null, day: string) =>
     (ticker ? closes.get(ticker)?.splits ?? [] : []).reduce((f, [d, s]) => (d > day ? f * s : f), 1);
+  /** A Plaid split Tiingo records within 3 days is already in the price conversion. */
+  const tiingoSplit = (t: Txn) => {
+    const ticker = t.securityId ? tickerOf(t.securityId) : null;
+    const from = addDays(t.date, -3);
+    const to = addDays(t.date, 3);
+    return (ticker ? closes.get(ticker)?.splits ?? [] : []).some(([d]) => d >= from && d <= to);
+  };
+  const plaidSplits = new Map<string, [string, number][]>();
+  const quantities = new Map(shares);
+  for (const t of txns.toReversed()) {
+    if (!t.securityId || isCashSec(secs.get(t.securityId)) || (isSplit(t) && tiingoSplit(t))) continue;
+    const after = quantities.get(t.securityId) ?? 0;
+    const before = after - t.quantity * splitsAfter(tickerOf(t.securityId), t.date);
+    const factor = after / before;
+    if (isSplit(t) && Number.isFinite(factor) && factor > 0) {
+      plaidSplits.set(t.securityId, [...(plaidSplits.get(t.securityId) ?? []), [t.date, factor]]);
+    }
+    quantities.set(t.securityId, before);
+  }
+  const plaidAfter = (id: string, day: string) => (plaidSplits.get(id) ?? []).reduce((f, [d, s]) => (d > day ? f * s : f), 1);
   // real trades only: distributions and fees carry price 0 and quantity 0
   const trades = new Map<string, { dates: string[]; txns: Txn[] }>();
   for (const t of txns) {
@@ -89,15 +109,15 @@ export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate 
     const ticker = tickerOf(id);
     const c = ticker ? closes.get(ticker) : undefined;
     const i = c ? atOrBefore(c.dates, day) : -1;
-    if (c && i >= 0) return c.cents[i]! / splitsAfter(ticker, day);
+    if (c && i >= 0) return c.cents[i]! / splitsAfter(ticker, day) * plaidAfter(id, day) / plaidAfter(id, c.dates[i]!);
     const tr = trades.get(id);
     const j = tr ? atOrBefore(tr.dates, day) : -1;
-    if (tr && j >= 0) return tr.txns[j]!.priceCents! / splitsAfter(ticker, tr.txns[j]!.date);
+    if (tr && j >= 0) return tr.txns[j]!.priceCents! / splitsAfter(ticker, tr.txns[j]!.date) * plaidAfter(id, day) / plaidAfter(id, tr.txns[j]!.date);
     const a = anchorPrice.get(id);
-    if (a !== undefined) return a;
+    if (a !== undefined) return a * plaidAfter(id, day);
     // sold before the anchor with no closes: its earliest trade price
     const e = tr?.txns[0];
-    return e ? e.priceCents! / splitsAfter(ticker, e.date) : 0;
+    return e ? e.priceCents! / splitsAfter(ticker, e.date) * plaidAfter(id, day) / plaidAfter(id, e.date) : 0;
   };
   const value = (day: string): DayValue => {
     const bySecurity = new Map<string, number>();
@@ -109,13 +129,6 @@ export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate 
       total += v;
     }
     return { totalCents: total, cashCents: cash, bySecurity };
-  };
-  /** A Plaid split Tiingo also records (within 3 days) is already in the price conversion; one Tiingo lacks is undone as a share change. */
-  const tiingoSplit = (t: Txn) => {
-    const ticker = t.securityId ? tickerOf(t.securityId) : null;
-    const from = addDays(t.date, -3);
-    const to = addDays(t.date, 3);
-    return (ticker ? closes.get(ticker)?.splits ?? [] : []).some(([d]) => d >= from && d <= to);
   };
   const undo = (t: Txn) => {
     if (isSplit(t) && tiingoSplit(t)) return;

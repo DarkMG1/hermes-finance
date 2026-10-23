@@ -24,3 +24,17 @@ extension ListRow where Trailing == EmptyView {
         self.init(title: title, subtitle: subtitle) { EmptyView() }
     }
 }
+
+struct SelectionRow: View {
+    let title: String
+    let selected: Bool
+
+    var body: some View {
+        HStack {
+            Text(title).textStyle(.body)
+            Spacer()
+            if selected { Image(systemName: "checkmark").foregroundStyle(Palette.accent) }
+        }
+        .contentShape(Rectangle())
+    }
+}

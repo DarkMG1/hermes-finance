@@ -1,38 +1,20 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { CreateTransactionBody, ExpensesQuery, HistoryExclusionBody, ListTransactionsQuery, NetWorthQuery, PatchAccountBody, PatchSplitLineBody, PatchTransactionBody, PayeeHistoryQuery, PutSplitsBody, SpendingQuery } from '@hermes/shared';
-import type { Db } from '../db.ts';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
+import { writeSplit } from '../splits.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
-import { assertPersonTaggable, owedToYouCents, suggestionCount, youOweCents } from '../people.ts';
+import { assertPersonTaggable, homePeople } from '../people.ts';
 import { excludedBy, getExpenses, getPayeeHistory, getReimbursements, getSpending } from '../cashflow.ts';
-import { restoreToInbox } from '../inbox.ts';
+import { linkInbox, restoreToInbox } from '../inbox.ts';
 import { normalizeName } from '../recurring.ts';
 import { getNetWorth, localDay } from '../networth.ts';
 import { oldestOpenBefore } from '../reconcile.ts';
 import { assertCategoryExists, getHome, getTransaction, learnCategory, listAccounts, listCategories, listTransactions } from '../ledger.ts';
 
-/** Checks split lines against a transaction's amount and makes them its split; the row's own category and person move onto the lines. */
-export function writeSplit(db: Db, txnId: string, amountCents: number, lines: PutSplitsBody['lines'], field: string, nowIso: string): void {
-  lines.forEach((l, i) => assertCategoryExists(db, l.categoryId, `${field}.${i}.categoryId`));
-  lines.forEach((l, i) => assertPersonTaggable(db, l.personId, `${field}.${i}.personId`, txnId));
-  // lines share the transaction's sign: the app enters them as positive amounts, so it couldn't show anything else
-  if (lines.some((l) => (l.amountCents < 0) !== (amountCents < 0))) {
-    throw new ApiError(400, 'INVALID_REQUEST', `${field}: every line must have the same sign as the transaction`, field);
-  }
-  if (lines.length && lines.reduce((s, l) => s + l.amountCents, 0) !== amountCents) {
-    throw new ApiError(400, 'INVALID_REQUEST', `${field}: must add up to the transaction amount`, field);
-  }
-  db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(txnId);
-  // ids sort in entry order (lines are read back ORDER BY id)
-  const insert = db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id, notes, person_id, payee) VALUES (?, ?, ?, ?, ?, ?, ?)');
-  lines.forEach((l, i) => insert.run(`${String(i).padStart(2, '0')}-${randomUUID()}`, txnId, l.amountCents, l.categoryId, l.notes ?? null, l.personId ?? null,
-    l.payee || null));
-  // a split transaction's category lives on its lines; the owner decided, so learned mappings leave it alone
-  db.prepare('UPDATE transactions SET category_id = NULL, person_id = NULL, category_owner_set = 1, updated_at = ? WHERE id = ?').run(nowIso, txnId);
-}
+export { writeSplit } from '../splits.ts';
 
 export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   const { db } = deps;
@@ -50,10 +32,10 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
     });
     return reply.code(r.status).send(r.body);
   });
-  app.get('/v1/transactions', async (req) => listTransactions(db, parseBody(ListTransactionsQuery, req.query)));
+  app.get('/v1/transactions', async (req) => listTransactions(db, parseBody(ListTransactionsQuery, req.query), localDay(deps.now())));
   // people.ts reads through ledger.ts, so Home's Who Owes Me fields are added here rather than inside getHome
   app.get('/v1/home', async () => ({
-    ...getHome(db), owedToYouCents: owedToYouCents(db), youOweCents: youOweCents(db), repaymentSuggestions: suggestionCount(db, deps.now()),
+    ...getHome(db, localDay(deps.now())), ...homePeople(db, deps.now()),
     toReconcile: oldestOpenBefore(db, localDay(deps.now()).slice(0, 7)),
   }));
   app.get('/v1/expenses', async (req) => getExpenses(db, parseBody(ExpensesQuery, req.query)));
@@ -77,7 +59,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   app.get('/v1/reimbursements', async () => getReimbursements(db, localDay(deps.now())));
 
   app.get<{ Params: { id: string } }>('/v1/transactions/:id', async (req) => {
-    const t = getTransaction(db, req.params.id);
+    const t = getTransaction(db, req.params.id, localDay(deps.now()));
     if (!t) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
     return t;
   });
@@ -85,7 +67,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   app.patch<{ Params: { id: string } }>('/v1/transactions/:id', async (req, reply) => {
     const body = parseBody(PatchTransactionBody, req.body);
     const r = idempotentWrite(deps, req, () => {
-      const current = getTransaction(db, req.params.id);
+      const current = getTransaction(db, req.params.id, localDay(deps.now()));
       if (!current) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
       if (current.forgiven && (body.categoryId !== undefined || body.personId !== undefined || body.paidByPersonId !== undefined)) {
         throw new ApiError(409, 'FORGIVENESS_LOCKED', 'delete the forgiveness to change it');
@@ -104,7 +86,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
         if (body.paidByPersonId !== null && current.amountCents >= 0) {
           throw new ApiError(400, 'INVALID_REQUEST', 'paidByPersonId: a payer covers money out', 'paidByPersonId');
         }
-        assertPersonTaggable(db, body.paidByPersonId, 'paidByPersonId', current.id);
+        assertPersonTaggable(db, body.paidByPersonId, 'paidByPersonId', current.id, 'payer');
       }
       // a row someone else paid is the owner's own spending, so it never carries a person tag
       const personAfter = body.personId !== undefined ? body.personId : body.categoryId ? null : current.personId;
@@ -123,7 +105,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
         args.push(body.personId);
         if (body.personId !== null) sets.push('category_id = NULL');
       }
-      if (body.payee !== undefined) { sets.push('payee = ?'); args.push(body.payee); }
+      if (body.payee !== undefined) { sets.push('payee = ?', 'payee_owner_set = 1'); args.push(body.payee); }
       if (body.notes !== undefined) { sets.push('notes = ?'); args.push(body.notes); }
       if (body.paidByPersonId !== undefined) { sets.push('paid_by_person_id = ?'); args.push(body.paidByPersonId); }
       if (body.repaymentDismissed !== undefined) { sets.push('repayment_dismissed = ?'); args.push(body.repaymentDismissed ? 1 : 0); }
@@ -131,7 +113,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       const now = deps.now().toISOString();
       db.prepare(`UPDATE transactions SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...args, now, req.params.id);
       if (body.categoryId) learnCategory(db, req.params.id, body.categoryId, now);
-      return { status: 200, body: getTransaction(db, req.params.id) };
+      return { status: 200, body: getTransaction(db, req.params.id, localDay(deps.now())) };
     });
     return reply.code(r.status).send(r.body);
   });
@@ -139,13 +121,17 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   app.put<{ Params: { id: string } }>('/v1/transactions/:id/splits', async (req, reply) => {
     const body = parseBody(PutSplitsBody, req.body);
     const r = idempotentWrite(deps, req, () => {
-      const txn = getTransaction(db, req.params.id);
+      const txn = getTransaction(db, req.params.id, localDay(deps.now()));
       if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
       if (txn.forgiven) throw new ApiError(409, 'FORGIVENESS_LOCKED', 'delete the forgiveness to change it');
       if (txn.paidByPersonId) throw new ApiError(409, 'PAID_BY_PERSON', 'a transaction someone else paid cannot be split', 'lines');
+      if (txn.splitLines.some((l) => l.personId !== null || l.payee !== null)
+        && body.lines.some((l) => l.personId === undefined || l.payee === undefined)) {
+        throw new ApiError(409, 'APP_OUTDATED', 'update the app before saving this split');
+      }
       if (!body.lines.length && !txn.splitLines.length) return { status: 200, body: txn };
       writeSplit(db, txn.id, txn.amountCents, body.lines, 'lines', deps.now().toISOString());
-      return { status: 200, body: getTransaction(db, txn.id) };
+      return { status: 200, body: getTransaction(db, txn.id, localDay(deps.now())) };
     });
     return reply.code(r.status).send(r.body);
   });
@@ -153,7 +139,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
   app.patch<{ Params: { id: string; lineId: string } }>('/v1/transactions/:id/lines/:lineId', async (req, reply) => {
     const body = parseBody(PatchSplitLineBody, req.body);
     const r = idempotentWrite(deps, req, () => {
-      const txn = getTransaction(db, req.params.id);
+      const txn = getTransaction(db, req.params.id, localDay(deps.now()));
       if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
       if (txn.forgiven) throw new ApiError(409, 'FORGIVENESS_LOCKED', 'delete the forgiveness to change it');
       if (!txn.splitLines.some((l) => l.id === req.params.lineId)) throw new ApiError(404, 'NOT_FOUND', 'split line not found');
@@ -176,7 +162,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       if (body.notes !== undefined) { sets.push('notes = ?'); args.push(body.notes); }
       db.prepare(`UPDATE split_lines SET ${sets.join(', ')} WHERE id = ?`).run(...args, req.params.lineId);
       db.prepare('UPDATE transactions SET updated_at = ? WHERE id = ?').run(deps.now().toISOString(), txn.id);
-      return { status: 200, body: getTransaction(db, txn.id) };
+      return { status: 200, body: getTransaction(db, txn.id, localDay(deps.now())) };
     });
     return reply.code(r.status).send(r.body);
   });
@@ -186,7 +172,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
     const r = idempotentWrite(deps, req, () => {
       assertCategoryExists(db, body.categoryId, 'categoryId');
       const id = randomUUID();
-      assertPersonTaggable(db, body.paidByPersonId, 'paidByPersonId', id);
+      assertPersonTaggable(db, body.paidByPersonId, 'paidByPersonId', id, 'payer');
       assertPersonTaggable(db, body.personId, 'personId', id);
       const now = deps.now().toISOString();
       db.prepare(`INSERT INTO transactions (id, account_id, source, date, amount_cents, bank_description, payee, category_id, notes, paid_by_person_id,
@@ -196,7 +182,8 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
           body.personId ?? null, now, now);
       // one transaction with the row: a bad line rolls the row back too
       if (body.splitLines?.length) writeSplit(db, id, body.amountCents, body.splitLines, 'splitLines', now);
-      return { status: 201, body: getTransaction(db, id) };
+      if (body.inboxReceiptId) linkInbox(deps, body.inboxReceiptId, id);
+      return { status: 201, body: getTransaction(db, id, localDay(deps.now())) };
     });
     return reply.code(r.status).send(r.body);
   });

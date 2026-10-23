@@ -5,63 +5,67 @@ import UIKit
 /// Snapped receipts wait here as files until the server has them, so a weak signal at the register loses nothing.
 @MainActor @Observable
 final class ReceiptQueue {
-    private(set) var pending: [String] = []
+    var pending: [String] { store.pending }
+    var uploading: Set<String> { store.uploading }
     private(set) var error: String?
-
-    private let dir: URL = {
+    private var store: ReceiptQueueStore = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appending(path: "ReceiptQueue", directoryHint: .isDirectory)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
-                                                 attributes: [.protectionKey: FileProtectionType.complete])
-        return dir
+        return ReceiptQueueStore(directory: base.appending(path: "ReceiptQueue", directoryHint: .isDirectory))
     }()
 
-    init() { pending = Self.ids(in: dir) }
-
-    private static func ids(in dir: URL) -> [String] {
-        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.creationDateKey])) ?? []
-        return files.filter { $0.pathExtension == "jpg" }
-            .sorted { ($0.creationDate ?? .distantPast) > ($1.creationDate ?? .distantPast) }
-            .map { $0.deletingPathExtension().lastPathComponent }
+    func selectServer(_ server: URL?) {
+        error = nil
+        do {
+            try store.selectServer(server)
+        } catch {
+            self.error = "Couldn't open the saved receipt photos."
+        }
     }
 
-    private func file(_ id: String) -> URL { dir.appending(path: "\(id).jpg") }
-
     func add(_ image: UIImage, scan: Bool = false, client: APIClient?) async {
+        guard let client else { return }
         guard let jpeg = ReceiptImage.jpeg(image, scan: scan) else { error = "Couldn't read that photo."; return }
         let id = UUID().uuidString.lowercased()
         do {
-            try jpeg.write(to: file(id), options: [.atomic, .completeFileProtection])
+            try store.add(jpeg, id: id, server: client.baseURL)
         } catch {
             self.error = "Couldn't save the photo on this iPhone."
             return
         }
-        pending.insert(id, at: 0)
         // a good signal now is the moment to send the ones that failed earlier
-        if await upload(id, client: client) { await retryAll(client: client) }
+        let generation = store.generation
+        if await upload(id, client: client), generation == store.generation { await retryAll(client: client) }
     }
 
     func retryAll(client: APIClient?) async {
-        for id in pending { await upload(id, client: client) }
+        do { try store.reload() } catch { self.error = "Couldn't open the saved receipt photos." }
+        let generation = store.generation
+        for id in pending {
+            guard generation == store.generation, !Task.isCancelled else { return }
+            await upload(id, client: client)
+        }
     }
 
     func delete(_ id: String) {
-        try? FileManager.default.removeItem(at: file(id))
-        pending.removeAll { $0 == id }
+        do { try store.delete(id) } catch { self.error = "Couldn't delete that photo." }
     }
 
-    func photo(_ id: String) -> UIImage? { UIImage(contentsOfFile: file(id).path()) }
+    func photo(_ id: String) -> UIImage? { store.file(id).flatMap { UIImage(contentsOfFile: $0.path()) } }
 
-    /// The server's PUT is idempotent by id, so overlapping retries are harmless.
+    /// Keep the local photo until this connection's upload succeeds.
     @discardableResult
     private func upload(_ id: String, client: APIClient?) async -> Bool {
-        guard let client, let jpeg = try? Data(contentsOf: file(id)) else { return false }
+        guard let client, store.isForServer(client.baseURL), let upload = store.beginUpload(id) else { return false }
+        defer { store.endUpload(upload) }
+        guard let jpeg = try? Data(contentsOf: upload.file) else { return false }
         do {
-            try await client.uploadInboxReceipt(id: id, jpeg: jpeg, capturedAt: file(id).creationDate ?? .now)
-            delete(id)
+            try await client.uploadInboxReceipt(id: id, jpeg: jpeg, capturedAt: upload.file.creationDate ?? .now)
+            guard store.isCurrent(upload) else { return false }
+            try store.completeUpload(upload)
             error = nil
             return true
         } catch {
+            guard store.isCurrent(upload) else { return false }
             self.error = "Some receipts are waiting to upload. They'll retry when Hermes is back in the foreground."
             return false
         }

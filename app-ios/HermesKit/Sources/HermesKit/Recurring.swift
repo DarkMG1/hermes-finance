@@ -1,5 +1,12 @@
 import Foundation
 
+extension LedgerTransaction {
+    public var canMarkRecurring: Bool {
+        amountCents < 0 && forgiven != true && personId == nil
+            && (splitLines.isEmpty || splitLines.contains { $0.personId == nil && $0.amountCents < 0 })
+    }
+}
+
 public struct RecurringItem: Codable, Sendable, Identifiable {
     public let id: String
     /// "plaid" or "manual"
@@ -42,6 +49,12 @@ public struct PatchRecurringBody: Codable, Sendable {
         self.name = name
         self.frequency = frequency
         self.ended = ended
+    }
+
+    public init(item: RecurringItem, name: String, frequency: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.init(name: !trimmed.isEmpty && trimmed != item.name ? trimmed : nil,
+                  frequency: frequency != item.frequency ? frequency : nil)
     }
 }
 

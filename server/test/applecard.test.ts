@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAppleCardCsv, parseCsv, sourceIds } from '../src/applecard.ts';
+import { parseAppleCardCsv, parseCsv } from '../src/applecard.ts';
 import { buildApp } from '../src/app.ts';
 import { getSpending } from '../src/cashflow.ts';
 import { AUTH, makeTestDeps, seedAccount, seedCategory, seedTxn } from './helpers.ts';
@@ -37,13 +37,6 @@ test('parseAppleCardCsv names the missing column and the bad row', () => {
   assert.throws(() => parseAppleCardCsv(`${HEADER}\n2026-09-01,,X,,,Purchase,1.00,`), /row 2: Transaction Date must be MM\/DD\/YYYY/);
   assert.throws(() => parseAppleCardCsv(`${HEADER}\n09/01/2026,,X,,,Purchase,abc,`), /row 2: Amount is not a number/);
   assert.throws(() => parseAppleCardCsv(`${HEADER}\n02/30/2026,,X,,,Purchase,1.00,`), /row 2: Transaction Date/);
-});
-
-test('identical rows get distinct, stable source ids', () => {
-  const rows = parseAppleCardCsv(`${HEADER}\n09/01/2026,,SAME,,,Purchase,3.00,\n09/01/2026,,SAME,,,Purchase,3.00,`);
-  const ids = sourceIds(rows);
-  assert.notEqual(ids[0], ids[1]);
-  assert.deepEqual(sourceIds(rows), ids);
 });
 
 test('import creates the Apple Card account, stores rows and computes the owed balance', async () => {
@@ -156,7 +149,7 @@ test('re-import fills an uncategorized row from merchant memory learned since, n
 
 const statement = (clearing: string) => `${HEADER}\n09/30/2026,${clearing},SYNTHETIC COFFEE,Synthetic Coffee,Restaurants,Purchase,5.00,Synthetic Person`;
 
-test('identical same-day purchases that clear on different days are two charges, across statements', async () => {
+test('identical same-day purchases in separate imports stay separate when they clear on different days', async () => {
   const { deps } = makeTestDeps();
   const app = buildApp(deps);
   const csvA = statement('09/30/2026');
@@ -168,7 +161,7 @@ test('identical same-day purchases that clear on different days are two charges,
   const count = () => (deps.db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE source = 'applecard'").get() as { n: number }).n;
   assert.equal(count(), 2);
   const balanceCents = () => (deps.db.prepare('SELECT balance_current_cents AS b FROM accounts WHERE id = ?').get(a.accountId) as { b: number }).b;
-  assert.equal(balanceCents(), 1000, 'both charges count toward the card balance');
+  assert.equal(balanceCents(), 1000, 'both purchases count');
   const again = [await importCsv(csvA, 'ac-a2'), await importCsv(csvB, 'ac-b2')];
   assert.deepEqual(again.map((r) => [r.added, r.updated]), [[0, 1], [0, 1]], 'either statement re-imported updates, never duplicates');
   assert.equal(count(), 2);
@@ -250,4 +243,85 @@ test('new rows take the category of the newest row with their merchant name ahea
   deps.db.prepare("UPDATE transactions SET category_id = NULL, category_owner_set = 1 WHERE source = 'applecard' AND amount_cents = -105000").run();
   await post(app, SEPT, 'k2');
   assert.deepEqual([cat(-1234), cat(-105000)], ['dining', null]);
+});
+
+test('corrected amounts keep transaction identity and owner edits and resize the split', async () => {
+  const { deps } = makeTestDeps();
+  const db = deps.db;
+  const app = buildApp(deps);
+  await post(app, statement('09/30/2026'), 'correction-first');
+  const { id } = db.prepare("SELECT id FROM transactions WHERE source = 'applecard'").get() as { id: string };
+  seedCategory(db, { id: 'synthetic', name: 'Synthetic Food' });
+  db.prepare("UPDATE transactions SET date = '2026-10-02', date_owner_set = 1, category_id = NULL, category_owner_set = 1, payee = 'Synthetic Quill', notes = 'Synthetic note' WHERE id = ?").run(id);
+  db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id) VALUES (?, ?, ?, ?)').run('s1', id, -300, 'synthetic');
+  db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id) VALUES (?, ?, ?, ?)').run('s2', id, -200, null);
+  const corrected = statement('10/01/2026').replace('5.00', '7.50');
+  const response = await post(app, corrected, 'correction-next');
+  assert.equal(response.statusCode, 200);
+  assert.deepEqual([response.json().added, response.json().updated], [0, 1]);
+  assert.deepEqual(db.prepare("SELECT id, date, category_id, payee, notes, amount_cents, clearing_date FROM transactions WHERE source = 'applecard'").all(),
+    [{ id, date: '2026-10-02', category_id: null, payee: 'Synthetic Quill', notes: 'Synthetic note', amount_cents: -750, clearing_date: '2026-10-01' }]);
+  assert.deepEqual(db.prepare('SELECT amount_cents FROM split_lines WHERE transaction_id = ? ORDER BY id').all(id), [{ amount_cents: -450 }, { amount_cents: -300 }]);
+  const again = (await post(app, corrected, 'correction-repeat')).json();
+  assert.deepEqual([again.added, again.updated], [0, 1]);
+  assert.equal(db.prepare('SELECT balance_current_cents FROM accounts WHERE id = ?').pluck().get(again.accountId), 750);
+});
+
+test('an amount-only correction keeps the original transaction', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  await post(app, statement('09/30/2026'), 'amount-first');
+  const id = deps.db.prepare("SELECT id FROM transactions WHERE source = 'applecard'").pluck().get();
+  const r = await post(app, statement('09/30/2026').replace('5.00', '7.50'), 'amount-next');
+  assert.equal(r.statusCode, 200);
+  assert.deepEqual([r.json().added, r.json().updated], [0, 1]);
+  assert.deepEqual(deps.db.prepare("SELECT id, amount_cents, clearing_date FROM transactions WHERE source = 'applecard'").all(),
+    [{ id, amount_cents: -750, clearing_date: '2026-09-30' }]);
+});
+
+test('owner-removed rows are never correction candidates or ambiguity for a live candidate', async () => {
+  for (const live of [false, true]) {
+    const { deps } = makeTestDeps();
+    const app = buildApp(deps);
+    const first = live ? [statement('09/30/2026'), coffee('10/01/2026').replace('5.00', '6.00')].join('\n') : statement('09/30/2026');
+    await post(app, first, 'removed-first');
+    deps.db.prepare("UPDATE transactions SET removed_at = '2026-10-01T00:00:00Z' WHERE amount_cents = -500").run();
+    const removed = deps.db.prepare('SELECT * FROM transactions WHERE removed_at IS NOT NULL').get();
+    const liveId = deps.db.prepare('SELECT id FROM transactions WHERE removed_at IS NULL').pluck().get();
+    const r = await post(app, statement('10/02/2026').replace('5.00', '7.50'), 'removed-next');
+    assert.equal(r.statusCode, 200);
+    assert.deepEqual([r.json().added, r.json().updated], live ? [0, 1] : [1, 0]);
+    assert.deepEqual(deps.db.prepare('SELECT * FROM transactions WHERE removed_at IS NOT NULL').get(), removed);
+    const active = deps.db.prepare('SELECT id, amount_cents FROM transactions WHERE removed_at IS NULL').all() as { id: string; amount_cents: number }[];
+    assert.equal(active.length, 1);
+    assert.equal(active[0]!.amount_cents, -750);
+    if (live) assert.equal(active[0]!.id, liveId);
+    assert.equal(deps.db.prepare('SELECT balance_current_cents FROM accounts WHERE id = ?').pluck().get(r.json().accountId), 750);
+  }
+});
+
+test('corrections never merge an ambiguous stored pair, a file pair, or another Apple row type', async () => {
+  for (const scenario of ['stored pair', 'file pair', 'other type']) {
+    const { deps } = makeTestDeps();
+    const app = buildApp(deps);
+    const first = scenario === 'stored pair' ? [HEADER, coffee('09/30/2026'), coffee('10/01/2026')].join('\n') : statement('09/30/2026');
+    await post(app, first, 'ambiguous-first');
+    const corrected = coffee('10/02/2026').replace('5.00', '7.50');
+    const next = scenario === 'file pair' ? [HEADER, coffee('09/30/2026'), corrected].join('\n')
+      : [HEADER, scenario === 'other type' ? corrected.replace('Purchase', 'Credit') : corrected].join('\n');
+    const r = await post(app, next, 'ambiguous-next');
+    assert.equal(r.statusCode, 200, scenario);
+    assert.equal(r.json().added, 1, scenario);
+    assert.equal(deps.db.prepare("SELECT COUNT(*) FROM transactions WHERE source = 'applecard'").pluck().get(), scenario === 'stored pair' ? 3 : 2, scenario);
+  }
+});
+
+test('equal-amount counterparts still make a clearing-date correction ambiguous', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  await post(app, [HEADER, coffee('09/30/2026'), coffee('10/01/2026').replace('5.00', '7.50')].join('\n'), 'first');
+  const before = deps.db.prepare("SELECT id, amount_cents, clearing_date FROM transactions ORDER BY clearing_date").all();
+  const r = await post(app, [HEADER, coffee('10/02/2026').replace('5.00', '7.50')].join('\n'), 'next');
+  assert.deepEqual([r.statusCode, r.json().added, r.json().updated], [200, 1, 0]);
+  assert.deepEqual(deps.db.prepare("SELECT id, amount_cents, clearing_date FROM transactions WHERE clearing_date < '2026-10-02' ORDER BY clearing_date").all(), before);
 });

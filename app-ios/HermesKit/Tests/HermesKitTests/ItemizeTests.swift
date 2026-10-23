@@ -39,6 +39,17 @@ private struct VectorFile: Decodable { let cases: [VectorCase] }
     #expect(ItemShares.compute(items: [.init(amountCents: 100, people: ["me"])], taxCents: Int.max, tipCents: 1, feesCents: 0, targetCents: 100) == nil)
 }
 
+@Test func combinedParticipantsMustFitTheSplitEditor() {
+    let people = (0..<20).map { "p\($0)" }
+    let owner = ItemShares.Item(amountCents: 100, people: ["me"])
+    #expect(ItemShares.compute(items: [.init(amountCents: 2000, people: people), owner],
+                               taxCents: 0, tipCents: 0, feesCents: 0, targetCents: 2100) == nil)
+    let valid = ItemShares.compute(items: [.init(amountCents: 2000, people: Array(people.prefix(19))), owner],
+                                   taxCents: 0, tipCents: 0, feesCents: 0, targetCents: 2100)
+    #expect(valid?.shares.count == 20)
+    #expect(valid?.shares.reduce(0) { $0 + $1.cents } == 2100)
+}
+
 @Test func itemizationDecodes() throws {
     let it: Itemization = try JSONDecoder().decode(Itemization.self, from: try fixture("itemization"))
     #expect(it.items.map(\.name) == ["Synthetic Bagel", "Synthetic Coffee"])

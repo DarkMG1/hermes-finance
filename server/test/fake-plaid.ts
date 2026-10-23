@@ -1,4 +1,4 @@
-import { PlaidError, type LinkResult, type LinkTokenOpts, type PlaidAccount, type PlaidHoldings, type PlaidInvestmentTxn, type PlaidSecurity, type PlaidPort, type PlaidRecurringStream, type PlaidTxn, type SyncPage } from '../src/plaid/port.ts';
+import { PlaidError, type LinkResult, type LinkTokenOpts, type PlaidAccount, type PlaidHoldings, type PlaidPort, type PlaidRecurringStream, type PlaidTxn, type SyncPage } from '../src/plaid/port.ts';
 
 export function txn(over: Partial<PlaidTxn> & { transactionId: string }): PlaidTxn {
   return {
@@ -16,7 +16,7 @@ export class FakePlaid implements PlaidPort {
   exchanged: string[] = [];
   syncCalls: (string | null)[] = [];
   holdings: PlaidHoldings = { holdings: [], securities: [] };
-  investmentTxns: { transactions: PlaidInvestmentTxn[]; securities: PlaidSecurity[] } = { transactions: [], securities: [] };
+  investmentTxns: Awaited<ReturnType<PlaidPort['investmentsTransactionsGet']>> = { accountIds: [], transactions: [], securities: [] };
   investmentTxnCalls: [string, string][] = [];
   private investmentTxnFailures: string[] = [];
   recurring: PlaidRecurringStream[] = [];

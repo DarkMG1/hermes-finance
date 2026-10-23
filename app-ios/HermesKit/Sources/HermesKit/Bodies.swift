@@ -62,7 +62,7 @@ public struct PatchAccountBody: Encodable, Sendable, Equatable {
     }
 }
 
-/// One line of a split. `categoryId: nil` sends JSON null (an uncategorized line); nil notes, person and name are left out.
+/// One line of a split. Nil category, person and name send JSON null; nil notes are left out.
 public struct SplitLineBody: Encodable, Sendable, Equatable {
     public let amountCents: Int
     public let categoryId: String?
@@ -86,8 +86,8 @@ public struct SplitLineBody: Encodable, Sendable, Equatable {
         try container.encode(amountCents, forKey: .amountCents)
         if let categoryId { try container.encode(categoryId, forKey: .categoryId) } else { try container.encodeNil(forKey: .categoryId) }
         try container.encodeIfPresent(notes, forKey: .notes)
-        try container.encodeIfPresent(personId, forKey: .personId)
-        try container.encodeIfPresent(payee, forKey: .payee)
+        try container.encode(personId, forKey: .personId)
+        try container.encode(payee, forKey: .payee)
     }
 }
 
@@ -139,9 +139,11 @@ public struct CreateTransactionBody: Encodable, Sendable, Equatable {
     public let personId: String?
     /// Saved already split; the category then lives on the lines.
     public let splitLines: [SplitLineBody]?
+    /// Link the waiting receipt in the same transaction as Paid-by creation.
+    public let inboxReceiptId: String?
 
     public init(date: String, amountCents: Int, payee: String, categoryId: String?, notes: String?, paidByPersonId: String? = nil,
-                personId: String? = nil, splitLines: [SplitLineBody]? = nil) {
+                personId: String? = nil, splitLines: [SplitLineBody]? = nil, inboxReceiptId: String? = nil) {
         self.date = date
         self.amountCents = amountCents
         self.payee = payee
@@ -150,6 +152,7 @@ public struct CreateTransactionBody: Encodable, Sendable, Equatable {
         self.paidByPersonId = paidByPersonId
         self.personId = personId
         self.splitLines = splitLines
+        self.inboxReceiptId = inboxReceiptId
     }
 }
 

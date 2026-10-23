@@ -33,6 +33,7 @@ public final class APIClient: Sendable {
             throw ClientError.transport("bad server address")
         }
         if !query.isEmpty { components.queryItems = query }
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         guard let url = components.url else { throw ClientError.transport("bad server address") }
         var headers = extraHeaders.merging(["Authorization": "Bearer \(token)", "Accept": "application/json"]) { $1 }
         if body != nil { headers["Content-Type"] = contentType }

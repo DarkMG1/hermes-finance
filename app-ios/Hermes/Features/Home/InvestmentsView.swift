@@ -11,6 +11,7 @@ struct InvestmentsView: View {
     @State private var holdings: LoadState<Investments> = .loading
     @State private var history: LoadState<NetWorthHistory> = .loading
     @State private var scrubbed: Date?
+    @State private var chart = PreparedHistory(points: [])
     /// Empty = all accounts. Per visit, not remembered.
     @State private var selected: Set<String> = []
     /// This screen's eye: shows amounts here (and in holdings opened from here) only, until leaving or going to the background.
@@ -37,7 +38,7 @@ struct InvestmentsView: View {
                     if loadedHistory.value.points.count < 2 {
                         Text("History starts today. Check back tomorrow.").textStyle(.subhead, color: Palette.secondaryText)
                     } else {
-                        Card { HistoryChart(points: loadedHistory.value.points, scrubbed: $scrubbed) }
+                        Card { HistoryChart(history: chart, scrubbed: $scrubbed) }
                         if let through = loadedHistory.value.estimatedThrough { EstimatedFootnote(through: through) }
                     }
                 }
@@ -128,7 +129,7 @@ struct InvestmentsView: View {
 
     /// While dragging, the header shows the chosen day's total instead of today's.
     @ViewBuilder private func header(_ investments: Investments) -> some View {
-        if case .loaded(let loadedHistory) = history, let point = HistoryChart.point(at: scrubbed, in: loadedHistory.value.points) {
+        if case .loaded = history, let point = chart.point(at: scrubbed)?.value {
             HStack {
                 Text(DayText.display(point.date)).textStyle(.subhead, color: Palette.secondaryText)
                 Spacer()
@@ -198,6 +199,7 @@ struct InvestmentsView: View {
             let loaded = try await reader.read("/v1/investments/history", query: range.queryItems + InvestmentFilter.queryItems(selected),
                                          as: NetWorthHistory.self)
             guard !Task.isCancelled, requested == historyKey else { return }
+            chart = PreparedHistory(points: loaded.value.points)
             history = .loaded(loaded)
         } catch {
             guard !Task.isCancelled, requested == historyKey else { return }
