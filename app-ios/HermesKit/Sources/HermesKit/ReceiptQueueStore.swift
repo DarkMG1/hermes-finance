@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 /// Files survive disconnects, but only the current server's photos are visible or eligible for upload.
@@ -25,7 +24,9 @@ public struct ReceiptQueueStore: Sendable {
         pending = []
         directory = nil
         guard let server = serverURL else { return }
-        let key = SHA256.hash(data: Data(server.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
+        // base64url of the normalised URL: a safe folder name, and Foundation-only so HermesKit builds on Linux CI
+        let key = Data(server.absoluteString.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
         let directory = root.appending(path: key, directoryHint: .isDirectory)
         #if os(iOS)
         let attributes: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.complete]
