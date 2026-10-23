@@ -29,3 +29,14 @@ public struct InboxList: Codable, Sendable {
 }
 
 struct LinkInboxBody: Encodable { let transactionId: String }
+
+public struct PendingReceiptLink: Sendable {
+    public var unlinked: LedgerTransaction?
+    /// A definitive link rejection must not strand an already-created expense.
+    public var createdPayment: LedgerTransaction?
+    public var target: LedgerTransaction? { unlinked ?? createdPayment }
+
+    public init() {}
+
+    public func allows(_ transactionId: String) -> Bool { target.map { $0.id == transactionId } ?? true }
+}

@@ -140,7 +140,7 @@ struct TransactionDetailSheet: View {
             }
             if let bill {
                 Section { Text("Recurring · \(RecurringFrequency.label(bill.frequency))") }
-            } else if transaction.amountCents < 0 && !forgiven {
+            } else if transaction.canMarkRecurring {
                 Section {
                     // dialog on its button: on the Form it floats mid-screen
                     Button("Mark as recurring…") {
@@ -299,7 +299,7 @@ struct TransactionDetailSheet: View {
     }
 
     private func markRecurring(_ frequency: String) async {
-        guard !recurringBusy, let client = model.client else { return }
+        guard !recurringBusy, transaction.canMarkRecurring, let client = model.client else { return }
         recurringBusy = true
         defer { recurringBusy = false }
         recurringError = nil

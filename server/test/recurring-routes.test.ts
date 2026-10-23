@@ -252,3 +252,16 @@ test('a stream Plaid stops listing stays as ended, still holding its charges; a 
   assert.deepEqual([(await get('/v1/transactions/tv-other')).recurring.id, (await get('/v1/transactions/tv')).recurring.id], ['man-tv', 's-tv']);
   assert.equal((await send('PATCH', '/v1/recurring/s-tv', { ended: true })).json().cancelled, true);
 });
+
+test("marking someone else's charge recurring explains the conflict and creates nothing", async () => {
+  for (const split of [false, true]) {
+    const { db, send } = setup();
+    seedPerson(db, { id: 'p1', name: 'Synthetic Quill' });
+    if (split) seedSplit(db, { id: 'a', transactionId: 'sub', amountCents: -1099, categoryId: null, personId: 'p1' });
+    else db.prepare("UPDATE transactions SET person_id = 'p1' WHERE id = 'sub'").run();
+    const r = await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly' });
+    assert.deepEqual([r.statusCode, r.json().code], [409, 'PERSON_TAGGED']);
+    assert.match(r.json().message, /someone else/);
+    assert.equal(db.prepare('SELECT COUNT(*) FROM recurring_manual').pluck().get(), 0);
+  }
+});

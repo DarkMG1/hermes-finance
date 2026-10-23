@@ -4,7 +4,7 @@ import type { Deps } from '../deps.ts';
 import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
 import { idempotentWrite } from '../idempotency.ts';
-import { applyItems, getItemization, ME, replaceItems } from '../itemize.ts';
+import { applyItems, currentLines, getItemization, ME, replaceItems } from '../itemize.ts';
 import { getTransaction } from '../ledger.ts';
 import { ReaderError } from '../receipt-reader.ts';
 import { parseBody } from '../validate.ts';
@@ -23,7 +23,7 @@ export function itemizeRoutes(app: FastifyInstance, deps: Deps): void {
     const reader = deps.receiptReader;
     if (!reader) throw new ApiError(503, 'READER_NOT_CONFIGURED', 'receipt reading is not set up');
     const { jpeg, created_at: photoAt } = db.prepare('SELECT jpeg, created_at FROM receipts WHERE transaction_id = ?').get(id) as { jpeg: Buffer; created_at: string };
-    const state = () => JSON.stringify([getItemization(db, id), db.prepare('SELECT applied_lines FROM receipts WHERE transaction_id = ?').pluck().get(id),
+    const state = () => JSON.stringify([getItemization(db, id), currentLines(db, id), db.prepare('SELECT applied_lines FROM receipts WHERE transaction_id = ?').pluck().get(id),
       db.prepare('SELECT paid_by_person_id FROM transactions WHERE id = ?').pluck().get(id)]);
     const before = state();
     let result;

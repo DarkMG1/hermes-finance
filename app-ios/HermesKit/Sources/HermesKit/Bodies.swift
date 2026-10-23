@@ -139,9 +139,11 @@ public struct CreateTransactionBody: Encodable, Sendable, Equatable {
     public let personId: String?
     /// Saved already split; the category then lives on the lines.
     public let splitLines: [SplitLineBody]?
+    /// Link the waiting receipt in the same transaction as Paid-by creation.
+    public let inboxReceiptId: String?
 
     public init(date: String, amountCents: Int, payee: String, categoryId: String?, notes: String?, paidByPersonId: String? = nil,
-                personId: String? = nil, splitLines: [SplitLineBody]? = nil) {
+                personId: String? = nil, splitLines: [SplitLineBody]? = nil, inboxReceiptId: String? = nil) {
         self.date = date
         self.amountCents = amountCents
         self.payee = payee
@@ -150,6 +152,7 @@ public struct CreateTransactionBody: Encodable, Sendable, Equatable {
         self.paidByPersonId = paidByPersonId
         self.personId = personId
         self.splitLines = splitLines
+        self.inboxReceiptId = inboxReceiptId
     }
 }
 

@@ -37,6 +37,29 @@ private func referenceReader(_ transport: ReferenceTransport, directory: URL) ->
     Reader(client: APIClient(baseURL: testBase, token: "t", transport: transport), cache: ResponseCache(directory: directory))
 }
 
+@Test(.timeLimit(.minutes(1))) func supersededReadersCannotOverwriteNewestOfflineResponse() async throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let cache = ResponseCache(directory: root)
+    let transport = ReferenceTransport()
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    let first = Reader(client: client, cache: cache, now: { Date(timeIntervalSince1970: 1) })
+    let second = Reader(client: client, cache: cache, now: { Date(timeIntervalSince1970: 2) })
+    let old = Task { try await first.read("/v1/people", as: [Person].self) }
+    await transport.waitForRequests(1)
+    let fresh = Task { try await second.read("/v1/people", as: [Person].self) }
+    await transport.waitForRequests(2)
+    await transport.finish(1..<2, name: "Synthetic Wren")
+    _ = try await fresh.value
+    await transport.finish(0..<1, name: "Synthetic Quill")
+    _ = try await old.value
+
+    let offline = Reader(client: APIClient(baseURL: testBase, token: "t", transport: FakeTransport([])), cache: cache)
+    let cached = try await offline.read("/v1/people", as: [Person].self)
+    #expect(cached.fromCache && cached.value.first?.name == "Synthetic Wren")
+    #expect(cached.savedAt == Date(timeIntervalSince1970: 2))
+}
+
 @MainActor @Test(.timeLimit(.minutes(1))) func independentReferenceReadsRunTogetherAndOverlappingLaunchReadsCoalesce() async {
     let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
@@ -60,7 +83,7 @@ private func referenceReader(_ transport: ReferenceTransport, directory: URL) ->
     }
 }
 
-@MainActor @Test(.timeLimit(.minutes(1))) func editRefreshSupersedesOlderReferenceReadsAndDisconnectInvalidatesThem() async {
+@MainActor @Test(.timeLimit(.minutes(1))) func editRefreshSupersedesOlderReferenceReadsAndDisconnectInvalidatesThem() async throws {
     let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }
     let transport = ReferenceTransport()
@@ -82,4 +105,7 @@ private func referenceReader(_ transport: ReferenceTransport, directory: URL) ->
     await transport.finish(6..<9, name: "Synthetic Moss")
     let discarded = await disconnected.value
     #expect(discarded == nil)
+    let offline = Reader(client: APIClient(baseURL: testBase, token: "t", transport: FakeTransport([])), cache: ResponseCache(directory: root))
+    let cached = try await offline.read("/v1/people", query: [URLQueryItem(name: "all", value: "1")], as: [Person].self)
+    #expect(cached.fromCache && cached.value.first?.name == "Synthetic Wren")
 }

@@ -2,7 +2,7 @@ import type { ExpenseRow, ExpensesPage, ExpensesQuery, PayeeHistory, PayeeHistor
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
 import { periodRange } from './days.ts';
-import { bankText, normalizeName } from './recurring.ts';
+import { bankText, moneyOut, normalizeName } from './recurring.ts';
 
 // Every amount that can count toward Out or In, one row each: the owner's split lines, unsplit untagged transactions, and
 // split differences. Bound with (from, toExclusive) three times.
@@ -209,8 +209,7 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
     return { named, whole, prefix: !q.recurringId && !!found };
   });
   // Recurring's trigger exactly: no money-out charge of any category carries the bill's name
-  if (source && !(db.prepare('SELECT payee, merchant_name, bank_description FROM transactions WHERE removed_at IS NULL AND amount_cents < 0 AND person_id IS NULL').all() as
-    { payee: string | null; merchant_name: string | null; bank_description: string }[]).some((t) => [t.payee, t.merchant_name, t.bank_description].some(hit))) {
+  if (source && !moneyOut(db).some((t) => keys.some((k) => t.names.has(k)))) {
     collect((l) => ({ named: l.transaction_id === source && l.total < 0 && l.amount < 0 && l.name, whole: true }));
   }
   const ordered = [...rows.values()].sort((a, b) => a.at[0] < b.at[0] ? 1 : a.at[0] > b.at[0] ? -1

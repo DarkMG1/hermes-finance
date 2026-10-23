@@ -8,7 +8,7 @@ import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { assertPersonTaggable, homePeople } from '../people.ts';
 import { excludedBy, getExpenses, getPayeeHistory, getReimbursements, getSpending } from '../cashflow.ts';
-import { restoreToInbox } from '../inbox.ts';
+import { linkInbox, restoreToInbox } from '../inbox.ts';
 import { normalizeName } from '../recurring.ts';
 import { getNetWorth, localDay } from '../networth.ts';
 import { oldestOpenBefore } from '../reconcile.ts';
@@ -182,6 +182,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
           body.personId ?? null, now, now);
       // one transaction with the row: a bad line rolls the row back too
       if (body.splitLines?.length) writeSplit(db, id, body.amountCents, body.splitLines, 'splitLines', now);
+      if (body.inboxReceiptId) linkInbox(deps, body.inboxReceiptId, id);
       return { status: 201, body: getTransaction(db, id, localDay(deps.now())) };
     });
     return reply.code(r.status).send(r.body);

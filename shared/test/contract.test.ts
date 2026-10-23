@@ -51,3 +51,10 @@ test('date bounds apply to inputs while stored bank dates and months remain vali
   assert.equal(Reimbursements.safeParse({ months: [{ month, outCents: 0, inCents: 0, unpaidCents: 0 }], rows: [] }).success, true);
   assert.equal(Transaction.shape.date.safeParse(`${month}-31`).success, true);
 });
+
+test('atomic inbox creation requires a payer and keeps existing create requests valid', () => {
+  const body = { date: '2026-03-10', amountCents: -1050, payee: 'Synthetic Grocer' };
+  assert.equal(CreateTransactionBody.safeParse(body).success, true);
+  assert.equal(CreateTransactionBody.safeParse({ ...body, inboxReceiptId: 'r1' }).success, false);
+  assert.equal(CreateTransactionBody.safeParse({ ...body, inboxReceiptId: 'r1', paidByPersonId: 'p1' }).success, true);
+});

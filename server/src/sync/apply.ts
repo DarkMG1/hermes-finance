@@ -162,14 +162,15 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
   }
   // Also repairs bills promoted before this pass existed; owner-renamed match text stays intact.
   const promoted = db.prepare(`SELECT m.id, m.match_text, p.id AS posted_id,
-      COALESCE(t.payee, t.merchant_name, t.bank_description) AS pending_name,
-      COALESCE(p.payee, p.merchant_name, p.bank_description) AS posted_name
+      t.merchant_name AS pending_merchant, t.bank_description AS pending_bank,
+      COALESCE(p.merchant_name, p.bank_description) AS posted_name
     FROM recurring_manual m JOIN transactions t ON t.id = m.source_transaction_id AND t.source = 'plaid'
     JOIN transactions p ON p.source = 'plaid' AND p.pending_source_id = t.source_id AND p.pending = 0 AND p.removed_at IS NULL
     JOIN accounts a ON a.id = p.account_id WHERE a.item_id = ?`).all(opts.itemId) as
-    { id: string; match_text: string; posted_id: string; pending_name: string; posted_name: string }[];
+    { id: string; match_text: string; posted_id: string; pending_merchant: string | null; pending_bank: string; posted_name: string }[];
   const moveBill = db.prepare('UPDATE recurring_manual SET source_transaction_id = ?, match_text = ? WHERE id = ?');
-  for (const r of promoted) moveBill.run(r.posted_id, r.match_text === normalizeName(r.pending_name) ? normalizeName(r.posted_name) || r.match_text : r.match_text, r.id);
+  for (const r of promoted) moveBill.run(r.posted_id, [r.pending_merchant, r.pending_bank].some((n) => n && r.match_text === normalizeName(n))
+    ? normalizeName(r.posted_name) || r.match_text : r.match_text, r.id);
   // new rows get their name, and history is backfilled on the first sync after deploy
   nameZellePayees(db, opts.nowIso);
   fillFromMemory(db, opts.nowIso);

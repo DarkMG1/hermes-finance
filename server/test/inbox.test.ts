@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { getInboxRow, linkInbox, listInbox, markInterruptedReads, matchInbox, saveInboxItems, storeRead } from '../src/inbox.ts';
 import { getTransaction } from '../src/ledger.ts';
 import { applyItems, getItemization } from '../src/itemize.ts';
+import { getPerson } from '../src/people.ts';
 import { buildApp } from '../src/app.ts';
 import { AUTH, makeTestDeps, seedAccount, seedCategory, seedPerson, seedSplit, seedTxn } from './helpers.ts';
 
@@ -249,6 +250,7 @@ test('restoration preserves current itemization and relinks without resurrecting
     } else {
       applyItems(db, 'old', { items: [{ name: 'Synthetic Pear', amountCents: 900, people: ['me'] }], taxCents: 10, tipCents: 100, feesCents: 40 }, deps.now().toISOString());
     }
+    db.prepare("UPDATE inbox_receipts SET read_failed = 1 WHERE id = 'r1'").run();
     const current = getItemization(db, 'old');
     db.prepare("UPDATE transactions SET removed_at = 'gone' WHERE id = 'old'").run();
     assert.equal(matchInbox(deps), 0);
@@ -257,6 +259,7 @@ test('restoration preserves current itemization and relinks without resurrecting
     assert.deepEqual([restored.tax_cents, restored.tip_cents, restored.fees_cents, restored.total_cents, restored.read_at],
       [current.taxCents, current.tipCents, current.feesCents, current.totalCents, current.readAt]);
     assert.equal(restored.tagged, readAgain ? 0 : 1);
+    assert.equal(restored.read_failed, 0);
     assert.deepEqual(restored.jpeg, JPEG);
     charge('new', '2026-03-12', -1050);
     assert.equal(matchInbox(deps), 1);
@@ -291,7 +294,7 @@ test('inbox listing and matching read metadata without materializing receipt pho
   assert.equal(checked, 3);
 });
 
-test('restoration retains inbox tags when the first link kept an existing bank split', () => {
+test('restoration leaves unapplied inbox tags untagged when the first link kept an existing bank split', () => {
   const { deps, db, snap, charge } = setup();
   snap('r1');
   storeRead(db, 'r1', READ, 'now');
@@ -303,9 +306,37 @@ test('restoration retains inbox tags when the first link kept an existing bank s
   assert.equal(linkInbox(deps, 'r1', 'old').splitApplied, false);
   db.prepare("UPDATE transactions SET removed_at = 'gone' WHERE id = 'old'").run();
   matchInbox(deps);
-  assert.equal(getInboxRow(db, 'r1')!.tagged, 1);
+  assert.equal(getInboxRow(db, 'r1')!.tagged, 0);
   assert.deepEqual(JSON.parse(getInboxRow(db, 'r1')!.items!), body.items);
   charge('new', '2026-03-12', -1050);
   assert.equal(matchInbox(deps), 1);
-  assert.equal(getTransaction(db, 'new', '2026-03-15')!.splitLines.find((l) => l.personId)?.personId, 'p2');
+  assert.deepEqual(getTransaction(db, 'new', '2026-03-15')!.splitLines, []);
+});
+
+for (const edit of ['shares', 'remove', 'forgive']) test(`restoration never resurrects obsolete debt after ${edit}`, async () => {
+  const { deps, db, snap, charge } = setup();
+  const app = buildApp(deps);
+  snap('r1');
+  storeRead(db, 'r1', READ, 'now');
+  saveInboxItems(db, 'r1', { items: [{ name: 'Synthetic Pear', amountCents: 1050, people: ['me', 'p1'] }], taxCents: 0, tipCents: 0, feesCents: 0 });
+  charge('old', '2026-03-11', -1050);
+  linkInbox(deps, 'r1', 'old');
+  const headers = { ...AUTH, 'idempotency-key': 'edit' };
+  if (edit === 'forgive') {
+    assert.equal((await app.inject({ method: 'POST', url: '/v1/people/p1/forgive', headers,
+      payload: { amountCents: 525, date: '2026-03-12' } })).statusCode, 201);
+  } else {
+    const lines = edit === 'remove' ? [] : [
+      { amountCents: -850, categoryId: 'cat-food', personId: null, payee: null },
+      { amountCents: -200, categoryId: null, personId: 'p1', payee: null },
+    ];
+    assert.equal((await app.inject({ method: 'PUT', url: '/v1/transactions/old/splits', headers, payload: { lines } })).statusCode, 200);
+  }
+  db.prepare("UPDATE transactions SET removed_at = 'gone' WHERE id = 'old'").run();
+  matchInbox(deps);
+  assert.equal(getInboxRow(db, 'r1')!.tagged, edit === 'forgive' ? 1 : 0);
+  charge('new', '2026-03-12', -1050);
+  assert.equal(matchInbox(deps), 1);
+  assert.equal(getPerson(db, 'p1')!.person.balanceCents, 0);
+  if (edit !== 'forgive') assert.deepEqual(getTransaction(db, 'new', '2026-03-15')!.splitLines, []);
 });

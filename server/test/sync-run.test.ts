@@ -264,3 +264,13 @@ test('a failed recurring refresh never fails the sync; a good one stores the str
   assert.equal((await syncItem(deps, 'i1')).result, 'ok');
   assert.equal(n(), 1);
 });
+
+test('a newly reported null balance never becomes a zero snapshot anchor', async () => {
+  const { deps, plaid } = setup();
+  plaid.accounts[0]!.currentBalance = null;
+  plaid.accounts[0]!.availableBalance = null;
+  plaid.queueSync([{ added: [txn({ transactionId: 'unknown-balance', amount: 20 })], modified: [], removed: [], nextCursor: 'c1', hasMore: false }]);
+  assert.equal((await syncItem(deps, 'i1')).result, 'ok');
+  assert.deepEqual(deps.db.prepare('SELECT * FROM balance_snapshots').all(), []);
+  assert.deepEqual(getNetWorth(deps.db, 'all', '2026-03-15').points, []);
+});

@@ -255,9 +255,14 @@ test('a hand save without a read leaves readAt null', async () => {
 });
 
 test('a transaction reread rejects concurrent item, extra, split or payer changes', async () => {
-  for (const change of ['items', 'extras', 'split', 'payer']) {
+  for (const change of ['items', 'extras', 'split', 'payer', 'edited split']) {
     const { read, save, items, deps: { db }, reader } = setup();
     await read('own');
+    if (change === 'edited split') {
+      await save('own', body([['Synthetic Bread', 2160, ['me', 'p1']]]));
+      db.prepare("UPDATE split_lines SET amount_cents = amount_cents - 1 WHERE transaction_id = 'own' AND person_id IS NULL").run();
+      assert.equal((await items('own')).json().handEdited, true);
+    }
     let release!: () => void;
     let started!: () => void;
     const gate = new Promise<void>((r) => { release = r; });
@@ -268,6 +273,7 @@ test('a transaction reread rejects concurrent item, extra, split or payer change
     const pending = read(id).then((r) => r);
     await reading;
     if (change === 'payer') db.prepare("UPDATE transactions SET paid_by_person_id = 'p2' WHERE id = 'paid'").run();
+    else if (change === 'edited split') db.prepare("UPDATE split_lines SET amount_cents = amount_cents - 1 WHERE transaction_id = 'own' AND person_id IS NULL").run();
     else {
       assert.equal((await save('own', body([['Synthetic Bread', 1000, ['me']], ['Synthetic Jam', 1000, ['p1']]], 160))).statusCode, 200);
       if (change === 'extras') assert.equal((await save('own', { ...body([['Synthetic Bread', 1000, ['me']], ['Synthetic Jam', 1000, ['p1']]], 160), tipCents: 100 })).statusCode, 200);

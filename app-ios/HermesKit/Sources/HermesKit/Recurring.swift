@@ -1,5 +1,12 @@
 import Foundation
 
+extension LedgerTransaction {
+    public var canMarkRecurring: Bool {
+        amountCents < 0 && forgiven != true && personId == nil
+            && (splitLines.isEmpty || splitLines.contains { $0.personId == nil && $0.amountCents < 0 })
+    }
+}
+
 public struct RecurringItem: Codable, Sendable, Identifiable {
     public let id: String
     /// "plaid" or "manual"

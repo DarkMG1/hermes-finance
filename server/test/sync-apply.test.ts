@@ -99,7 +99,7 @@ test(`a pending bill follows its posted source and repairs old links (${renamed}
   apply([page({ added: [txn({ transactionId: 'post', pendingTransactionId: 'pend', merchantName: postedName })] })]);
   const postedId = row('post')!.id;
   const link = () => deps.db.prepare('SELECT source_transaction_id, match_text FROM recurring_manual WHERE id = ?').get(id);
-  const expected = { source_transaction_id: postedId, match_text: renamed || postedName === '#1234' ? 'synthetic pending' : 'synthetic posted' };
+  const expected = { source_transaction_id: postedId, match_text: postedName === '#1234' ? 'synthetic pending' : 'synthetic posted' };
   assert.deepEqual(link(), expected);
   // An already-promoted row from an older build is repaired even when Plaid sends no changes.
   deps.db.prepare("UPDATE recurring_manual SET source_transaction_id = ?, match_text = 'synthetic pending' WHERE id = ?").run(pendingId, id);
@@ -109,10 +109,23 @@ test(`a pending bill follows its posted source and repairs old links (${renamed}
   assert.ok((await get('/v1/recurring')).items.some((i: { id: string }) => i.id === id));
   assert.deepEqual((await get(`/v1/payee-history?recurringId=${id}`)).rows.map((r: { transactionId: string }) => r.transactionId), [postedId]);
   assert.equal((await get(`/v1/transactions/${postedId}`)).recurring.id, id);
-  if (!renamed && postedName !== '#1234') {
+  if (postedName !== '#1234') {
     apply([page({ added: [txn({ transactionId: 'next', date: '2026-04-10', merchantName: 'Synthetic Posted' })] })]);
     assert.equal((await get('/v1/recurring')).items.find((i: { id: string }) => i.id === id).lastDate, '2026-04-10');
   }
+});
+
+test('promotion preserves a custom bill match while updating bank-derived matches', async () => {
+  const { deps, apply, row } = setup();
+  const app = buildApp(deps);
+  apply([page({ added: [txn({ transactionId: 'pend', pending: true, merchantName: 'Synthetic Pending' })] })]);
+  const pendingId = row('pend')!.id;
+  deps.db.prepare("UPDATE transactions SET payee = 'Synthetic Quill', payee_owner_set = 1 WHERE id = ?").run(pendingId);
+  const made = await app.inject({ method: 'POST', url: '/v1/recurring', headers: { ...AUTH, 'idempotency-key': 'custom' },
+    payload: { transactionId: pendingId, frequency: 'monthly' } });
+  assert.equal(made.statusCode, 201);
+  apply([page({ added: [txn({ transactionId: 'post', pendingTransactionId: 'pend', merchantName: 'Synthetic Posted' })] })]);
+  assert.equal(deps.db.prepare('SELECT match_text FROM recurring_manual WHERE id = ?').pluck().get(made.json().id), 'synthetic quill');
 });
 
 test('rows dated before the cutover date are skipped', () => {

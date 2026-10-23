@@ -32,7 +32,7 @@ export interface PlaidPort {
   accountsGet(accessToken: string): Promise<PlaidAccount[]>;
   recurringGet(accessToken: string): Promise<PlaidRecurringStream[]>;
   investmentsHoldingsGet(accessToken: string): Promise<PlaidHoldings>;
-  investmentsTransactionsGet(accessToken: string, startDate: string, endDate: string): Promise<{ transactions: PlaidInvestmentTxn[]; securities: PlaidSecurity[] }>;
+  investmentsTransactionsGet(accessToken: string, startDate: string, endDate: string): Promise<{ accountIds: string[]; transactions: PlaidInvestmentTxn[]; securities: PlaidSecurity[] }>;
   createLinkToken(opts: LinkTokenOpts): Promise<{ linkToken: string; hostedLinkUrl: string; expiration: string }>;
   getLinkResult(linkToken: string): Promise<LinkResult>;
   exchangePublicToken(publicToken: string): Promise<{ accessToken: string; itemId: string }>;

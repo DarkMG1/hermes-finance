@@ -4,9 +4,9 @@ import Testing
 @Test func unresolvedReceiptCreateRetainsBodyPayerAndKey() {
     var write = PendingWrite<CreateTransactionBody>()
     let original = CreateTransactionBody(date: "2026-03-10", amountCents: -500, payee: "Synthetic Quill",
-                                         categoryId: nil, notes: nil, paidByPersonId: "p1")
+                                         categoryId: nil, notes: nil, paidByPersonId: "p1", inboxReceiptId: "r1")
     let changed = CreateTransactionBody(date: "2026-03-11", amountCents: -700, payee: "Synthetic Wren",
-                                        categoryId: nil, notes: nil, paidByPersonId: "p2")
+                                        categoryId: nil, notes: nil, paidByPersonId: "p2", inboxReceiptId: "r2")
     let key = write.guardState.key
     let r1 = write.prepare(original)
     #expect(r1 == original)
@@ -14,6 +14,7 @@ import Testing
     let r2 = write.prepare(changed)
     #expect(r2 == original)
     #expect(write.body?.paidByPersonId == "p1" && write.guardState.key == key)
+    #expect(write.body?.inboxReceiptId == "r1")
     write.guardState.didFail(ClientError.api(status: 401, body: APIErrorBody(code: "UNAUTHORIZED", message: "x")))
     let r3 = write.prepare(changed)
     #expect(r3 == original)

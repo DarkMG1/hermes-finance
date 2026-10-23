@@ -13,7 +13,8 @@ export function snapshotBalances(db: Db, day: string): void {
   db.prepare(`
     INSERT INTO balance_snapshots (account_id, date, balance_cents)
     SELECT id, ?, COALESCE(balance_current_cents, 0) FROM accounts
-      WHERE balance_current_cents IS NOT NULL OR (item_id IS NOT NULL AND balance_at IS NOT NULL)
+      WHERE balance_current_cents IS NOT NULL OR (item_id IS NOT NULL
+        AND EXISTS (SELECT 1 FROM balance_snapshots s WHERE s.account_id = accounts.id))
     ON CONFLICT (account_id, date) DO UPDATE SET balance_cents = excluded.balance_cents`).run(day);
 }
 

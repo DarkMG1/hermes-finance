@@ -315,3 +315,13 @@ test('corrections never merge an ambiguous stored pair, a file pair, or another 
     assert.equal(deps.db.prepare("SELECT COUNT(*) FROM transactions WHERE source = 'applecard'").pluck().get(), scenario === 'stored pair' ? 3 : 2, scenario);
   }
 });
+
+test('equal-amount counterparts still make a clearing-date correction ambiguous', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  await post(app, [HEADER, coffee('09/30/2026'), coffee('10/01/2026').replace('5.00', '7.50')].join('\n'), 'first');
+  const before = deps.db.prepare("SELECT id, amount_cents, clearing_date FROM transactions ORDER BY clearing_date").all();
+  const r = await post(app, [HEADER, coffee('10/02/2026').replace('5.00', '7.50')].join('\n'), 'next');
+  assert.deepEqual([r.statusCode, r.json().added, r.json().updated], [200, 1, 0]);
+  assert.deepEqual(deps.db.prepare("SELECT id, amount_cents, clearing_date FROM transactions WHERE clearing_date < '2026-10-02' ORDER BY clearing_date").all(), before);
+});

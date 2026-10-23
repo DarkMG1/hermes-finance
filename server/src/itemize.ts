@@ -72,7 +72,7 @@ export function computeShares(input: ShareInput): ShareResult {
 type AppliedLine = { personId: string | null; amountCents: number };
 
 /** What an items save leaves behind, in a form that later changes can be compared against. */
-function currentLines(db: Db, txnId: string): AppliedLine[] {
+export function currentLines(db: Db, txnId: string): AppliedLine[] {
   const t = db.prepare('SELECT amount_cents, person_id, paid_by_person_id FROM transactions WHERE id = ?').get(txnId) as
     { amount_cents: number; person_id: string | null; paid_by_person_id: string | null };
   if (t.paid_by_person_id) return [{ personId: null, amountCents: t.amount_cents }];

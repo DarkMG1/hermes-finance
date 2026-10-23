@@ -39,13 +39,16 @@ const FACTOR: Record<string, number> = { weekly: 52 / 12, biweekly: 26 / 12, sem
 
 /** k intervals after ymd, counted from ymd so month-end days don't drift. */
 export function addInterval(ymd: string, frequency: string, k = 1): string | null {
-  if (DAYS[frequency]) return addDays(ymd, DAYS[frequency]! * k);
+  if (DAYS[frequency]) {
+    const day = addDays(ymd, DAYS[frequency]! * k);
+    return day.startsWith('+') ? '9999-12-31' : day;
+  }
   if (!MONTHS[frequency]) return null;
   const [y, m, d] = ymd.split('-').map(Number) as [number, number, number];
   const target = new Date(Date.UTC(y, m - 1 + MONTHS[frequency]! * k, 1));
   const last = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
   target.setUTCDate(Math.min(d, last));
-  return target.toISOString().slice(0, 10);
+  return target.getUTCFullYear() > 9999 ? '9999-12-31' : target.toISOString().slice(0, 10);
 }
 
 /** A next date already past (no newer charge yet, or Plaid's prediction is stale) moves on by whole intervals from the last charge. */
@@ -63,7 +66,7 @@ function rollForward(next: string | null, last: string, frequency: string, today
 const endState = (last: string, frequency: string, endedOn: string | null, today: string) => {
   const cancelled = endedOn !== null && last <= endedOn;
   const missed = addInterval(last, frequency, 2);
-  return { cancelled, ended: cancelled || (missed !== null && addDays(missed, 3) < today) };
+  return { cancelled, ended: cancelled || (missed !== null && Date.parse(missed) + 3 * 86_400_000 < Date.parse(today)) };
 };
 
 const monthly = (cents: number, frequency: string) => (FACTOR[frequency] ? Math.round(cents * FACTOR[frequency]!) : null);
@@ -72,15 +75,18 @@ const priceUp = (last: number, avg: number) => (last - avg > Math.max(avg * 0.05
 type StreamRow = { stream_id: string; name: string; frequency: string; average_cents: number; last_cents: number; last_date: string; next_date: string | null;
   status: string; transaction_ids: string; o_hidden: number | null; o_name: string | null; o_frequency: string | null; o_ended_on: string | null };
 type ManualRow = { id: string; name: string; match_text: string; frequency: string; source_transaction_id: string | null; hidden: number; ended_on: string | null };
-type OutRow = { date: string; amount_cents: number; names: Set<string> };
+type OutRow = { id: string; date: string; amount_cents: number; names: Set<string> };
 
 /** Every live money-out row, newest first, with its names normalized once. */
 // ponytail: one full scan of money-out rows per call; filter in SQL or index a normalized column if it gets slow
-function moneyOut(db: Db): OutRow[] {
-  return (db.prepare(`SELECT date, amount_cents, payee, merchant_name, bank_description FROM transactions
-      WHERE removed_at IS NULL AND amount_cents < 0 AND person_id IS NULL ORDER BY date DESC, id DESC`).all() as
-    { date: string; amount_cents: number; payee: string | null; merchant_name: string | null; bank_description: string }[])
-    .map((t) => ({ date: t.date, amount_cents: t.amount_cents, names: new Set([t.payee, t.merchant_name, t.bank_description].map((n) => (n ? normalizeName(n) : ''))) }));
+export function moneyOut(db: Db): OutRow[] {
+  return (db.prepare(`SELECT id, date, amount_cents, payee, merchant_name, bank_description FROM transactions t
+      WHERE removed_at IS NULL AND amount_cents < 0 AND person_id IS NULL
+        AND (NOT EXISTS (SELECT 1 FROM split_lines s WHERE s.transaction_id = t.id)
+          OR EXISTS (SELECT 1 FROM split_lines s WHERE s.transaction_id = t.id AND s.person_id IS NULL AND s.amount_cents < 0))
+      ORDER BY date DESC, id DESC`).all() as
+    { id: string; date: string; amount_cents: number; payee: string | null; merchant_name: string | null; bank_description: string }[])
+    .map((t) => ({ id: t.id, date: t.date, amount_cents: t.amount_cents, names: new Set([t.payee, t.merchant_name, t.bank_description].map((n) => (n ? normalizeName(n) : ''))) }));
 }
 
 /** fallback: no money-out row carries the item's text, so it goes by the charge it was made from (History does the same). */
@@ -88,8 +94,7 @@ function manualItem(db: Db, m: ManualRow, out: OutRow[], today: string): { item:
   let rows = out.filter((t) => t.names.has(m.match_text)).slice(0, 6);
   const fallback = !rows.length;
   if (fallback && m.source_transaction_id) {
-    rows = db.prepare('SELECT date, amount_cents FROM transactions WHERE id = ? AND removed_at IS NULL AND amount_cents < 0 AND person_id IS NULL')
-      .all(m.source_transaction_id) as OutRow[];
+    rows = out.filter((t) => t.id === m.source_transaction_id);
   }
   if (!rows.length) return null;
   const amounts = rows.map((r) => -r.amount_cents).sort((a, b) => a - b);
@@ -163,7 +168,7 @@ export function getRecurring(db: Db, today: string, includeHidden: boolean): Rec
   const all = bills(db, today).map((b) => b.item);
   const visible = all.filter((i) => !i.hidden);
   // an ended item has no next date, so it's never upcoming
-  const within = (days: number) => visible.filter((i) => i.nextDate && i.nextDate >= today && i.nextDate <= addDays(today, days));
+  const within = (days: number) => visible.filter((i) => i.nextDate && i.nextDate >= today && Date.parse(i.nextDate) <= Date.parse(today) + days * 86_400_000);
   return {
     upcoming: within(30).sort((a, b) => a.nextDate!.localeCompare(b.nextDate!)),
     items: (includeHidden ? all : visible).sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase())),

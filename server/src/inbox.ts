@@ -68,9 +68,10 @@ export function restoreToInbox(db: Db, txnId: string): void {
   if (!receipt) return;
   const r = getItemization(db, txnId);
   db.prepare(`UPDATE inbox_receipts SET jpeg = ?, bytes = ?, model = ?, items = ?, tax_cents = ?, tip_cents = ?, fees_cents = ?, total_cents = ?, read_at = ?,
-      tagged = CASE WHEN ? THEN 1 ELSE tagged END, linked_transaction_id = NULL, linked_at = NULL, split_applied = 0, dismissed_at = NULL WHERE linked_transaction_id = ?`)
+      tagged = ?, read_failed = CASE WHEN ? IS NOT NULL THEN 0 ELSE read_failed END,
+      linked_transaction_id = NULL, linked_at = NULL, split_applied = 0, dismissed_at = NULL WHERE linked_transaction_id = ?`)
     .run(receipt.jpeg, receipt.bytes, receipt.model, JSON.stringify(r.items.map(({ name, amountCents, people }) => ({ name, amountCents, people }))),
-      r.taxCents, r.tipCents, r.feesCents, r.totalCents, r.readAt, receipt.applied_lines === null ? 0 : 1, txnId);
+      r.taxCents, r.tipCents, r.feesCents, r.totalCents, r.readAt, receipt.applied_lines !== null && !r.handEdited ? 1 : 0, r.readAt, txnId);
 }
 
 /** A restart mid-read would otherwise show "Reading…" forever. */

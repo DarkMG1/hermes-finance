@@ -9,7 +9,7 @@ struct RecurringSheet: View {
 
     @State private var name = ""
     @State private var frequency = "monthly"
-    @State private var writes = WriteGuard()
+    @State private var writes = PendingWrite<PatchRecurringBody>()
     @State private var cancellation = PendingWrite<Bool>()
     @State private var busy = false
     @State private var error: String?
@@ -19,22 +19,25 @@ struct RecurringSheet: View {
     private var patch: PatchRecurringBody {
         PatchRecurringBody(item: item, name: name, frequency: frequency)
     }
-    private var dirty: Bool { patch.name != nil || patch.frequency != nil }
+    private var dirty: Bool { writes.guardState.unresolved || patch.name != nil || patch.frequency != nil }
 
     var body: some View {
         Sheet(title: "Recurring", canSave: dirty && !cancellation.guardState.unresolved, busy: busy,
-              unresolved: writes.unresolved || cancellation.guardState.unresolved, dirty: dirty,
-              onCancel: { if writes.unresolved || cancellation.guardState.unresolved { Task { await onDone() } }; dismiss() },
-              onSave: { Task { await send(patch, guard: $writes) } }
+              unresolved: writes.guardState.unresolved || cancellation.guardState.unresolved, dirty: dirty,
+              onCancel: { if writes.guardState.unresolved || cancellation.guardState.unresolved { Task { await onDone() } }; dismiss() },
+              onSave: {
+                  let body = writes.prepare(patch)
+                  Task { await send(body, guard: $writes.guardState) }
+              }
         ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
                 Field(label: "Name") { TextField("Name", text: $name) }
-                    .disabled(writes.unresolved || cancellation.guardState.unresolved)
+                    .disabled(writes.guardState.unresolved || cancellation.guardState.unresolved)
                 Picker("Repeats", selection: $frequency) {
                     if item.frequency == "unknown" { Text(RecurringFrequency.label("unknown")).tag("unknown") }
                     ForEach(RecurringFrequency.writable, id: \.self) { Text(RecurringFrequency.label($0)).tag($0) }
                 }
-                .disabled(writes.unresolved || cancellation.guardState.unresolved)
+                .disabled(writes.guardState.unresolved || cancellation.guardState.unresolved)
                 LabeledContent("Last charge") {
                     Text("\(DayText.display(item.lastDate)) · \(Money.format(item.lastCents))")
                 }
@@ -51,7 +54,7 @@ struct RecurringSheet: View {
                         let ended = cancellation.prepare(item.cancelled != true)
                         Task { await send(PatchRecurringBody(ended: ended), guard: $cancellation.guardState) }
                     }
-                    .disabled(writes.unresolved)
+                    .disabled(writes.guardState.unresolved)
                     // the separator under this button runs edge to edge, not from the label's inset
                     .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                 }
@@ -59,13 +62,13 @@ struct RecurringSheet: View {
                     HButton(title: item.hidden ? "Show again" : "Not recurring", kind: .destructive, busy: busy) {
                         Task { await send(PatchRecurringBody(hidden: !item.hidden)) }
                     }
-                    .disabled(writes.unresolved || cancellation.guardState.unresolved)
+                    .disabled(writes.guardState.unresolved || cancellation.guardState.unresolved)
                 } else {
                     HButton(title: "Delete", kind: .destructive, busy: busy) { confirmDelete = true }
                         .confirmationDialog("Delete this recurring item?", isPresented: $confirmDelete, titleVisibility: .visible) {
                             Button("Delete", role: .destructive) { Task { await run(nil) { try await $0.deleteRecurring(id: item.id) } } }
                         }
-                        .disabled(writes.unresolved || cancellation.guardState.unresolved)
+                        .disabled(writes.guardState.unresolved || cancellation.guardState.unresolved)
                 }
             } footer: {
                 if item.cancelled == true {
