@@ -39,7 +39,7 @@ struct InvestmentsView: View {
                         Text("History starts today. Check back tomorrow.").textStyle(.subhead, color: Palette.secondaryText)
                     } else {
                         Card { HistoryChart(history: chart, scrubbed: $scrubbed) }
-                        if let through = loadedHistory.value.estimatedThrough { EstimatedFootnote(through: through) }
+                        EstimatedFootnote(through: loadedHistory.value.estimatedThrough, excluded: loadedHistory.value.excluded)
                     }
                 }
                 if !investments.holdings.isEmpty {

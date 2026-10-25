@@ -196,6 +196,18 @@ func json(_ value: some Encodable) throws -> String {
     #expect(NetWorthRange.quarter.queryItems == [URLQueryItem(name: "range", value: "3m")])
 }
 
+@Test func historyExclusionsDecodeAndAreOptionalForOlderServers() throws {
+    let history = try decode(NetWorthHistory.self, "investments-history-excluded")
+    #expect(history.excluded?.through == "2026-03-12")
+    #expect(history.excluded?.positions == 1)
+    var old = try #require(JSONSerialization.jsonObject(with: fixture("investments-history-excluded")) as? [String: Any])
+    old["excluded"] = nil
+    let decoded = try JSONDecoder().decode(NetWorthHistory.self, from: JSONSerialization.data(withJSONObject: old))
+    #expect(decoded.excluded == nil)
+    #expect(decoded.points == history.points && decoded.currentCents == history.currentCents)
+    #expect(decoded.changeCents == history.changeCents && decoded.estimatedThrough == history.estimatedThrough)
+}
+
 @Test func investmentsDecode() throws {
     let investments = try decode(Investments.self, "investments")
     #expect(investments.totalCents == 200000 && investments.costBasisCents == 180000 && investments.gainCents == 20000)

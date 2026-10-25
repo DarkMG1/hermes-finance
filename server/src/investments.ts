@@ -213,15 +213,17 @@ export function getHoldingHistory(db: Db, key: string, range: NetWorthQuery['ran
   let estimatedThrough: string | null = null;
   for (let day = firstDay; day <= today; day = addDays(day, 1)) {
     let estimated = false;
+    let excluded = false;
     for (const a of accounts) {
       const est = estimates.get(a);
       if (est && day < est.anchor) {
         const v = est.valueOn(day);
+        if (group.some((id) => v.excluded.has(id))) excluded = true;
         latest.set(a, key === '_cash' ? v.cashCents : group.reduce((x, id) => x + (v.bySecurity.get(id) ?? 0), 0));
         estimated = true;
       } else if (synced.has(`${a}|${day}`)) latest.set(a, values.get(`${a}|${day}`) ?? 0);
     }
-    if (day >= start) {
+    if (day >= start && !excluded) {
       points.push({ date: day, netWorthCents: [...latest.values()].reduce((x, y) => x + y, 0) });
       if (estimated) estimatedThrough = day;
     }

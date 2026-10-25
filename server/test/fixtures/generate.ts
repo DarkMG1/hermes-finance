@@ -133,6 +133,11 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   px.run('SYNA', '2026-03-12', 48000);
   px.run('SYNA', '2026-03-13', 47500);
   out['holding-history-estimated'] = await invGet('/v1/investments/holding-history?key=SYNA&range=1m');
+  sec.run('sec-option', 'Synthetic Option', 'SYNX', 'derivative', 0);
+  inv.db.prepare(`INSERT INTO investment_transactions VALUES
+    ('option-buy', 'acct-brokerage', 'sec-option', '2026-03-11', 'buy', 'buy', 1, 6000, 6000, 's'),
+    ('option-sell', 'acct-brokerage', 'sec-option', '2026-03-13', 'sell', 'sell', -1, -4000, 4000, 's')`).run();
+  out['investments-history-excluded'] = await invGet('/v1/investments/history?range=1m');
   // ids minted at runtime are replaced so the files are stable
   const text = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
   const normalise = (s: string) => s.replace(/"accountId": "[0-9a-f-]{36}"/g, '"accountId": "fixture-applecard"').replace(/"itemId": "[0-9a-f-]{36}"/g, '"itemId": "fixture-item"');

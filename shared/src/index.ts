@@ -200,11 +200,13 @@ export const InvestmentsHistoryQuery = NetWorthQuery.extend({ accountIds: Accoun
 export const HoldingHistoryQuery = z.object({ key: z.string().min(1), range: NetWorthQuery.shape.range, accountIds: AccountIdsParam }).strict();
 export type HoldingHistoryQuery = z.infer<typeof HoldingHistoryQuery>;
 
-/** One point per day from the window start to today; each account's latest snapshot carries forward.
- * Before an account's first snapshot its value is estimated; estimatedThrough is the last such day shown, or null. */
+/** Daily history; each account's latest snapshot carries forward. Unpriced holding estimates are omitted.
+ * Before an account's first snapshot its value is estimated; estimatedThrough is the last such day shown, or null.
+ * excluded describes the last shown estimate that omits unpriced positions (counted per account/security). */
 export const NetWorthHistory = z.object({
   points: z.array(z.object({ date: DateStr, netWorthCents: Cents })),
   currentCents: Cents, changeCents: Cents, estimatedThrough: DateStr.nullable(),
+  excluded: z.object({ through: DateStr, positions: z.number().int().positive() }).optional(),
 });
 export type NetWorthHistory = z.infer<typeof NetWorthHistory>;
 

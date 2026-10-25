@@ -35,12 +35,21 @@ struct HistoryChart: View {
     }
 }
 
-/// "Through Oct 10, 2026: estimated from transactions." under a chart whose range includes estimated days.
+/// Dates and missing prices for a chart whose range includes estimated days.
 struct EstimatedFootnote: View {
-    let through: String
+    let through: String?
+    var excluded: NetWorthHistory.Excluded?
 
     var body: some View {
-        Text("Through \(DayText.date(through)?.formatted(.dateTime.month(.abbreviated).day().year()) ?? through): estimated from transactions.")
-            .textStyle(.caption, color: Palette.secondaryText)
+        if let through {
+            Text("Through \(DayText.date(through)?.formatted(.dateTime.month(.abbreviated).day().year()) ?? through): estimated from transactions.")
+                .textStyle(.caption, color: Palette.secondaryText)
+        }
+        if let excluded {
+            let date = DayText.date(excluded.through)?.formatted(.dateTime.month(.abbreviated).day().year()) ?? excluded.through
+            let noun = excluded.positions == 1 ? "position" : "positions"
+            Text("Through \(date): excludes \(excluded.positions) \(noun) with no price history.")
+                .textStyle(.caption, color: Palette.secondaryText)
+        }
     }
 }

@@ -14,9 +14,6 @@ struct SettingsView: View {
     @State private var syncing = false
     @State private var syncNote: String?
     @State private var importing = false
-    @State private var importWrites = WriteGuard()
-    @State private var importBusy = false
-    @State private var importNote: String?
     @State private var confirmDisconnect = false
     @State private var serverSha: String?
 
@@ -71,10 +68,9 @@ struct SettingsView: View {
             }
             Section {
                 Button { importing = true } label: {
-                    HStack { Text("Import Apple Card CSV"); Spacer(); if importBusy { ProgressView() } }
+                    HStack { Text("Import Apple Card CSV"); Spacer(); if model.csvImports.busy { ProgressView() } }
                 }
-                .disabled(importBusy)
-                if let importNote { Text(importNote).textStyle(.caption, color: Palette.secondaryText) }
+                .disabled(!model.csvImports.files.isEmpty)
             } header: {
                 Text("Apple Card")
             } footer: {
@@ -136,7 +132,7 @@ struct SettingsView: View {
         .task { await loadBanks() }
         .refreshable { await loadBanks() }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.commaSeparatedText]) { result in
-            Task { await importCSV(result) }
+            model.queueCSV(result)
         }
     }
 
@@ -182,31 +178,6 @@ struct SettingsView: View {
         } catch {
             syncWrites.didFail(error)
             syncNote = errorMessage(error)
-        }
-    }
-
-    private func importCSV(_ result: Result<URL, Error>) async {
-        guard let client = model.client else { return }
-        importBusy = true
-        defer { importBusy = false }
-        do {
-            let url = try result.get()
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            let csv = try String(contentsOf: url, encoding: .utf8)
-            let imported = try await client.importAppleCard(csv: csv, idempotencyKey: importWrites.key)
-            importWrites.didSucceed()
-            importNote = "\(imported.rows) rows: \(imported.added) new, \(imported.updated) already imported"
-                + (imported.skippedBeforeCutover > 0 ? ", \(imported.skippedBeforeCutover) before the cutover" : "")
-            await model.refreshReferenceData()
-        } catch {
-            if case ClientError.api(409, let body) = error, body.code == "IDEMPOTENCY_KEY_REUSED" {
-                importWrites.didSucceed()
-                importNote = "The earlier import finished. Import this file again to add it."
-                return
-            }
-            importWrites.didFail(error)
-            importNote = importWrites.unresolved ? "Couldn't confirm the import. Import the same file again to finish." : errorMessage(error)
         }
     }
 }

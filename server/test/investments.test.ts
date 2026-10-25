@@ -213,15 +213,14 @@ test('holding history sums accounts and carries forward', () => {
   hsnap(deps, 'bh', 'sa1', '2026-03-13', 99999);
   const h = getHoldingHistory(deps.db, 'SYNA', 'all', '2026-03-15')!;
   assert.deepEqual(h.points, [
-    { date: '2026-03-12', netWorthCents: 1500 }, // b2 first synced 03-13: its 03-12 value is estimated
     { date: '2026-03-13', netWorthCents: 1500 },
     { date: '2026-03-14', netWorthCents: 1700 },
     { date: '2026-03-15', netWorthCents: 1700 },
   ]);
   assert.equal(h.currentCents, 1700);
   assert.equal(h.changeCents, 200);
-  assert.equal(h.estimatedThrough, '2026-03-12');
-  assert.equal(getHoldingHistory(deps.db, 'SYNA', '1m', '2026-03-15')!.points.length, 4);
+  assert.equal(h.estimatedThrough, null);
+  assert.equal(getHoldingHistory(deps.db, 'SYNA', '1m', '2026-03-15')!.points.length, 3);
   assert.equal(getHoldingHistory(deps.db, 'NOPE', 'all', '2026-03-15'), null);
 });
 
@@ -315,6 +314,26 @@ test('holding history reaches back through the estimate', () => {
   assert.equal(h.estimatedThrough, '2026-03-14');
   const cash = getHoldingHistory(db, '_cash', 'all', '2026-03-15')!;
   assert.deepEqual(cash.points.map((x) => x.netWorthCents), [45000, 45000, 5000, 5000, 5000, 5000]);
+});
+
+test('unpriced holding history omits estimates while priced and cash histories remain available', () => {
+  const { deps: { db } } = makeTestDeps();
+  seedAccount(db, { id: 'inv', type: 'investment' });
+  db.prepare(`INSERT INTO securities (id, name, ticker, type, is_cash, updated_at) VALUES
+    ('fund', 'Synthetic A Fund', 'SYNA', 'etf', 0, 's'),
+    ('option', 'Synthetic Option', 'SYNX', 'derivative', 0, 's'),
+    ('cash', 'Synthetic Dollar', NULL, 'cash', 1, 's')`).run();
+  db.prepare("INSERT INTO holding_syncs VALUES ('inv', '2026-03-15')").run();
+  db.prepare(`INSERT INTO holding_snapshots VALUES ('inv', 'fund', '2026-03-15', 2, 20000),
+    ('inv', 'option', '2026-03-15', 1, 4000), ('inv', 'cash', '2026-03-15', 5000, 5000)`).run();
+  db.prepare("INSERT INTO security_prices (ticker, date, close_cents) VALUES ('SYNA', '2026-03-09', 10000)").run();
+  db.prepare("INSERT INTO investment_transactions VALUES ('buy', 'inv', 'option', '2026-03-10', 'buy', 'buy', 1, 7000, 7000, 's')").run();
+  const option = getHoldingHistory(db, 'SYNX', 'all', '2026-03-16')!;
+  assert.deepEqual(option.points, [{ date: '2026-03-15', netWorthCents: 4000 }, { date: '2026-03-16', netWorthCents: 4000 }]);
+  assert.equal(option.changeCents, 0);
+  assert.equal(option.estimatedThrough, null);
+  assert.deepEqual(getHoldingHistory(db, 'SYNA', 'all', '2026-03-15')!.points.map((p) => p.netWorthCents), Array(6).fill(20000));
+  assert.deepEqual(getHoldingHistory(db, '_cash', 'all', '2026-03-15')!.points.map((p) => p.netWorthCents), Array(6).fill(5000));
 });
 
 test('account filter', async () => {

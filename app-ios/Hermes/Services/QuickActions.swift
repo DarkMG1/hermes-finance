@@ -10,8 +10,11 @@ final class QuickActions {
 }
 
 final class AppDelegate: NSObject, UIApplicationDelegate {
+    private(set) var hasLaunchURL = false
+
     func application(_ application: UIApplication, configurationForConnecting connecting: UISceneSession,
                      options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        hasLaunchURL = !options.urlContexts.isEmpty
         if options.shortcutItem?.type == QuickActions.snapType { Task { @MainActor in QuickActions.shared.snapRequests += 1 } }
         let config = UISceneConfiguration(name: nil, sessionRole: connecting.role)
         config.delegateClass = SceneDelegate.self

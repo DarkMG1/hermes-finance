@@ -5,12 +5,18 @@ public struct NetWorthPoint: Decodable, Sendable, Hashable {
     public let netWorthCents: Int
 }
 
-/// One point per day; each account's latest balance carries forward. Days through `estimatedThrough` are estimated from transactions.
+/// Daily history; each account's latest balance carries forward. Days through `estimatedThrough` are estimated from transactions.
 public struct NetWorthHistory: Decodable, Sendable {
+    public struct Excluded: Decodable, Sendable {
+        public let through: String
+        public let positions: Int
+    }
+
     public let points: [NetWorthPoint]
     public let currentCents: Int
     public let changeCents: Int
     public let estimatedThrough: String?
+    public let excluded: Excluded?
 
     /// Change over the range as a fraction, or nil when the range starts at or below zero.
     public var changePercent: Double? { Investments.percent(changeCents, of: points.first?.netWorthCents) }

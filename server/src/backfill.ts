@@ -7,7 +7,7 @@ export function holdingKey(s: { securityId: string; ticker: string | null; type:
   return s.ticker ? s.ticker.toUpperCase() : s.securityId;
 }
 
-type DayValue = { totalCents: number; cashCents: number; bySecurity: Map<string, number> };
+type DayValue = { totalCents: number; cashCents: number; bySecurity: Map<string, number>; excluded: Set<string> };
 export type AccountEstimate = { accountId: string; anchor: string; earliest: string; valueOn(day: string): DayValue };
 
 type Sec = { id: string; ticker: string | null; type: string | null; isCash: number };
@@ -15,6 +15,7 @@ type Txn = { securityId: string | null; date: string; type: string; quantity: nu
 
 const isCashSec = (s: Sec | undefined) => s !== undefined && (s.isCash === 1 || s.type === 'cash');
 const isSplit = (t: Txn) => (t.subtype ?? '').toLowerCase().includes('split');
+const movesShares = (t: Txn) => t.securityId !== null && (t.type === 'buy' || t.type === 'sell' || t.type === 'transfer');
 /** Only these have Tiingo prices; any other ticker (crypto, bonds, options) may name an unrelated stock. */
 export const PRICED_TYPES = ['equity', 'etf', 'mutual fund'];
 
@@ -32,9 +33,9 @@ function atOrBefore(dates: string[], day: string): number {
 
 /**
  * An investment account's value on days before its first holdings sync (anchor), in today's share units:
- * shares and cash walk back from the anchor through stored investment transactions; each day is priced from Tiingo closes,
- * else the last Plaid trade price, else the anchor price, else the earliest trade price. Null when the account never synced holdings
- * or held nothing at its first sync.
+ * shares and cash walk back from the anchor through stored investment transactions; each day uses Tiingo closes at or
+ * before that day. Unpriced positions are excluded.
+ * Null when the account never synced holdings or held nothing at its first sync.
  */
 export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate | null {
   const anchor = (db.prepare('SELECT MIN(date) AS d FROM holding_syncs WHERE account_id = ?').get(accountId) as { d: string | null }).d;
@@ -85,7 +86,7 @@ export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate 
   const plaidSplits = new Map<string, [string, number][]>();
   const quantities = new Map(shares);
   for (const t of txns.toReversed()) {
-    if (!t.securityId || isCashSec(secs.get(t.securityId)) || (isSplit(t) && tiingoSplit(t))) continue;
+    if (!t.securityId || !movesShares(t) || isCashSec(secs.get(t.securityId)) || (isSplit(t) && tiingoSplit(t))) continue;
     const after = quantities.get(t.securityId) ?? 0;
     const before = after - t.quantity * splitsAfter(tickerOf(t.securityId), t.date);
     const factor = after / before;
@@ -95,46 +96,32 @@ export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate 
     quantities.set(t.securityId, before);
   }
   const plaidAfter = (id: string, day: string) => (plaidSplits.get(id) ?? []).reduce((f, [d, s]) => (d > day ? f * s : f), 1);
-  // real trades only: distributions and fees carry price 0 and quantity 0
-  const trades = new Map<string, { dates: string[]; txns: Txn[] }>();
-  for (const t of txns) {
-    if (!t.securityId || isCashSec(secs.get(t.securityId)) || t.priceCents === null || t.priceCents <= 0 || t.quantity === 0 || isSplit(t)) continue;
-    const tr = trades.get(t.securityId) ?? { dates: [], txns: [] };
-    tr.dates.push(t.date);
-    tr.txns.push(t);
-    trades.set(t.securityId, tr);
-  }
-
-  const priceOn = (id: string, day: string): number => {
+  const priceOn = (id: string, day: string): number | null => {
     const ticker = tickerOf(id);
     const c = ticker ? closes.get(ticker) : undefined;
-    const i = c ? atOrBefore(c.dates, day) : -1;
-    if (c && i >= 0) return c.cents[i]! / splitsAfter(ticker, day) * plaidAfter(id, day) / plaidAfter(id, c.dates[i]!);
-    const tr = trades.get(id);
-    const j = tr ? atOrBefore(tr.dates, day) : -1;
-    if (tr && j >= 0) return tr.txns[j]!.priceCents! / splitsAfter(ticker, tr.txns[j]!.date) * plaidAfter(id, day) / plaidAfter(id, tr.txns[j]!.date);
-    const a = anchorPrice.get(id);
-    if (a !== undefined) return a * plaidAfter(id, day);
-    // sold before the anchor with no closes: its earliest trade price
-    const e = tr?.txns[0];
-    return e ? e.priceCents! / splitsAfter(ticker, e.date) * plaidAfter(id, day) / plaidAfter(id, e.date) : 0;
+    if (!c?.dates.length) return null;
+    const i = atOrBefore(c.dates, day);
+    return i < 0 ? null : c.cents[i]! / splitsAfter(ticker, day) * plaidAfter(id, day) / plaidAfter(id, c.dates[i]!);
   };
   const value = (day: string): DayValue => {
     const bySecurity = new Map<string, number>();
+    const excluded = new Set<string>();
     let total = cash;
     for (const [id, q] of shares) {
-      if (q === 0) continue;
-      const v = Math.round(q * priceOn(id, day));
+      if (Math.abs(q) < 1e-9) continue;
+      const price = priceOn(id, day);
+      if (price === null) { excluded.add(id); continue; }
+      const v = Math.round(q * price);
       bySecurity.set(id, v);
       total += v;
     }
-    return { totalCents: total, cashCents: cash, bySecurity };
+    return { totalCents: total, cashCents: cash, bySecurity, excluded };
   };
   const undo = (t: Txn) => {
-    if (isSplit(t) && tiingoSplit(t)) return;
+    if (movesShares(t) && isSplit(t) && tiingoSplit(t)) return;
     // a contribution's buy is paid from outside the account, not from its cash
     if (!(t.type === 'buy' && (t.subtype ?? '').toLowerCase().includes('contribution'))) cash += t.amountCents;
-    if (!t.securityId || isCashSec(secs.get(t.securityId))) return;
+    if (!t.securityId || !movesShares(t) || isCashSec(secs.get(t.securityId))) return;
     shares.set(t.securityId, (shares.get(t.securityId) ?? 0) - t.quantity * splitsAfter(tickerOf(t.securityId), t.date));
   };
 
@@ -147,7 +134,7 @@ export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate 
     anchorBySecurity.set(id, v);
     anchorTotal += v;
   }
-  const anchorValue: DayValue = { totalCents: anchorTotal, cashCents: cash, bySecurity: anchorBySecurity };
+  const anchorValue: DayValue = { totalCents: anchorTotal, cashCents: cash, bySecurity: anchorBySecurity, excluded: new Set() };
 
   // walk back day by day; before computing day d, undo every transaction dated after d
   const byDay = new Map<string, DayValue>();
