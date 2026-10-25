@@ -1,4 +1,5 @@
 import Foundation
+import UniformTypeIdentifiers
 
 /// Keep duplicate deliveries together until the current import finishes.
 public struct CSVImportQueue: Sendable {
@@ -26,8 +27,17 @@ public struct CSVImportQueue: Sendable {
         busy = false
     }
 
+    public static func accepts(_ url: URL, contentType: UTType?) -> Bool {
+        url.isFileURL && (contentType?.conforms(to: .commaSeparatedText) == true || url.pathExtension.lowercased() == "csv")
+    }
+
+    public func staleInboxCopies(_ urls: [URL], documents: URL) -> [URL] {
+        guard files.isEmpty else { return [] }
+        return urls.filter { Self.isInboxCopy($0, documents: documents) }
+    }
+
     public static func isInboxCopy(_ url: URL, documents: URL) -> Bool {
-        let inbox = documents.appending(path: "Inbox").resolvingSymlinksInPath().pathComponents
+        let inbox = documents.resolvingSymlinksInPath().appending(path: "Inbox").pathComponents
         return url.isFileURL && url.deletingLastPathComponent().resolvingSymlinksInPath().pathComponents == inbox
     }
 }

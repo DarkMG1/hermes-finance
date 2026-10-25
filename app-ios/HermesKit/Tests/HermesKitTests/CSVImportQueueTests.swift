@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import UniformTypeIdentifiers
 @testable import HermesKit
 
 @Test func csvImportWaitsUntilTheAppIsReady() {
@@ -74,4 +75,47 @@ import Testing
     #expect(!CSVImportQueue.isInboxCopy(URL(fileURLWithPath: "/synthetic/Other/Inbox/Synthetic Quill.csv"), documents: documents))
     #expect(!CSVImportQueue.isInboxCopy(inbox.appending(path: "Nested/Synthetic Quill.csv"), documents: documents))
     #expect(!CSVImportQueue.isInboxCopy(URL(string: "https://synthetic.example/Documents/Inbox/Synthetic.csv")!, documents: documents))
+}
+
+@Test func csvImportsAcceptTheSystemTypeOrFilenameExtension() throws {
+    let typed = URL(fileURLWithPath: "/synthetic/Synthetic Quill")
+    let csvSubtype = try #require(UTType(filenameExtension: "syntheticcsv", conformingTo: .commaSeparatedText))
+    #expect(CSVImportQueue.accepts(typed, contentType: .commaSeparatedText))
+    #expect(CSVImportQueue.accepts(typed, contentType: csvSubtype))
+    #expect(CSVImportQueue.accepts(typed.appendingPathExtension("txt"), contentType: .commaSeparatedText))
+    #expect(CSVImportQueue.accepts(typed.appendingPathExtension("CSV"), contentType: .plainText))
+    #expect(CSVImportQueue.accepts(typed.appendingPathExtension("csv"), contentType: nil))
+    #expect(!CSVImportQueue.accepts(typed, contentType: .plainText))
+    #expect(!CSVImportQueue.accepts(typed.appendingPathExtension("txt"), contentType: nil))
+    #expect(!CSVImportQueue.accepts(URL(string: "https://synthetic.example/Synthetic.csv")!, contentType: .commaSeparatedText))
+}
+
+@Test func staleInboxCopiesWaitUntilNoImportIsPending() {
+    let documents = URL(fileURLWithPath: "/synthetic/Documents", isDirectory: true)
+    let stale = documents.appending(path: "Inbox/Synthetic Quill.csv")
+    let extensionless = documents.appending(path: "Inbox/Synthetic Wren")
+    let outside = documents.appending(path: "Synthetic Moss.csv")
+    let nested = documents.appending(path: "Inbox/Nested/Synthetic Fern.csv")
+    let candidates = [stale, extensionless, outside, nested]
+    var queue = CSVImportQueue()
+    #expect(queue.staleInboxCopies(candidates, documents: documents) == [stale, extensionless])
+    queue.add(outside)
+    #expect(queue.staleInboxCopies(candidates, documents: documents).isEmpty)
+    _ = queue.begin(ready: true)
+    #expect(queue.staleInboxCopies(candidates, documents: documents).isEmpty)
+    queue.finish()
+    #expect(queue.staleInboxCopies(candidates, documents: documents) == [stale, extensionless])
+}
+
+@Test func anInboxSymlinkCannotExposeAnotherFolderToCleanup() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let documents = root.appending(path: "Documents")
+    let outside = root.appending(path: "Other")
+    try FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+    let inbox = documents.appending(path: "Inbox")
+    try FileManager.default.createSymbolicLink(at: inbox, withDestinationURL: outside)
+    let file = inbox.appending(path: "Synthetic Quill.csv")
+    #expect(CSVImportQueue().staleInboxCopies([file], documents: documents).isEmpty)
 }

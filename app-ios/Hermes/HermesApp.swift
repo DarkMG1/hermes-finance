@@ -21,6 +21,8 @@ struct HermesApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
     @State private var lock: AppLock
+    @State private var checkedInbox = false
+    @State private var importAlert: UIAlertController?
 
     init() {
         let model = AppModel()
@@ -52,14 +54,7 @@ struct HermesApp: App {
             .onChange(of: importReady, initial: true) { _, ready in
                 if ready { Task { await model.importCSV(ready: lock.canImportDocuments) } }
             }
-            .alert("Apple Card import", isPresented: Binding(
-                get: { lock.canImportDocuments && model.importNote != nil },
-                set: { if !$0 { model.importNote = nil } }
-            )) {
-                Button("OK", role: .cancel) { model.importNote = nil }
-            } message: {
-                Text(model.importNote ?? "")
-            }
+            .task(id: lock.canImportDocuments ? model.importNote : nil) { await presentImportNote() }
             .task {
                 await model.refreshReferenceData(coalescing: true)
             }
@@ -69,10 +64,48 @@ struct HermesApp: App {
             .onChange(of: scenePhase, initial: true) { _, phase in
                 // balances hide whenever Hermes leaves the screen; showing them again needs Face ID
                 if phase == .background { UserDefaults.standard.set(true, forKey: "hideBalances") }
-                if phase == .active { model.loadStoredConnection() }
+                if phase == .active {
+                    model.loadStoredConnection()
+                    if !checkedInbox {
+                        checkedInbox = true
+                        // A launch URL may not have reached onOpenURL yet.
+                        if !appDelegate.hasLaunchURL { model.removeStaleInboxCSVs() }
+                    }
+                }
                 if phase == .active { Task { await model.receiptQueue.retryAll(client: model.client) } }
                 lock.phaseChanged(to: phase, enabled: requireFaceID, connected: model.reader != nil)
             }
+        }
+    }
+
+    private func presentImportNote() async {
+        guard lock.canImportDocuments, let note = model.importNote else {
+            importAlert?.dismiss(animated: false)
+            importAlert = nil
+            return
+        }
+        if let importAlert {
+            importAlert.message = note
+        }
+        while !Task.isCancelled && lock.canImportDocuments && model.importNote == note {
+            if importAlert?.presentingViewController == nil {
+                importAlert = nil
+                let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+                    .first { $0.activationState == .foregroundActive }
+                var presenter = scene?.windows.first { $0.isKeyWindow && $0.windowLevel == .normal }?.rootViewController
+                while let presented = presenter?.presentedViewController { presenter = presented }
+                if let presenter, !(presenter is UIAlertController), !presenter.isBeingPresented,
+                   !presenter.isBeingDismissed, presenter.transitionCoordinator == nil, presenter.viewIfLoaded?.window != nil {
+                    let alert = UIAlertController(title: "Apple Card import", message: note, preferredStyle: .alert)
+                    alert.addAction(UIAlertAction(title: "OK", style: .cancel) { _ in
+                        importAlert = nil
+                        model.importNote = nil
+                    })
+                    importAlert = alert
+                    presenter.present(alert, animated: true)
+                }
+            }
+            try? await Task.sleep(for: .milliseconds(100))
         }
     }
 }

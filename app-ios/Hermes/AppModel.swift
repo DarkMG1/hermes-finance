@@ -4,6 +4,7 @@ import HermesKit
 // swiftlint:disable:next duplicate_imports
 import struct HermesKit.Category
 import Observation
+import UniformTypeIdentifiers
 
 enum ConnectError: LocalizedError {
     case badURL
@@ -93,7 +94,10 @@ final class AppModel {
             let opened = try result.get()
             guard opened.isFileURL else { return }
             let url = opened.standardizedFileURL
-            guard url.pathExtension.lowercased() == "csv" else {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let contentType = try? url.resourceValues(forKeys: [.contentTypeKey]).contentType
+            guard CSVImportQueue.accepts(url, contentType: contentType) else {
                 importNote = "Choose an Apple Card CSV file."
                 removeInboxCSV(url)
                 return
@@ -141,6 +145,16 @@ final class AppModel {
 
     private func isInboxCSV(_ url: URL) -> Bool {
         CSVImportQueue.isInboxCopy(url, documents: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0])
+    }
+
+    func removeStaleInboxCSVs() {
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let urls = (try? FileManager.default.contentsOfDirectory(at: documents.appending(path: "Inbox"),
+                                                               includingPropertiesForKeys: [.isRegularFileKey])) ?? []
+        for url in csvImports.staleInboxCopies(urls, documents: documents)
+            where (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true {
+            removeInboxCSV(url)
+        }
     }
 
     private func removeInboxCSV(_ url: URL) {
