@@ -80,6 +80,7 @@ export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string
   const start = wanted > earliest ? wanted : earliest;
   const points: NetWorthHistory['points'] = [];
   let estimatedThrough: string | null = null;
+  let excluded: NetWorthHistory['excluded'];
   let i = 0;
   let j = 0;
   for (let day = earliest; day <= today; day = addDays(day, 1)) {
@@ -89,11 +90,18 @@ export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string
     }
     // on and after S the real snapshot wins
     for (; i < snaps.length && snaps[i]!.date <= day; i += 1) latest.set(snaps[i]!.accountId, signed(snaps[i]!));
-    for (const [accountId, est] of estimates) if (day < anchors.get(accountId)!) latest.set(accountId, est.valueOn(day).totalCents);
+    let positions = 0;
+    for (const [accountId, est] of estimates) if (day < anchors.get(accountId)!) {
+      const value = est.valueOn(day);
+      latest.set(accountId, value.totalCents);
+      positions += value.excluded.size;
+    }
     if (day < start) continue;
     points.push({ date: day, netWorthCents: [...latest.values()].reduce((a, b) => a + b, 0) });
     if (day < lastAnchor) estimatedThrough = day;
+    if (positions > 0) excluded = { through: day, positions };
   }
   const last = points[points.length - 1]!;
-  return { points, currentCents: last.netWorthCents, changeCents: last.netWorthCents - points[0]!.netWorthCents, estimatedThrough };
+  return { points, currentCents: last.netWorthCents, changeCents: last.netWorthCents - points[0]!.netWorthCents, estimatedThrough,
+    ...(excluded ? { excluded } : {}) };
 }

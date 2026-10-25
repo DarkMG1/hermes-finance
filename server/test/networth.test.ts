@@ -9,6 +9,41 @@ import type { Db } from '../src/db.ts';
 
 const rows = (db: Db) => db.prepare('SELECT account_id, date, balance_cents FROM balance_snapshots ORDER BY account_id, date').all();
 
+test('estimated totals exclude unpriced positions, retain sale cash, and agree across filters', async () => {
+  const { deps } = makeTestDeps();
+  const { db } = deps;
+  seedAccount(db, { id: 'inv', type: 'investment', balanceCents: 45000 });
+  seedAccount(db, { id: 'chk', balanceCents: 1000 });
+  db.prepare(`INSERT INTO securities (id, name, ticker, type, is_cash, updated_at) VALUES
+    ('fund', 'Synthetic A Fund', 'SYNA', 'etf', 0, 's'),
+    ('option', 'Synthetic Option', 'SYNX', 'derivative', 0, 's'),
+    ('cash', 'Synthetic Dollar', NULL, 'cash', 1, 's')`).run();
+  db.prepare("INSERT INTO holding_syncs VALUES ('inv', '2026-03-15')").run();
+  db.prepare(`INSERT INTO holding_snapshots VALUES
+    ('inv', 'fund', '2026-03-15', 3, 30000), ('inv', 'cash', '2026-03-15', 13000, 13000)`).run();
+  db.prepare("INSERT INTO security_prices (ticker, date, close_cents) VALUES ('SYNA', '2026-03-09', 10000), ('SYNX', '2026-03-09', 99999)").run();
+  db.prepare(`INSERT INTO investment_transactions VALUES
+    ('buy', 'inv', 'option', '2026-03-10', 'buy', 'buy', 2, 14000, 7000, 's'),
+    ('sell', 'inv', 'option', '2026-03-13', 'sell', 'sell', -2, -8000, 4000, 's')`).run();
+  db.prepare("INSERT INTO balance_snapshots VALUES ('inv', '2026-03-15', 45000), ('chk', '2026-03-15', 1000)").run();
+  const inv = getNetWorth(db, 'all', '2026-03-15', { type: 'investment' });
+  assert.deepEqual(inv.points.map((p) => p.netWorthCents), [35000, 35000, 35000, 43000, 43000, 45000]);
+  assert.deepEqual(inv.excluded, { through: '2026-03-12', positions: 1 });
+  assert.equal(inv.currentCents, 45000);
+  assert.equal(inv.changeCents, 10000);
+  const all = getNetWorth(db, 'all', '2026-03-15');
+  assert.deepEqual(all.points.map((p) => p.netWorthCents), [36000, 36000, 36000, 44000, 44000, 46000]);
+  assert.deepEqual(all.excluded, inv.excluded);
+  assert.deepEqual(getNetWorth(db, 'all', '2026-03-15', { accountIds: ['inv'] }), inv);
+  assert.equal('excluded' in getNetWorth(db, 'all', '2026-03-15', { accountIds: ['chk'] }), false);
+  assert.equal('excluded' in getNetWorth(db, '1m', '2026-04-13', { type: 'investment' }), false);
+  const app = buildApp(deps);
+  const history = await app.inject({ method: 'GET', url: '/v1/investments/history?range=all', headers: AUTH });
+  assert.deepEqual(history.json(), inv);
+  assert.deepEqual((await app.inject({ method: 'GET', url: '/v1/net-worth?range=all', headers: AUTH })).json(), all);
+  await app.close();
+});
+
 test('localDay is the process-local date', () => {
   const saved = process.env.TZ;
   try {

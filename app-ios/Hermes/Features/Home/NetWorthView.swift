@@ -26,9 +26,7 @@ struct NetWorthView: View {
                     Text("History starts today. Check back tomorrow.").textStyle(.subhead, color: Palette.secondaryText)
                 } else {
                     Card { HistoryChart(history: chart, scrubbed: $scrubbed) }
-                    if let through = history.estimatedThrough {
-                        EstimatedFootnote(through: through)
-                    }
+                    EstimatedFootnote(through: history.estimatedThrough, excluded: history.excluded)
                 }
             }
         }
