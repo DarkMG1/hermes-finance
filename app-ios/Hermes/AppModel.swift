@@ -19,6 +19,9 @@ final class AppModel {
     var accounts: [Account] = []
     var people: [Person] = []
     let receiptQueue = ReceiptQueue()
+    private(set) var csvImports = CSVImportQueue()
+    var importNote: String?
+    private var importWrites = WriteGuard()
 
     private let keychain = KeychainStore(service: "dev.darkmg1.hermesfinance")
     private let cache: ResponseCache
@@ -67,6 +70,11 @@ final class AppModel {
 
     func disconnect() {
         session += 1
+        let hadImports = !csvImports.files.isEmpty
+        importNote = hadImports ? "Connect to a server before importing an Apple Card CSV." : nil
+        for url in csvImports.files { removeInboxCSV(url) }
+        csvImports = CSVImportQueue()
+        importWrites = WriteGuard()
         referenceRefresh.invalidate()
         receiptQueue.selectServer(nil)
         URLCache.shared.removeAllCachedResponses()
@@ -78,6 +86,70 @@ final class AppModel {
         categories = []
         accounts = []
         people = []
+    }
+
+    func queueCSV(_ result: Result<URL, Error>) {
+        do {
+            let opened = try result.get()
+            guard opened.isFileURL else { return }
+            let url = opened.standardizedFileURL
+            guard url.pathExtension.lowercased() == "csv" else {
+                importNote = "Choose an Apple Card CSV file."
+                removeInboxCSV(url)
+                return
+            }
+            csvImports.add(url, fileExists: !isInboxCSV(url) || FileManager.default.fileExists(atPath: url.path()))
+        } catch {
+            importNote = errorMessage(error)
+        }
+    }
+
+    func importCSV(ready: Bool) async {
+        guard let url = csvImports.begin(ready: ready && importNote == nil) else { return }
+        let current = session
+        defer {
+            if current == session {
+                removeInboxCSV(url)
+                csvImports.finish()
+            }
+        }
+        guard let client else {
+            importNote = "Connect to a server before importing an Apple Card CSV."
+            return
+        }
+        do {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            let csv = try String(contentsOf: url, encoding: .utf8)
+            let imported = try await client.importAppleCard(csv: csv, idempotencyKey: importWrites.key)
+            guard current == session else { return }
+            importWrites.didSucceed()
+            importNote = "\(imported.rows) rows: \(imported.added) new, \(imported.updated) already imported"
+                + (imported.skippedBeforeCutover > 0 ? ", \(imported.skippedBeforeCutover) before the cutover" : "")
+            await refreshReferenceData()
+        } catch {
+            guard current == session else { return }
+            if case ClientError.api(409, let body) = error, body.code == "IDEMPOTENCY_KEY_REUSED" {
+                importWrites.didSucceed()
+                importNote = "The earlier import finished. Import this file again to add it."
+                return
+            }
+            importWrites.didFail(error)
+            importNote = importWrites.unresolved ? "Couldn't confirm the import. Import the same file again to finish." : errorMessage(error)
+        }
+    }
+
+    private func isInboxCSV(_ url: URL) -> Bool {
+        CSVImportQueue.isInboxCopy(url, documents: FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0])
+    }
+
+    private func removeInboxCSV(_ url: URL) {
+        guard isInboxCSV(url), FileManager.default.fileExists(atPath: url.path()) else { return }
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            importNote = (importNote.map { $0 + "\n" } ?? "") + "Couldn't remove the copied CSV file."
+        }
     }
 
     func refreshReferenceData(coalescing: Bool = false) async {

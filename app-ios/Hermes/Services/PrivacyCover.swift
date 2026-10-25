@@ -3,8 +3,9 @@ import UIKit
 
 /// An opaque window above the app, sheets included, so the app switcher never shows balances.
 /// With `locked` it also offers Unlock.
-@MainActor
+@MainActor @Observable
 final class PrivacyCover {
+    private(set) var isVisible = false
     private var window: UIWindow?
     private weak var previousKey: UIWindow?
     /// Bumped by every show and hide, so a fade that finishes after a newer show or hide can't touch the window.
@@ -49,6 +50,7 @@ final class PrivacyCover {
             hiddenFromVoiceOver.append(other)
         }
         window.makeKeyAndVisible()
+        isVisible = true
         UIAccessibility.post(notification: .screenChanged, argument: window.rootViewController?.view)
         self.window = window
     }
@@ -68,6 +70,7 @@ final class PrivacyCover {
             guard self?.fadeToken == token else { return }
             window.isHidden = true
             window.alpha = 1
+            self?.isVisible = false
         }
     }
 

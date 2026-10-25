@@ -20,6 +20,8 @@ final class AppLock {
     private var failure: String?
     private let onFacesChanged: @MainActor () -> Void
 
+    var canImportDocuments: Bool { isActive && !locked && connectGeneration == nil && !cover.isVisible }
+
     init(onFacesChanged: @escaping @MainActor () -> Void) {
         self.onFacesChanged = onFacesChanged
     }

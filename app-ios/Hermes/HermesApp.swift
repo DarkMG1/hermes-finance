@@ -34,6 +34,10 @@ struct HermesApp: App {
         UserDefaults.standard.set(true, forKey: "hideBalances")
     }
 
+    private var importReady: Bool {
+        lock.canImportDocuments && !model.csvImports.files.isEmpty && !model.csvImports.busy && model.importNote == nil
+    }
+
     var body: some Scene {
         WindowGroup {
             Group {
@@ -44,6 +48,18 @@ struct HermesApp: App {
             .environment(model.receiptQueue)
             .tint(Palette.accent)
             .preferredColorScheme(appearance.colorScheme)
+            .onOpenURL { model.queueCSV(.success($0)) }
+            .onChange(of: importReady, initial: true) { _, ready in
+                if ready { Task { await model.importCSV(ready: lock.canImportDocuments) } }
+            }
+            .alert("Apple Card import", isPresented: Binding(
+                get: { lock.canImportDocuments && model.importNote != nil },
+                set: { if !$0 { model.importNote = nil } }
+            )) {
+                Button("OK", role: .cancel) { model.importNote = nil }
+            } message: {
+                Text(model.importNote ?? "")
+            }
             .task {
                 await model.refreshReferenceData(coalescing: true)
             }
