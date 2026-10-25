@@ -33,8 +33,8 @@ function atOrBefore(dates: string[], day: string): number {
 
 /**
  * An investment account's value on days before its first holdings sync (anchor), in today's share units:
- * shares and cash walk back from the anchor through stored investment transactions; each day is priced from Tiingo closes,
- * with trade/anchor fallbacks only for securities with a supported price history. Unpriced positions are excluded.
+ * shares and cash walk back from the anchor through stored investment transactions; each day uses Tiingo closes at or
+ * before that day. Unpriced positions are excluded.
  * Null when the account never synced holdings or held nothing at its first sync.
  */
 export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate | null {
@@ -96,30 +96,12 @@ export function loadAccountEstimate(db: Db, accountId: string): AccountEstimate 
     quantities.set(t.securityId, before);
   }
   const plaidAfter = (id: string, day: string) => (plaidSplits.get(id) ?? []).reduce((f, [d, s]) => (d > day ? f * s : f), 1);
-  // only buys and sells provide execution prices
-  const trades = new Map<string, { dates: string[]; txns: Txn[] }>();
-  for (const t of txns) {
-    if (!t.securityId || !movesShares(t) || t.type === 'transfer' || isCashSec(secs.get(t.securityId)) || t.priceCents === null || t.priceCents <= 0 || t.quantity === 0 || isSplit(t)) continue;
-    const tr = trades.get(t.securityId) ?? { dates: [], txns: [] };
-    tr.dates.push(t.date);
-    tr.txns.push(t);
-    trades.set(t.securityId, tr);
-  }
-
   const priceOn = (id: string, day: string): number | null => {
     const ticker = tickerOf(id);
     const c = ticker ? closes.get(ticker) : undefined;
     if (!c?.dates.length) return null;
     const i = atOrBefore(c.dates, day);
-    if (i >= 0) return c.cents[i]! / splitsAfter(ticker, day) * plaidAfter(id, day) / plaidAfter(id, c.dates[i]!);
-    const tr = trades.get(id);
-    const j = tr ? atOrBefore(tr.dates, day) : -1;
-    if (tr && j >= 0) return tr.txns[j]!.priceCents! / splitsAfter(ticker, tr.txns[j]!.date) * plaidAfter(id, day) / plaidAfter(id, tr.txns[j]!.date);
-    const a = anchorPrice.get(id);
-    if (a !== undefined) return a * plaidAfter(id, day);
-    // sold before the anchor and before its first close: its earliest trade price
-    const e = tr?.txns[0];
-    return e ? e.priceCents! / splitsAfter(ticker, e.date) * plaidAfter(id, day) / plaidAfter(id, e.date) : 0;
+    return i < 0 ? null : c.cents[i]! / splitsAfter(ticker, day) * plaidAfter(id, day) / plaidAfter(id, c.dates[i]!);
   };
   const value = (day: string): DayValue => {
     const bySecurity = new Map<string, number>();

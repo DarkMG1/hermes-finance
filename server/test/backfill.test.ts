@@ -92,6 +92,27 @@ test('a supported fund without cached price history is excluded too', () => {
   assert.equal(value.bySecurity.has('sa'), false);
 });
 
+test('a supported fund is excluded before its first cached close despite trade and anchor prices', () => {
+  const { deps: { db } } = makeTestDeps();
+  buyAndDeposit(db);
+  db.prepare("DELETE FROM security_prices WHERE date < '2026-03-13'").run();
+  const est = loadAccountEstimate(db, 'inv')!;
+  for (const [day, cash] of [['2026-03-11', 45000], ['2026-03-12', 5000]] as const) {
+    const value = est.valueOn(day);
+    assert.equal(value.totalCents, cash);
+    assert.equal(value.bySecurity.has('sa'), false);
+    assert.deepEqual([...value.excluded], ['sa']);
+  }
+  assert.equal(est.valueOn('2026-03-13').bySecurity.get('sa'), 105000);
+  db.prepare("INSERT INTO balance_snapshots VALUES ('inv', '2026-03-15', 115000)").run();
+  const history = getNetWorth(db, 'all', '2026-03-15', { type: 'investment' });
+  assert.deepEqual(history.excluded, { through: '2026-03-12', positions: 1 });
+  assert.deepEqual(history.points.map((p) => p.netWorthCents), [45000, 45000, 5000, 110000, 113000, 115000]);
+  assert.deepEqual(getNetWorth(db, 'all', '2026-03-15'), history);
+  assert.deepEqual(getHoldingHistory(db, 'SYNA', 'all', '2026-03-15')!.points.map((p) => p.date),
+    ['2026-03-13', '2026-03-14', '2026-03-15']);
+});
+
 test('a position sold before the anchor still counts before its sale', () => {
   const { deps } = makeTestDeps();
   const { db } = deps;
@@ -147,13 +168,15 @@ test('a cash distribution moves cash only and never prices the position at 0', (
   seedAccount(db, { id: 'inv', type: 'investment', balanceCents: 23000 });
   securities(db);
   anchor(db, 'inv', [['sb', 3, 18000], ['cash', 5000, 5000]]);
+  price(db, 'SYNB', '2026-03-10', 6000);
+  price(db, 'SYNB', '2026-03-11', 5000);
   price(db, 'SYNB', '2026-03-15', 6000);
   txn(db, 'b1', 'inv', 'sb', '2026-03-11', 1, 5000, 5000);
   txn(db, 'dv', 'inv', 'sb', '2026-03-13', 0, -300, 0, 'distribution', 'cash');
   const est = loadAccountEstimate(db, 'inv')!;
-  // H: 3 sh, cash 5000; before the first close the last real trade prices sb, not the distribution's 0
+  // H: 3 sh, cash 5000; cached closes price sb, not the distribution's 0
   // 03-14, 03-13: 3×5000 + 5000 = 20000. 03-12, 03-11: undo distribution → cash 4700 → 15000 + 4700 = 19700.
-  // 03-10 (< earliest 03-11): undo buy → 2 sh, cash 9700; no trade ≤ 03-10 → anchor price 6000 → 12000 + 9700 = 21700
+  // 03-10 (< earliest 03-11): undo buy → 2 sh at close 6000, cash 9700 → 12000 + 9700 = 21700
   assert.deepEqual(['2026-03-10', '2026-03-11', '2026-03-12', '2026-03-13', '2026-03-14'].map((d) => est.valueOn(d).totalCents),
     [21700, 19700, 19700, 20000, 20000]);
   assert.equal(est.valueOn('2026-03-12').cashCents, 4700);
@@ -189,11 +212,27 @@ test('cash and fee rows with fractional quantities never move fund shares', () =
   }
 });
 
-test('cash rows neither distort split factors nor supply execution prices', () => {
+test('position-changing transfers move shares on the backward walk', () => {
+  for (const [quantity, before] of [[2, 10000], [-2, 50000]] as const) {
+    const { deps: { db } } = makeTestDeps();
+    seedAccount(db, { id: 'inv', type: 'investment', balanceCents: 35000 });
+    securities(db);
+    anchor(db, 'inv', [['sa', 3, 30000], ['cash', 5000, 5000]]);
+    price(db, 'SYNA', '2026-03-10', 10000);
+    txn(db, 'transfer', 'inv', 'sa', '2026-03-13', quantity, 0, null, 'transfer', 'transfer');
+    const est = loadAccountEstimate(db, 'inv')!;
+    assert.equal(est.valueOn('2026-03-12').bySecurity.get('sa'), before);
+    assert.equal(est.valueOn('2026-03-13').bySecurity.get('sa'), 30000);
+    assert.equal(est.valueOn('2026-03-12').cashCents, 5000);
+  }
+});
+
+test('cash rows do not distort Plaid-only split factors', () => {
   const { deps: { db } } = makeTestDeps();
   seedAccount(db, { id: 'inv', type: 'investment' });
   securities(db);
   anchor(db, 'inv', [['sb', 20, 200000], ['cash', 6300, 6300]]);
+  price(db, 'SYNB', '2026-03-01', 20000);
   price(db, 'SYNB', '2026-03-15', 10000);
   txn(db, 'buy', 'inv', 'sb', '2026-03-02', 10, 200000, 20000, 'contribution');
   txn(db, 'split', 'inv', 'sb', '2026-03-05', 10, 0, null, 'stock split');
@@ -230,6 +269,8 @@ test('an account filter sums only the chosen accounts', () => {
   seedAccount(db, { id: 'inv2', type: 'investment', balanceCents: 50000 });
   anchor(db, 'inv2', [['sb', 5, 50000]]);
   txn(db, 'b2', 'inv2', 'sb', '2026-03-12', 1, 8000, 8000);
+  price(db, 'SYNB', '2026-03-10', 10000);
+  price(db, 'SYNB', '2026-03-12', 8000);
   price(db, 'SYNB', '2026-03-15', 10000);
   db.prepare("INSERT INTO balance_snapshots (account_id, date, balance_cents) VALUES ('inv', '2026-03-15', 115000), ('inv2', '2026-03-15', 50000)").run();
   const pts = (ids: string[]) => getNetWorth(db, 'all', '2026-03-15', { type: 'investment', accountIds: ids }).points.map((p) => [p.date, p.netWorthCents]);
@@ -237,9 +278,9 @@ test('an account filter sums only the chosen accounts', () => {
   assert.deepEqual(pts(['inv']), [
     ['2026-03-10', 102600], ['2026-03-11', 102600], ['2026-03-12', 105000], ['2026-03-13', 110000], ['2026-03-14', 113000], ['2026-03-15', 115000],
   ]);
-  // inv2 alone: before the first close, last trade 8000 → 40000. 03-15: snapshot 50000
+  // inv2 alone: cached close 8000 → 40000. 03-15: snapshot 50000
   assert.deepEqual(pts(['inv2']), [['2026-03-12', 40000], ['2026-03-13', 40000], ['2026-03-14', 40000], ['2026-03-15', 50000]]);
-  // both, 03-10: inv 102600 + inv2 fully undone (4 sh × anchor 10000 + cash 8000 = 48000) = 150600
+  // both, 03-10: inv 102600 + inv2 fully undone (4 sh × close 10000 + cash 8000 = 48000) = 150600
   assert.equal(pts(['inv', 'inv2'])[0]![1], 150600);
 });
 
@@ -278,8 +319,9 @@ test('a split only Plaid records is undone with its shares', () => {
   anchor(db, 'inv', [['sb', 20, 200000]]);
   txn(db, 'b1', 'inv', 'sb', '2026-03-11', 10, 200000, 20000);
   txn(db, 's1', 'inv', 'sb', '2026-03-13', 10, 0, null, 'stock split');
+  price(db, 'SYNB', '2026-03-10', 20000);
   price(db, 'SYNB', '2026-03-15', 10000);
-  // before SYNB's first close: 20 − 10 (split undone) = 10 sh × last trade 20000 = 200000
+  // 20 − 10 (split undone) = 10 sh × cached close 20000 = 200000
   assert.equal(loadAccountEstimate(db, 'inv')!.valueOn('2026-03-12').totalCents, 200000);
 });
 
@@ -361,12 +403,13 @@ test('holding history counts an account that sold the holding before its anchor'
   ]);
 });
 
-test('Plaid-only splits adjust trade prices across forward and reverse splits', () => {
+test('Plaid-only splits adjust cached closes across forward and reverse splits', () => {
   for (const factor of [2, 0.5]) {
     const { deps: { db } } = makeTestDeps();
     seedAccount(db, { id: 'inv', type: 'investment' });
     securities(db);
     anchor(db, 'inv', [['sb', 10 * factor, 200000]]);
+    price(db, 'SYNB', '2026-03-01', 20000);
     price(db, 'SYNB', '2026-03-15', 20000 / factor);
     txn(db, 'b', 'inv', 'sb', '2026-03-01', 10, 200000, 20000);
     txn(db, 's', 'inv', 'sb', '2026-03-05', 10 * factor - 10, 0, null, 'stock split');
@@ -377,12 +420,13 @@ test('Plaid-only splits adjust trade prices across forward and reverse splits', 
   }
 });
 
-test('Plaid-only split factors also convert anchor and earliest-sale prices', () => {
+test('Plaid-only split factors convert cached closes for held and sold-out positions', () => {
   for (const sold of [false, true]) {
     const { deps: { db } } = makeTestDeps();
     seedAccount(db, { id: 'inv', type: 'investment' });
     securities(db);
     anchor(db, 'inv', sold ? [['cash', 200000, 200000]] : [['sb', 20, 200000]]);
+    price(db, 'SYNB', '2026-03-01', 20000);
     price(db, 'SYNB', '2026-03-15', 10000);
     txn(db, 's', 'inv', 'sb', '2026-03-05', 10, 0, null, 'stock split');
     if (sold) txn(db, 'sell', 'inv', 'sb', '2026-03-10', -20, -200000, 10000, 'sell');
@@ -397,6 +441,7 @@ test('multiple Plaid-only splits use the quantities at each split', () => {
   seedAccount(db, { id: 'inv', type: 'investment' });
   securities(db);
   anchor(db, 'inv', [['sb', 90, 450000]]);
+  price(db, 'SYNB', '2026-03-01', 20000);
   price(db, 'SYNB', '2026-03-15', 5000);
   txn(db, 'buy', 'inv', 'sb', '2026-03-01', 10, 200000, 20000, 'contribution');
   txn(db, 'split1', 'inv', 'sb', '2026-03-05', 10, 0, null, 'stock split');
