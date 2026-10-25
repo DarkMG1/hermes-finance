@@ -201,3 +201,70 @@ test('a background read landing on an untagged row during an explicit read is no
   const r = await post(`/v1/receipts/inbox/${ID}/read`);
   assert.equal(r.statusCode, 200);
 });
+
+test('an inbox reread cannot overwrite concurrent tax, tip or fee saves with unchanged items', async () => {
+  for (const field of ['taxCents', 'tipCents', 'feesCents'] as const) {
+    const { put, post, putItems, db, reader } = setup();
+    await put(ID);
+    await settle();
+    const body = { items: [{ name: 'Synthetic Bread', amountCents: 400, people: ['me'] }], taxCents: 0, tipCents: 0, feesCents: 0 };
+    assert.equal((await putItems(ID, body)).statusCode, 200);
+    let release!: () => void;
+    let started!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const reading = new Promise<void>((r) => { started = r; });
+    reader.read = async () => { started(); await gate; return READ; };
+    const pending = post(`/v1/receipts/inbox/${ID}/read`).then((r) => r);
+    await reading;
+    assert.equal((await putItems(ID, { ...body, [field]: 100 })).statusCode, 200);
+    const saved = getInboxRow(db, ID)!;
+    release();
+    const response = await pending;
+    assert.deepEqual([response.statusCode, response.json().code], [409, 'CHANGED'], field);
+    assert.deepEqual(getInboxRow(db, ID), saved);
+  }
+});
+
+test('all recently linked receipts can be listed and dismissed in one pass', async () => {
+  const { db, deps, post, get } = setup();
+  for (let i = 0; i < 21; i += 1) {
+    seedTxn(db, { id: `charge-${i}`, accountId: 'card', date: '2026-03-10', amountCents: -1050 });
+    db.prepare("INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES (?, ?, ?, 'seed')").run(`charge-${i}`, JPEG, JPEG.length);
+    db.prepare('INSERT INTO inbox_receipts (id, bytes, captured_at, linked_at, linked_transaction_id) VALUES (?, ?, ?, ?, ?)')
+      .run(`receipt-${i}`, JPEG.length, deps.now().toISOString(), deps.now().toISOString(), `charge-${i}`);
+  }
+  const linked = (await get('/v1/receipts/inbox')).json().recentlyLinked as { id: string }[];
+  assert.equal(linked.length, 21);
+  for (const row of linked) assert.equal((await post(`/v1/receipts/inbox/${row.id}/dismiss`)).statusCode, 204);
+  assert.deepEqual((await get('/v1/receipts/inbox')).json().recentlyLinked, []);
+});
+
+test('Paid-by creation links the waiting receipt atomically and replays the saved transaction', async () => {
+  const { db, post, get, deps } = setup();
+  db.prepare("INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at) VALUES ('r1', ?, ?, 'now')").run(JPEG, JPEG.length);
+  const payload = { date: '2026-03-10', amountCents: -1050, payee: 'Synthetic Grocer', paidByPersonId: 'p1', inboxReceiptId: 'r1' };
+  const r = await post('/v1/transactions', payload, 'paid');
+  assert.equal(r.statusCode, 201);
+  const transaction = r.json();
+  assert.equal(transaction.hasReceipt, true);
+  assert.equal(getInboxRow(db, 'r1')!.linked_transaction_id, transaction.id);
+  assert.equal(matchInbox(deps), 0);
+  assert.deepEqual((await post('/v1/transactions', payload, 'paid')).json(), transaction);
+  assert.equal((await get('/v1/transactions')).json().transactions.length, 1);
+});
+
+test('an auto-linked or deleted receipt cannot leave behind a new Paid-by transaction', async () => {
+  for (const linked of [false, true]) {
+    const { db, deps, post } = setup();
+    if (linked) {
+      db.prepare("INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at) VALUES ('r1', ?, ?, 'now')").run(JPEG, JPEG.length);
+      storeRead(db, 'r1', READ, 'now');
+      seedTxn(db, { id: 'bank', accountId: 'card', date: '2026-03-10', amountCents: -1050, source: 'plaid', sourceId: 'bank', payee: 'Synthetic Grocer' });
+      assert.equal(matchInbox(deps), 1);
+    }
+    const before = db.prepare('SELECT id FROM transactions').all();
+    const r = await post('/v1/transactions', { date: '2026-03-10', amountCents: -1050, payee: 'Synthetic Grocer', paidByPersonId: 'p1', inboxReceiptId: 'r1' });
+    assert.equal(r.statusCode, 404);
+    assert.deepEqual(db.prepare('SELECT id FROM transactions').all(), before);
+  }
+});

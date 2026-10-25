@@ -33,5 +33,5 @@ test('applyItems writes the split and stores the items and applied lines', () =>
   assert.deepEqual(t.splitLines.map((l) => [l.amountCents, l.personId ?? null]), [[-1000, null], [-1000, 'p1']]);
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM receipt_items WHERE transaction_id = 'own'").get() as { n: number }).n, 2);
   assert.ok((db.prepare("SELECT applied_lines FROM receipts WHERE transaction_id = 'own'").get() as { applied_lines: string }).applied_lines);
-  assert.deepEqual(getTransaction(db, 'own')!.splitLines.length, 2);
+  assert.deepEqual(getTransaction(db, 'own', '2026-03-15')!.splitLines.length, 2);
 });

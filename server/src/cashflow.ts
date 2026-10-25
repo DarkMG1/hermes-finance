@@ -1,8 +1,8 @@
 import type { ExpenseRow, ExpensesPage, ExpensesQuery, PayeeHistory, PayeeHistoryQuery, PayeeHistoryRow, Reimbursements, Spending, SpendingQuery } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
-import { periodRange } from './ledger.ts';
-import { bankText, normalizeName } from './recurring.ts';
+import { periodRange } from './days.ts';
+import { bankText, moneyOut, normalizeName } from './recurring.ts';
 
 // Every amount that can count toward Out or In, one row each: the owner's split lines, unsplit untagged transactions, and
 // split differences. Bound with (from, toExclusive) three times.
@@ -21,8 +21,7 @@ const LINES = `
        AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
        AND t.person_id IS NULL
     UNION ALL
-    -- the bank changed a split transaction's amount: the owner's lines stay as saved and the exact difference
-    -- counts as uncategorized spending until they re-split, so the total always matches the bank
+    -- any residual split difference counts as uncategorized spending so the total matches the transaction
     SELECT t.id, NULL, t.date, t.created_at, t.rowid, COALESCE(t.payee, t.merchant_name, t.bank_description),
            NULL, t.amount_cents - SUM(sl.amount_cents), t.plaid_category, 1, 1
       FROM split_lines sl JOIN transactions t ON t.id = sl.transaction_id
@@ -210,10 +209,11 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
     return { named, whole, prefix: !q.recurringId && !!found };
   });
   // Recurring's trigger exactly: no money-out charge of any category carries the bill's name
-  if (source && !(db.prepare('SELECT payee, merchant_name, bank_description FROM transactions WHERE removed_at IS NULL AND amount_cents < 0').all() as
-    { payee: string | null; merchant_name: string | null; bank_description: string }[]).some((t) => [t.payee, t.merchant_name, t.bank_description].some(hit))) {
-    collect((l) => ({ named: l.transaction_id === source && l.name, whole: true }));
+  if (source && !moneyOut(db).some((t) => keys.some((k) => t.names.has(k)))) {
+    collect((l) => ({ named: l.transaction_id === source && l.total < 0 && l.amount < 0 && l.name, whole: true }));
   }
+  const ordered = [...rows.values()].sort((a, b) => a.at[0] < b.at[0] ? 1 : a.at[0] > b.at[0] ? -1
+    : a.at[1] < b.at[1] ? 1 : a.at[1] > b.at[1] ? -1 : b.at[2] - a.at[2]);
   const months = Array.from({ length: 12 }, (_, i) => ({ month: monthBack(today, 11 - i), cents: 0 }));
   // a row someone else paid stores the owner's share; its receipt shows the whole charge
   const paidBy = new Map((db.prepare(`SELECT ri.transaction_id AS id, SUM(ri.amount_cents) + COALESCE(MAX(r.tax_cents), 0) + COALESCE(MAX(r.tip_cents), 0)
@@ -230,11 +230,11 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
   const totalCents = months.reduce((s, m) => s + m.cents, 0);
   // averaged over the months from the first charge (at most 12 back) through this month, or last month while this month has no
   // charge yet, so a new subscription shows its real monthly price
-  const first = [...rows.values()].at(-1)?.row.date.slice(0, 7) ?? months[11]!.month;
-  const last = [...rows.values()].some(({ row }) => !row.upcoming && row.date.startsWith(months[11]!.month)) ? 11 : 10;
+  const first = ordered.at(-1)?.row.date.slice(0, 7) ?? months[11]!.month;
+  const last = ordered.some(({ row }) => !row.upcoming && row.date.startsWith(months[11]!.month)) ? 11 : 10;
   const span = Math.max(1, last + 1 - Math.max(0, months.findIndex((m) => m.month >= first)));
   const c = q.cursor ? decodeCursor(q.cursor) : null;
-  const shown = [...rows.values()].filter(({ row }) => !q.month || row.date.startsWith(q.month));
+  const shown = ordered.filter(({ row }) => !q.month || row.date.startsWith(q.month));
   const after = c ? shown.filter(({ at }) => (at[0] !== c[0] ? at[0] < c[0] : at[1] !== c[1] ? at[1] < c[1] : at[2] < c[2])) : shown;
   const page = after.slice(0, q.limit);
   return {

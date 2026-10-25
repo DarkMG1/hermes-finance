@@ -19,7 +19,6 @@ struct HermesApp: App {
     @AppStorage("appearance") private var appearance = Appearance.system
     @AppStorage("requireFaceID") private var requireFaceID = true
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @State private var queue = ReceiptQueue()
     @Environment(\.scenePhase) private var scenePhase
     @State private var lock: AppLock
 
@@ -42,11 +41,11 @@ struct HermesApp: App {
             }
             .environment(model)
             .environment(lock)
-            .environment(queue)
+            .environment(model.receiptQueue)
             .tint(Palette.accent)
             .preferredColorScheme(appearance.colorScheme)
             .task {
-                await model.refreshReferenceData()
+                await model.refreshReferenceData(coalescing: true)
             }
             .onChange(of: model.reader != nil) { _, connected in
                 if connected { lock.didConnect(enabled: requireFaceID) }
@@ -55,7 +54,7 @@ struct HermesApp: App {
                 // balances hide whenever Hermes leaves the screen; showing them again needs Face ID
                 if phase == .background { UserDefaults.standard.set(true, forKey: "hideBalances") }
                 if phase == .active { model.loadStoredConnection() }
-                if phase == .active { Task { await queue.retryAll(client: model.client) } }
+                if phase == .active { Task { await model.receiptQueue.retryAll(client: model.client) } }
                 lock.phaseChanged(to: phase, enabled: requireFaceID, connected: model.reader != nil)
             }
         }

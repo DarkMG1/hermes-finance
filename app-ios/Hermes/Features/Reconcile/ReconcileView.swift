@@ -17,6 +17,7 @@ struct ReconcileView: View {
     @State private var loadedMonth: String?
     /// Bumped around every check and undo, so a list read that overlapped one is thrown away.
     @State private var writes = 0
+    @State private var pendingChecks: Set<String> = []
 
     init(month: String? = nil) { _month = State(initialValue: month) }
 
@@ -77,7 +78,7 @@ struct ReconcileView: View {
         return Menu {
             Picker("Month", selection: Binding(get: { month ?? current }, set: { month = $0 })) {
                 ForEach(options, id: \.self) { option in
-                    let open = months.first { $0.month == option }?.open
+                    let open = ReconcileMonth.openCount(option, loadedMonth: loadedMonth, rows: rows, summaries: months)
                     Text(open.map { "\(ReconcileMonth.title(option)) · \($0)" } ?? ReconcileMonth.title(option)).tag(option)
                 }
             }
@@ -132,8 +133,8 @@ struct ReconcileView: View {
             guard !Task.isCancelled, requested == month else { return }
             // a check or undo ran meanwhile: this answer may predate it
             guard writes == started else { return await load() }
-            rows = loaded.value.transactions
-            order = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($1.id, $0) })
+            rows = loaded.value.excludingPendingChecks(pendingChecks)
+            order = Dictionary(uniqueKeysWithValues: loaded.value.transactions.enumerated().map { ($1.id, $0) })
             loadedMonth = requested
             state = .loaded(loaded)
         } catch {
@@ -144,10 +145,11 @@ struct ReconcileView: View {
     }
 
     private func check(_ transaction: LedgerTransaction) async {
-        guard let client = model.client else { return }
+        guard let client = model.client, !pendingChecks.contains(transaction.id) else { return }
         error = nil
+        pendingChecks.insert(transaction.id)
         writes += 1
-        defer { writes += 1 }
+        defer { pendingChecks.remove(transaction.id); writes += 1 }
         withAnimation { rows.removeAll { $0.id == transaction.id } }
         do {
             _ = try await client.setReconciled(id: transaction.id, reconciled: true, amountCents: transaction.amountCents,
@@ -156,6 +158,7 @@ struct ReconcileView: View {
             if inMonth(transaction) { withAnimation { undo = transaction } }
             await loadMonths()
         } catch {
+            pendingChecks.remove(transaction.id)
             if undo?.id == transaction.id { withAnimation { undo = nil } }
             // the bank changed the amount: reload so the row comes back with the new one
             if isAmountChanged(error) { await load() } else { await restore(transaction) }

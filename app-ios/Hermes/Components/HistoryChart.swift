@@ -4,28 +4,26 @@ import SwiftUI
 
 /// Daily values as an area and a line; dragging marks the chosen day. Net worth, Investments and Holding share it.
 struct HistoryChart: View {
-    let points: [NetWorthPoint]
+    let history: PreparedHistory
     @Binding var scrubbed: Date?
     @AppStorage("hideBalances") private var hideBalances = true
     @Environment(\.balancesRevealed) private var revealed
 
     var body: some View {
-        let floor = Double(points.map(\.netWorthCents).min() ?? 0) / 100
-        let selected = Self.point(at: scrubbed, in: points)
+        let selected = history.point(at: scrubbed)
         Chart {
-            ForEach(points, id: \.date) { point in
-                let day = DayText.date(point.date) ?? .now
-                let dollars = Double(point.netWorthCents) / 100
-                AreaMark(x: .value("Day", day), yStart: .value("Floor", floor), yEnd: .value("Value", dollars))
+            ForEach(history.points) { point in
+                let dollars = Double(point.value.netWorthCents) / 100
+                AreaMark(x: .value("Day", point.day), yStart: .value("Floor", history.floor), yEnd: .value("Value", dollars))
                     .foregroundStyle(Palette.accent.opacity(0.15))
-                LineMark(x: .value("Day", day), y: .value("Value", dollars))
+                LineMark(x: .value("Day", point.day), y: .value("Value", dollars))
                     .foregroundStyle(Palette.accent)
             }
             // while dragging, mark the day the header shows
-            if let selected, let day = DayText.date(selected.date) {
-                RuleMark(x: .value("Day", day))
+            if let selected {
+                RuleMark(x: .value("Day", selected.day))
                     .foregroundStyle(Palette.secondaryText)
-                PointMark(x: .value("Day", day), y: .value("Value", Double(selected.netWorthCents) / 100))
+                PointMark(x: .value("Day", selected.day), y: .value("Value", Double(selected.value.netWorthCents) / 100))
                     .foregroundStyle(Palette.accent)
             }
         }
@@ -34,12 +32,6 @@ struct HistoryChart: View {
         .accessibilityHidden(hideBalances && !revealed)
         .chartXSelection(value: $scrubbed)
         .frame(height: Space.xxl * 7)
-    }
-
-    /// The point nearest a scrubbed date.
-    static func point(at date: Date?, in points: [NetWorthPoint]) -> NetWorthPoint? {
-        guard let date else { return nil }
-        return points.min { abs((DayText.date($0.date) ?? .now).timeIntervalSince(date)) < abs((DayText.date($1.date) ?? .now).timeIntervalSince(date)) }
     }
 }
 

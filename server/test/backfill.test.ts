@@ -312,3 +312,45 @@ test('holding history counts an account that sold the holding before its anchor'
     ['2026-03-10', 196000], ['2026-03-11', 196000], ['2026-03-12', 100000], ['2026-03-13', 100000], ['2026-03-14', 102000], ['2026-03-15', 102000],
   ]);
 });
+
+test('Plaid-only splits adjust trade prices across forward and reverse splits', () => {
+  for (const factor of [2, 0.5]) {
+    const { deps: { db } } = makeTestDeps();
+    seedAccount(db, { id: 'inv', type: 'investment' });
+    securities(db);
+    anchor(db, 'inv', [['sc', 10 * factor, 200000]]);
+    txn(db, 'b', 'inv', 'sc', '2026-03-01', 10, 200000, 20000);
+    txn(db, 's', 'inv', 'sc', '2026-03-05', 10 * factor - 10, 0, null, 'stock split');
+    const est = loadAccountEstimate(db, 'inv')!;
+    for (const day of ['2026-03-02', '2026-03-05', '2026-03-07', '2026-03-15']) {
+      assert.equal(est.valueOn(day).totalCents, 200000, `${factor}: ${day}`);
+    }
+  }
+});
+
+test('Plaid-only split factors also convert anchor and earliest-sale prices', () => {
+  for (const sold of [false, true]) {
+    const { deps: { db } } = makeTestDeps();
+    seedAccount(db, { id: 'inv', type: 'investment' });
+    securities(db);
+    anchor(db, 'inv', sold ? [['cash', 200000, 200000]] : [['sc', 20, 200000]]);
+    txn(db, 's', 'inv', 'sc', '2026-03-05', 10, 0, null, 'stock split');
+    if (sold) txn(db, 'sell', 'inv', 'sc', '2026-03-10', -20, -200000, 10000, 'sell');
+    const est = loadAccountEstimate(db, 'inv')!;
+    assert.equal(est.valueOn('2026-03-04').totalCents, 200000);
+    assert.equal(est.valueOn('2026-03-07').totalCents, 200000);
+  }
+});
+
+test('multiple Plaid-only splits use the quantities at each split', () => {
+  const { deps: { db } } = makeTestDeps();
+  seedAccount(db, { id: 'inv', type: 'investment' });
+  securities(db);
+  anchor(db, 'inv', [['sc', 90, 450000]]);
+  txn(db, 'buy', 'inv', 'sc', '2026-03-01', 10, 200000, 20000, 'contribution');
+  txn(db, 'split1', 'inv', 'sc', '2026-03-05', 10, 0, null, 'stock split');
+  txn(db, 'buy2', 'inv', 'sc', '2026-03-07', 10, 100000, 10000, 'contribution');
+  txn(db, 'split2', 'inv', 'sc', '2026-03-10', 60, 0, null, 'stock split');
+  const est = loadAccountEstimate(db, 'inv')!;
+  assert.deepEqual(['2026-03-02', '2026-03-06', '2026-03-08', '2026-03-12'].map((d) => est.valueOn(d).totalCents), [200000, 200000, 300000, 300000]);
+});

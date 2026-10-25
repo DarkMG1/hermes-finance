@@ -18,11 +18,13 @@ final class AppModel {
     var categories: [Category] = []
     var accounts: [Account] = []
     var people: [Person] = []
+    let receiptQueue = ReceiptQueue()
 
     private let keychain = KeychainStore(service: "dev.darkmg1.hermesfinance")
     private let cache: ResponseCache
     // bumped on disconnect/reconnect so reads still in flight from the old connection are discarded
     private var session = 0
+    private let referenceRefresh = ReferenceDataRefresh()
 
     init() {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -65,6 +67,8 @@ final class AppModel {
 
     func disconnect() {
         session += 1
+        referenceRefresh.invalidate()
+        receiptQueue.selectServer(nil)
         URLCache.shared.removeAllCachedResponses()
         keychain.delete("apiToken")
         UserDefaults.standard.removeObject(forKey: "serverURL")
@@ -76,14 +80,14 @@ final class AppModel {
         people = []
     }
 
-    func refreshReferenceData() async {
+    func refreshReferenceData(coalescing: Bool = false) async {
         guard let reader else { return }
         let current = session
-        if let loaded = try? await reader.read("/v1/categories", as: [Category].self), session == current { categories = loaded.value }
-        if let loaded = try? await reader.read("/v1/accounts", as: [Account].self), session == current { accounts = loaded.value }
-        if let loaded = try? await reader.read("/v1/people", query: [URLQueryItem(name: "all", value: "1")], as: [Person].self), session == current {
-            people = loaded.value
-        }
+        guard let loaded = await referenceRefresh.request(using: reader, coalescing: coalescing).value,
+              referenceRefresh.isCurrent(loaded), current == session, !Task.isCancelled else { return }
+        if let categories = loaded.categories { self.categories = categories }
+        if let accounts = loaded.accounts { self.accounts = accounts }
+        if let people = loaded.people { self.people = people }
     }
 
     func categoryName(_ id: String?) -> String {
@@ -107,6 +111,8 @@ final class AppModel {
 
     private func configure(url: URL, token: String) {
         session += 1
+        referenceRefresh.invalidate()
+        receiptQueue.selectServer(url)
         let client = APIClient(baseURL: url, token: token, transport: URLSessionTransport())
         self.client = client
         reader = Reader(client: client, cache: cache)

@@ -8,7 +8,7 @@ export type PlaidAccount = {
   currentBalance: number | null; availableBalance: number | null;
 };
 /** Amounts in dollars, as Plaid sends them (positive values). */
-export type PlaidHolding = { accountId: string; securityId: string; quantity: number; price: number; value: number; costBasis: number | null };
+type PlaidHolding = { accountId: string; securityId: string; quantity: number; price: number; value: number; costBasis: number | null };
 export type PlaidSecurity = { securityId: string; name: string | null; ticker: string | null; type: string | null; isCash: boolean; closePrice: number | null };
 /** Plaid signs: quantity positive for buys, negative for sells; amount positive when cash is debited. Dollars. */
 export type PlaidInvestmentTxn = {
@@ -32,7 +32,7 @@ export interface PlaidPort {
   accountsGet(accessToken: string): Promise<PlaidAccount[]>;
   recurringGet(accessToken: string): Promise<PlaidRecurringStream[]>;
   investmentsHoldingsGet(accessToken: string): Promise<PlaidHoldings>;
-  investmentsTransactionsGet(accessToken: string, startDate: string, endDate: string): Promise<{ transactions: PlaidInvestmentTxn[]; securities: PlaidSecurity[] }>;
+  investmentsTransactionsGet(accessToken: string, startDate: string, endDate: string): Promise<{ accountIds: string[]; transactions: PlaidInvestmentTxn[]; securities: PlaidSecurity[] }>;
   createLinkToken(opts: LinkTokenOpts): Promise<{ linkToken: string; hostedLinkUrl: string; expiration: string }>;
   getLinkResult(linkToken: string): Promise<LinkResult>;
   exchangePublicToken(publicToken: string): Promise<{ accessToken: string; itemId: string }>;

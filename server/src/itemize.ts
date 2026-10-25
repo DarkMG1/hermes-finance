@@ -1,15 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import type { Itemization, SaveItemsBody, Transaction } from '@hermes/shared';
 import type { Db } from './db.ts';
+import { localDay } from './days.ts';
 import { ApiError } from './errors.ts';
 import { getTransaction } from './ledger.ts';
 import { assertPersonTaggable } from './people.ts';
-import { writeSplit } from './routes/ledger.ts';
+import { writeSplit } from './splits.ts';
 
 /** The owner, in item people lists and share results. */
 export const ME = 'me';
 
-export type ShareItem = { amountCents: number; people: string[] };
+type ShareItem = { amountCents: number; people: string[] };
 export type ShareInput = { items: ShareItem[]; taxCents: number; tipCents: number; feesCents: number; targetCents: number };
 export type ShareResult = { shares: { person: string; cents: number }[]; gapCents: number };
 
@@ -53,9 +54,9 @@ export function computeShares(input: ShareInput): ShareResult {
   const cents = new Map<string, number>();
   const frac = new Map<string, number>();
   for (const p of people) {
-    const n = (base.get(p) ?? 0) * targetCents;
-    cents.set(p, Math.floor(n / itemsTotal));
-    frac.set(p, n % itemsTotal);
+    const n = BigInt(base.get(p) ?? 0) * BigInt(targetCents);
+    cents.set(p, Number(n / BigInt(itemsTotal)));
+    frac.set(p, Number(n % BigInt(itemsTotal)));
   }
   let left = targetCents - [...cents.values()].reduce((a, b) => a + b, 0);
   const ranked = people.filter((p) => p !== ME).sort((a, b) => (frac.get(b) ?? 0) - (frac.get(a) ?? 0) || people.indexOf(a) - people.indexOf(b));
@@ -68,7 +69,7 @@ export function computeShares(input: ShareInput): ShareResult {
   };
 }
 
-export type AppliedLine = { personId: string | null; amountCents: number };
+type AppliedLine = { personId: string | null; amountCents: number };
 
 /** What an items save leaves behind, in a form that later changes can be compared against. */
 export function currentLines(db: Db, txnId: string): AppliedLine[] {
@@ -103,12 +104,12 @@ export function replaceItems(db: Db, txnId: string, items: { name: string; amoun
 
 /** The items save: split (own purchase) or my share ("they paid"). The receipt exists; the row is live and money out. */
 export function applyItems(db: Db, id: string, body: SaveItemsBody, nowIso: string): Transaction {
-  const txn = getTransaction(db, id)!;
+  const txn = getTransaction(db, id, localDay(new Date(nowIso)))!;
   const payer = txn.paidByPersonId;
   body.items.forEach((item, i) => item.people.forEach((p) => {
     if (p === ME) return;
     if (payer && p !== payer) throw new ApiError(400, 'INVALID_REQUEST', `items.${i}.people: only you and the person who paid`, `items.${i}.people`);
-    assertPersonTaggable(db, p, `items.${i}.people`, id);
+    assertPersonTaggable(db, p, `items.${i}.people`, id, payer ? 'payer' : 'person');
   }));
   const itemsTotal = body.items.reduce((s, i) => s + i.amountCents, 0);
   const target = payer ? itemsTotal + body.taxCents + body.tipCents + body.feesCents : -txn.amountCents;
@@ -143,5 +144,5 @@ export function applyItems(db: Db, id: string, body: SaveItemsBody, nowIso: stri
   replaceItems(db, id, body.items);
   db.prepare('UPDATE receipts SET tax_cents = ?, tip_cents = ?, fees_cents = ?, applied_lines = ? WHERE transaction_id = ?')
     .run(body.taxCents, body.tipCents, body.feesCents, JSON.stringify(currentLines(db, id)), id);
-  return getTransaction(db, id)!;
+  return getTransaction(db, id, localDay(new Date(nowIso)))!;
 }

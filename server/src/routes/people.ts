@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import { CreatePersonBody, ForgiveBody, ListPeopleQuery, PatchPersonBody, PeopleSettings } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
+import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
@@ -49,7 +50,7 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
       const line = db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id, person_id) VALUES (?, ?, ?, ?, ?)');
       line.run(`00-${randomUUID()}`, id, body.amountCents, null, req.params.id);
       line.run(`01-${randomUUID()}`, id, -body.amountCents, categoryId, null);
-      return { status: 201, body: getTransaction(db, id) };
+      return { status: 201, body: getTransaction(db, id, localDay(deps.now())) };
     });
     return reply.code(r.status).send(r.body);
   });

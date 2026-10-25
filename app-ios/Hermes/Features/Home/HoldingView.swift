@@ -11,6 +11,7 @@ struct HoldingView: View {
     @State private var range = NetWorthRange.month
     @State private var history: LoadState<NetWorthHistory> = .loading
     @State private var scrubbed: Date?
+    @State private var chart = PreparedHistory(points: [])
 
     /// The Investments chips' selection; empty = all accounts.
     let accountIds: Set<String>
@@ -38,7 +39,7 @@ struct HoldingView: View {
                 if loaded.value.points.count < 2 {
                     Text("History starts today. Check back tomorrow.").textStyle(.subhead, color: Palette.secondaryText)
                 } else {
-                    Card { HistoryChart(points: loaded.value.points, scrubbed: $scrubbed) }
+                    Card { HistoryChart(history: chart, scrubbed: $scrubbed) }
                     if let through = loaded.value.estimatedThrough { EstimatedFootnote(through: through) }
                 }
             }
@@ -77,7 +78,7 @@ struct HoldingView: View {
     }
 
     @ViewBuilder private var header: some View {
-        if case .loaded(let loaded) = history, let point = HistoryChart.point(at: scrubbed, in: loaded.value.points) {
+        if case .loaded = history, let point = chart.point(at: scrubbed)?.value {
             Text(DayText.display(point.date)).textStyle(.subhead, color: Palette.secondaryText)
             MoneyText(cents: point.netWorthCents, style: .display, colored: false, negativeIsLoss: true)
                 .redacted(reason: hidden ? .placeholder : [])
@@ -106,6 +107,7 @@ struct HoldingView: View {
             let query = holding.historyQuery + requested.queryItems + InvestmentFilter.queryItems(accountIds)
             let loaded = try await reader.read("/v1/investments/holding-history", query: query, as: NetWorthHistory.self)
             guard !Task.isCancelled, requested == range else { return }
+            chart = PreparedHistory(points: loaded.value.points)
             history = .loaded(loaded)
         } catch {
             guard !Task.isCancelled, requested == range else { return }

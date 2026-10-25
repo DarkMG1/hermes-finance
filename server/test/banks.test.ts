@@ -1,10 +1,36 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { setImmediate } from 'node:timers/promises';
 import { buildApp } from '../src/app.ts';
 import { decryptToken } from '../src/crypto.ts';
 import { makeTestDeps, AUTH, seedItem } from './helpers.ts';
 
 const w = (key: string) => ({ ...AUTH, 'idempotency-key': key });
+
+test('overlapping link-session retries call Plaid once and return the same session', async () => {
+  const { deps, plaid } = makeTestDeps();
+  const app = buildApp(deps);
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const create = plaid.createLinkToken.bind(plaid);
+  let calls = 0;
+  plaid.createLinkToken = async (opts) => {
+    calls += 1;
+    entered.resolve();
+    await release.promise;
+    return create(opts);
+  };
+  const post = () => app.inject({ method: 'POST', url: '/v1/plaid/link-sessions', headers: w('overlap'), payload: { mode: 'create' } }).then((r) => r);
+  const first = post();
+  await entered.promise;
+  const second = post();
+  await setImmediate();
+  release.resolve();
+  const [a, b] = await Promise.all([first, second]);
+  assert.deepEqual([a.statusCode, b.statusCode, calls], [201, 201, 1]);
+  assert.deepEqual(a.json(), b.json());
+  assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM link_sessions').get() as { n: number }).n, 1);
+});
 
 test('create session returns the hosted link url', async () => {
   const { deps } = makeTestDeps();

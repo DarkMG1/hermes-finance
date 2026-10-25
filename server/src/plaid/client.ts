@@ -108,8 +108,17 @@ export function createPlaidClient(config: Config): PlaidPort {
       try {
         const transactions: PlaidInvestmentTxn[] = [];
         const securities: PlaidSecurity[] = [];
+        let accountIds: string[] | undefined;
+        let total: number | undefined;
         for (let offset = 0; ;) {
           const { data } = await api.investmentsTransactionsGet({ access_token: accessToken, start_date: startDate, end_date: endDate, options: { count: 500, offset } });
+          const covered = data.accounts.map((a) => a.account_id);
+          if (total !== undefined && (total !== data.total_investment_transactions
+            || covered.length !== accountIds!.length || covered.some((id) => !accountIds!.includes(id)))) {
+            throw new PlaidError('INCOMPLETE_INVESTMENT_TRANSACTIONS');
+          }
+          accountIds ??= covered;
+          total ??= data.total_investment_transactions;
           for (const t of data.investment_transactions) {
             transactions.push({
               id: t.investment_transaction_id, accountId: t.account_id, securityId: t.security_id ?? null, date: t.date,
@@ -118,7 +127,11 @@ export function createPlaidClient(config: Config): PlaidPort {
           }
           securities.push(...data.securities.map(mapSecurity));
           offset += data.investment_transactions.length;
-          if (data.investment_transactions.length === 0 || offset >= data.total_investment_transactions) return { transactions, securities };
+          if (offset >= total) {
+            if (offset !== total || new Set(transactions.map((t) => t.id)).size !== total) throw new PlaidError('INCOMPLETE_INVESTMENT_TRANSACTIONS');
+            return { accountIds, transactions, securities };
+          }
+          if (data.investment_transactions.length === 0) throw new PlaidError('INCOMPLETE_INVESTMENT_TRANSACTIONS');
         }
       } catch (e) { return rethrow(e); }
     },

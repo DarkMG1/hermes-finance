@@ -19,6 +19,8 @@ struct HomeView: View {
     @State private var snapping = false
     @State private var showingInbox = false
     @State private var handledSnaps = 0
+    @State private var loadGeneration = OpenGeneration()
+    @State private var referencesLoaded = false
 
     var body: some View {
         Screen(title: "Home") {
@@ -102,13 +104,17 @@ struct HomeView: View {
                 }
                 Card {
                     Text("Recent").textStyle(.headline)
-                    if loaded.value.recent.isEmpty {
-                        Text("No transactions yet").textStyle(.subhead, color: Palette.secondaryText)
-                    }
-                    ForEach(loaded.value.recent) { transaction in
-                        Button { selected = transaction } label: { TransactionRow(transaction: transaction) }
-                            .buttonStyle(.plain)
-                        if transaction.id != loaded.value.recent.last?.id { Divider().overlay(Palette.separator) }
+                    if referencesLoaded {
+                        if loaded.value.recent.isEmpty {
+                            Text("No transactions yet").textStyle(.subhead, color: Palette.secondaryText)
+                        }
+                        ForEach(loaded.value.recent) { transaction in
+                            Button { selected = transaction } label: { TransactionRow(transaction: transaction) }
+                                .buttonStyle(.plain)
+                            if transaction.id != loaded.value.recent.last?.id { Divider().overlay(Palette.separator) }
+                        }
+                    } else {
+                        ProgressView()
                     }
                 }
             }
@@ -131,7 +137,7 @@ struct HomeView: View {
             }
         }
         .refreshable { await queue.retryAll(client: model.client); await load(); await loadInbox() }
-        .task { await load() }
+        .task { await load(coalescing: true) }
         .task { await loadInbox() }
         .task { await queue.retryAll(client: model.client) }
         .onChange(of: queue.pending.count) { Task { await loadInbox() } }
@@ -141,7 +147,7 @@ struct HomeView: View {
             handledSnaps = requests
             snapping = true
         }
-        .receiptCamera(isPresented: $snapping, scanDirectly: true) { showingInbox = true }
+        .receiptCamera(isPresented: $snapping, scanDirectly: true, onCaptured: { showingInbox = true })
         .navigationDestination(isPresented: $showingInbox) { InboxView() }
         // recently linked receipts show once: closing the inbox clears them and their badge
         .onChange(of: showingInbox) { _, open in if !open { Task { await clearLinked() } } }
@@ -211,19 +217,29 @@ struct HomeView: View {
         inboxCount = list.waiting.count + list.recentlyLinked.count
     }
 
-    private func load() async {
+    private func load(coalescing: Bool = false) async {
         guard let reader = model.reader else { return }
+        let gen = loadGeneration.next()
+        async let references: Void = model.refreshReferenceData(coalescing: coalescing)
+        async let holdings: Void = loadInvestments(reader: reader, generation: gen)
         do {
             let loaded = try await reader.read("/v1/home", as: Home.self)
-            await model.refreshReferenceData()
-            let loadedInvestments = try? await reader.read("/v1/investments", as: Investments.self).value
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, loadGeneration.accepts(gen, presented: false) else { return }
             state = .loaded(loaded)
-            investments = loadedInvestments
         } catch {
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, loadGeneration.accepts(gen, presented: false) else { return }
             state = .failed(errorMessage(error))
         }
+        await references
+        guard !Task.isCancelled, loadGeneration.accepts(gen, presented: false) else { return }
+        referencesLoaded = true
+        await holdings
+    }
+
+    private func loadInvestments(reader: Reader, generation: Int) async {
+        let loaded = try? await reader.read("/v1/investments", as: Investments.self).value
+        guard !Task.isCancelled, loadGeneration.accepts(generation, presented: false) else { return }
+        investments = loaded
     }
 }
 

@@ -1,20 +1,20 @@
 import type { NetWorthHistory, NetWorthQuery } from '@hermes/shared';
 import type { Db } from './db.ts';
+import { addDays } from './days.ts';
 import { type AccountEstimate, loadAccountEstimate } from './backfill.ts';
 import { liveNetWorthCents, NEGATIVE_TYPES } from './ledger.ts';
 
+export { localDay } from './days.ts';
+
 const pad = (n: number) => String(n).padStart(2, '0');
 
-/** The owner's day: the date in the process time zone (the TZ env var). */
-export function localDay(d: Date): string {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-/** Records today's balance for every account that has one; a later call the same day overwrites. */
+/** Records today's balances; an unavailable linked account contributes zero without losing its history. A later call overwrites. */
 export function snapshotBalances(db: Db, day: string): void {
   db.prepare(`
     INSERT INTO balance_snapshots (account_id, date, balance_cents)
-    SELECT id, ?, balance_current_cents FROM accounts WHERE balance_current_cents IS NOT NULL
+    SELECT id, ?, COALESCE(balance_current_cents, 0) FROM accounts
+      WHERE balance_current_cents IS NOT NULL OR (item_id IS NOT NULL
+        AND EXISTS (SELECT 1 FROM balance_snapshots s WHERE s.account_id = accounts.id))
     ON CONFLICT (account_id, date) DO UPDATE SET balance_cents = excluded.balance_cents`).run(day);
 }
 
@@ -30,23 +30,10 @@ export function minusMonths(day: string, n: number): string {
   return `${String(ty).padStart(4, '0')}-${pad(tm + 1)}-${pad(Math.min(d, last))}`;
 }
 
-export function nextDay(day: string): string {
-  const [y, m, d] = day.split('-').map(Number) as [number, number, number];
-  return new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
-}
-
 /** Rebuilt from transactions before their first snapshot; every other type holds flat at it. */
 const REBUILT_TYPES = ['depository', 'credit', 'loan'];
 
-/** The live balance total of visible accounts matching the filter, signed as on Home. */
-function liveCents(db: Db, type: string | null, ids: string[] | undefined): number {
-  if (type === null && !ids) return liveNetWorthCents(db);
-  const rows = db.prepare(`SELECT type, balance_current_cents AS c FROM accounts a WHERE hidden = 0 AND balance_current_cents IS NOT NULL
-    AND (? IS NULL OR type = ?) ${ids ? `AND a.id IN (${ids.map(() => '?').join(', ')})` : ''}`).all(type, type, ...(ids ?? [])) as { type: string; c: number }[];
-  return rows.reduce((s, r) => s + (NEGATIVE_TYPES.has(r.type) ? -r.c : r.c), 0);
-}
-
-export type NetWorthFilter = { type?: string; accountIds?: string[] };
+type NetWorthFilter = { type?: string; accountIds?: string[] };
 
 export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string, filter: NetWorthFilter = {}): NetWorthHistory {
   const type = filter.type ?? null;
@@ -58,7 +45,7 @@ export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string
     JOIN accounts a ON a.id = s.account_id WHERE a.hidden = 0 AND s.date <= ? AND (? IS NULL OR a.type = ?) ${idClause} ORDER BY s.date`).all(today, type, type, ...idArgs) as
     { accountId: string; date: string; cents: number; type: string }[];
   const first = snaps[0];
-  if (!first) return { points: [], currentCents: liveCents(db, type, ids), changeCents: 0, estimatedThrough: null };
+  if (!first) return { points: [], currentCents: liveNetWorthCents(db, type, ids), changeCents: 0, estimatedThrough: null };
   const signed = (s: { cents: number; type: string }) => (NEGATIVE_TYPES.has(s.type) ? -s.cents : s.cents);
   // each account's first snapshot (S) anchors its estimate for every earlier day
   const anchors = new Map<string, string>();
@@ -70,8 +57,10 @@ export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string
   }
   // investment accounts: estimated from investment transactions and prices before their first snapshot
   const estimates = new Map<string, AccountEstimate>();
+  const seen = new Set<string>();
   for (const s of snaps) {
-    if (s.type !== 'investment' || estimates.has(s.accountId)) continue;
+    if (s.type !== 'investment' || seen.has(s.accountId)) continue;
+    seen.add(s.accountId);
     const est = loadAccountEstimate(db, s.accountId);
     if (est) estimates.set(s.accountId, est);
   }
@@ -93,7 +82,7 @@ export function getNetWorth(db: Db, range: NetWorthQuery['range'], today: string
   let estimatedThrough: string | null = null;
   let i = 0;
   let j = 0;
-  for (let day = earliest; day <= today; day = nextDay(day)) {
+  for (let day = earliest; day <= today; day = addDays(day, 1)) {
     for (; j < moves.length && moves[j]!.date <= day; j += 1) {
       const m = moves[j]!;
       latest.set(m.accountId, latest.get(m.accountId)! + m.cents);

@@ -5,6 +5,7 @@ public final class ResponseCache: @unchecked Sendable {
     private let directory: URL
     private let lock = NSLock()
     private var generation = 0
+    private var requests: [String: Int] = [:]
 
     // unreadable while the iPhone is locked; the app never reads it in the background. iOS only: on macOS (tests, CI) the
     // write would fail whenever the screen is locked.
@@ -25,9 +26,18 @@ public final class ResponseCache: @unchecked Sendable {
 
     public var currentGeneration: Int { lock.withLock { generation } }
 
-    public func store(_ data: Data, key: String, savedAt: Date, generation expected: Int? = nil) {
+    func beginRead(key: String, generation expected: Int) -> Int? {
+        lock.withLock {
+            guard expected == generation else { return nil }
+            requests[key, default: 0] += 1
+            return requests[key]
+        }
+    }
+
+    public func store(_ data: Data, key: String, savedAt: Date, generation expected: Int? = nil, request: Int? = nil) {
         lock.withLock {
             if let expected, expected != generation { return }
+            if let request, request != requests[key] { return }
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: Self.directoryAttributes)
             try? JSONEncoder().encode(Entry(savedAt: savedAt, body: data)).write(to: file(for: key), options: Self.writeOptions)
         }
@@ -41,6 +51,7 @@ public final class ResponseCache: @unchecked Sendable {
     public func clear() {
         lock.withLock {
             generation += 1
+            requests.removeAll()
             try? FileManager.default.removeItem(at: directory)
         }
     }

@@ -7,6 +7,7 @@ struct NetWorthView: View {
     @State private var range = NetWorthRange.month
     @State private var state: LoadState<NetWorthHistory> = .loading
     @State private var scrubbed: Date?
+    @State private var chart = PreparedHistory(points: [])
     /// The range the shown history was read for: its change line is hidden while another range loads.
     @State private var loadedRange: NetWorthRange?
 
@@ -24,7 +25,7 @@ struct NetWorthView: View {
                 if history.points.count < 2 {
                     Text("History starts today. Check back tomorrow.").textStyle(.subhead, color: Palette.secondaryText)
                 } else {
-                    Card { HistoryChart(points: history.points, scrubbed: $scrubbed) }
+                    Card { HistoryChart(history: chart, scrubbed: $scrubbed) }
                     if let through = history.estimatedThrough {
                         EstimatedFootnote(through: through)
                     }
@@ -42,7 +43,7 @@ struct NetWorthView: View {
 
     /// While dragging, the header shows the chosen day instead of today.
     @ViewBuilder private func header(_ history: NetWorthHistory) -> some View {
-        if let point = HistoryChart.point(at: scrubbed, in: history.points) {
+        if let point = chart.point(at: scrubbed)?.value {
             Text(DayText.display(point.date)).textStyle(.subhead, color: Palette.secondaryText)
             MoneyText(cents: point.netWorthCents, style: .display, colored: false, negativeIsLoss: true)
                 .redacted(reason: hideBalances ? .placeholder : [])
@@ -50,22 +51,10 @@ struct NetWorthView: View {
             Text("Net worth").textStyle(.subhead, color: Palette.secondaryText)
             MoneyText(cents: history.currentCents, style: .display, colored: false, negativeIsLoss: true)
                 .redacted(reason: hideBalances ? .placeholder : [])
-            HStack(spacing: Space.s) {
-                MoneyText(cents: history.changeCents, colored: !hideBalances, negativeIsLoss: !hideBalances)
-                if let percent = history.changePercent {
-                    Text(percent.formatted(.percent.precision(.fractionLength(1))))
-                        .textStyle(.subhead, color: hideBalances ? Palette.text : changeColor(history.changeCents))
-                        .accessibilityHidden(hideBalances)
-                }
-            }
-            .redacted(reason: hideBalances ? .placeholder : [])
-            .opacity(loadedRange == range ? 1 : 0)
-            .accessibilityHidden(loadedRange != range)
+            GainText(gainCents: history.changeCents, percent: history.changePercent)
+                .opacity(loadedRange == range ? 1 : 0)
+                .accessibilityHidden(loadedRange != range)
         }
-    }
-
-    private func changeColor(_ cents: Int) -> Color {
-        cents < 0 ? Palette.loss : cents > 0 ? Palette.gain : Palette.text
     }
 
     private func load() async {
@@ -74,6 +63,7 @@ struct NetWorthView: View {
         do {
             let loaded = try await reader.read("/v1/net-worth", query: requested.queryItems, as: NetWorthHistory.self)
             guard !Task.isCancelled, requested == range else { return }
+            chart = PreparedHistory(points: loaded.value.points)
             state = .loaded(loaded)
             loadedRange = requested
         } catch {

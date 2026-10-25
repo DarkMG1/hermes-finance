@@ -1,8 +1,10 @@
-import type { Account, Category, Home, ListTransactionsQuery, SpendingQuery, SplitLine, Transaction, TransactionPage } from '@hermes/shared';
+import type { Account, Category, Home, ListTransactionsQuery, SplitLine, Transaction, TransactionPage } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { historyLines } from './cashflow.ts';
 import { ApiError } from './errors.ts';
 import { bankText, memberships, normalizeName } from './recurring.ts';
+
+export { periodRange } from './days.ts';
 
 export type TxnRow = {
   id: string; account_id: string; source: 'plaid' | 'manual' | 'actual' | 'applecard'; source_id: string | null; date: string; amount_cents: number;
@@ -15,19 +17,25 @@ export const TXN_COLS = 'id, account_id, source, source_id, date, amount_cents, 
   + 'paid_by_person_id, repayment_dismissed, reconciled_at, reconciled_cents, forgiven';
 
 /** What a list of rows needs from the rest of the ledger, read once for the whole list. */
-// member: pass one memberships(db) to share the Recurring read across several lists
-export function lookups(db: Db, rows: TxnRow[], member = memberships(db)) {
+// member: pass one memberships(db, today) to share the Recurring read across several lists
+export function lookups(db: Db, rows: TxnRow[], member: ReturnType<typeof memberships>) {
   const { spending, billable } = historyLines(db, rows);
+  const ids = JSON.stringify(rows.map((r) => r.id));
+  const splits = new Map<string, SplitLine[]>();
+  const lines = db.prepare(`SELECT transaction_id, id, amount_cents AS amountCents, category_id AS categoryId, notes, person_id AS personId, payee
+    FROM split_lines WHERE transaction_id IN (SELECT value FROM json_each(?)) ORDER BY id`).all(ids) as (SplitLine & { transaction_id: string })[];
+  for (const { transaction_id: id, ...line } of lines) {
+    if (!splits.has(id)) splits.set(id, []);
+    splits.get(id)!.push(line);
+  }
+  const receipts = new Set((db.prepare('SELECT transaction_id AS id FROM receipts WHERE transaction_id IN (SELECT value FROM json_each(?))')
+    .all(ids) as { id: string }[]).map((r) => r.id));
   // a bill holds only the charges its History lists: owner money out (a refund or someone's IOU never opens the bill)
-  return { spending, recurring: member(rows.filter((r) => r.amount_cents < 0 && r.person_id === null && r.forgiven === 0 && billable.has(r.id))) };
+  return { spending, splits, receipts, recurring: member(rows.filter((r) => r.amount_cents < 0 && r.person_id === null && r.forgiven === 0 && billable.has(r.id))) };
 }
 
-export function rowToTransaction(db: Db, r: TxnRow, { spending, recurring } = lookups(db, [r])): Transaction {
-  const lines = db.prepare('SELECT id, amount_cents, category_id, notes, person_id, payee FROM split_lines WHERE transaction_id = ? ORDER BY id').all(r.id) as
-    { id: string; amount_cents: number; category_id: string | null; notes: string | null; person_id: string | null; payee: string | null }[];
-  const splitLines: SplitLine[] = lines.map((l) => ({
-    id: l.id, amountCents: l.amount_cents, categoryId: l.category_id, notes: l.notes, personId: l.person_id, payee: l.payee,
-  }));
+export function rowToTransaction(r: TxnRow, { spending, recurring, splits, receipts }: ReturnType<typeof lookups>): Transaction {
+  const splitLines = splits.get(r.id) ?? [];
   const payee = r.payee ?? r.merchant_name ?? r.bank_description;
   return {
     id: r.id, accountId: r.account_id, source: r.source, date: r.date, amountCents: r.amount_cents,
@@ -35,7 +43,7 @@ export function rowToTransaction(db: Db, r: TxnRow, { spending, recurring } = lo
     merchantName: r.merchant_name, pending: r.pending === 1, categoryId: r.category_id, notes: r.notes, personId: r.person_id, paidByPersonId: r.paid_by_person_id, repaymentDismissed: r.repayment_dismissed === 1, splitLines,
     reconciled: r.reconciled_at !== null && r.reconciled_cents === r.amount_cents,
     forgiven: r.forgiven === 1,
-    hasReceipt: db.prepare('SELECT 1 FROM receipts WHERE transaction_id = ?').get(r.id) !== undefined,
+    hasReceipt: receipts.has(r.id),
     // raw bank text alone (no merchant, no owner payee) is often generic ("POS PURCHASE") and would pool unrelated charges
     // a bill's charge always opens the bill's History
     hasHistory: (normalizeName(payee) !== '' && (r.payee !== null || r.merchant_name !== null) && spending.has(r.id)) || recurring.has(r.id),
@@ -62,9 +70,9 @@ export function listCategories(db: Db): Category[] {
   return rows.map((c) => ({ id: c.id, name: c.name, groupName: c.group_name, isIncome: c.is_income === 1, isTransfer: c.is_transfer === 1, hidden: c.hidden === 1 }));
 }
 
-export function getTransaction(db: Db, id: string): Transaction | null {
+export function getTransaction(db: Db, id: string, today: string): Transaction | null {
   const row = db.prepare(`SELECT ${TXN_COLS} FROM transactions WHERE id = ? AND removed_at IS NULL`).get(id) as TxnRow | undefined;
-  return row ? rowToTransaction(db, row) : null;
+  return row ? rowToTransaction(row, lookups(db, [row], memberships(db, today))) : null;
 }
 
 function encodeCursor(date: string, id: string): string { return Buffer.from(JSON.stringify([date, id])).toString('base64url'); }
@@ -76,7 +84,7 @@ function decodeCursor(c: string): [string, string] {
   throw new ApiError(400, 'INVALID_REQUEST', 'cursor: invalid cursor', 'cursor');
 }
 
-export function listTransactions(db: Db, q: ListTransactionsQuery): TransactionPage {
+export function listTransactions(db: Db, q: ListTransactionsQuery, today: string): TransactionPage {
   const where = ['removed_at IS NULL'];
   const args: unknown[] = [];
   if (q.accountId) { where.push('account_id = ?'); args.push(q.accountId); }
@@ -110,9 +118,9 @@ export function listTransactions(db: Db, q: ListTransactionsQuery): TransactionP
     .all(...args, q.limit + 1) as TxnRow[];
   const page = rows.slice(0, q.limit);
   const last = page[page.length - 1];
-  const l = lookups(db, page);
+  const l = lookups(db, page, memberships(db, today));
   return {
-    transactions: page.map((r) => rowToTransaction(db, r, l)),
+    transactions: page.map((r) => rowToTransaction(r, l)),
     nextCursor: rows.length > q.limit && last ? encodeCursor(last.date, last.id) : null,
   };
 }
@@ -187,8 +195,8 @@ export function fillFromMemory(db: Db, nowIso: string): void {
  */
 export function fitSplitToAmount(db: Db, transactionId: string, nowIso: string): void {
   const txn = db.prepare('SELECT amount_cents AS a FROM transactions WHERE id = ?').get(transactionId) as { a: number } | undefined;
-  const lines = db.prepare('SELECT id, amount_cents AS a, category_id AS c, person_id AS p FROM split_lines WHERE transaction_id = ? ORDER BY id')
-    .all(transactionId) as { id: string; a: number; c: string | null; p: string | null }[];
+  const lines = db.prepare('SELECT id, amount_cents AS a, category_id AS c, person_id AS p, payee AS n FROM split_lines WHERE transaction_id = ? ORDER BY id')
+    .all(transactionId) as { id: string; a: number; c: string | null; p: string | null; n: string | null }[];
   if (!txn || !lines.length) return;
   const total = lines.reduce((s, l) => s + l.a, 0);
   if (txn.a === total) return;
@@ -211,7 +219,8 @@ export function fitSplitToAmount(db: Db, transactionId: string, nowIso: string):
   if (!sameSign || kept.length < 2) {
     db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(transactionId);
     const winner = kept[0] ?? bySize[0]!;
-    db.prepare('UPDATE transactions SET category_id = ?, person_id = ?, updated_at = ? WHERE id = ?').run(winner.c, winner.p, nowIso, transactionId);
+    db.prepare('UPDATE transactions SET category_id = ?, person_id = ?, payee = COALESCE(?, payee), updated_at = ? WHERE id = ?')
+      .run(winner.c, winner.p, winner.n, nowIso, transactionId);
     return;
   }
   const update = db.prepare('UPDATE split_lines SET amount_cents = ? WHERE id = ?');
@@ -220,26 +229,16 @@ export function fitSplitToAmount(db: Db, transactionId: string, nowIso: string):
   db.prepare('UPDATE transactions SET updated_at = ? WHERE id = ?').run(nowIso, transactionId);
 }
 
-export function periodRange(q: SpendingQuery): { from: string; toExclusive: string } {
-  if (q.period === 'year') {
-    return { from: `${q.date}-01-01`, toExclusive: `${String(Number(q.date) + 1).padStart(4, '0')}-01-01` };
-  }
-  const [ys, ms] = q.date.split('-');
-  const y = Number(ys);
-  const m = Number(ms);
-  const next = m === 12 ? `${String(y + 1).padStart(4, '0')}-01` : `${ys}-${String(m + 1).padStart(2, '0')}`;
-  return { from: `${q.date}-01`, toExclusive: `${next}-01` };
-}
-
-/** Today's net worth from live balances: what Home shows. */
-export function liveNetWorthCents(db: Db): number {
-  const accounts = db.prepare('SELECT type, balance_current_cents AS b FROM accounts WHERE hidden = 0 AND balance_current_cents IS NOT NULL').all() as { type: string; b: number }[];
+/** Today's net worth from visible live balances, optionally filtered by type or account. */
+export function liveNetWorthCents(db: Db, type: string | null = null, ids?: string[]): number {
+  const accounts = db.prepare(`SELECT type, balance_current_cents AS b FROM accounts a WHERE hidden = 0 AND balance_current_cents IS NOT NULL
+    AND (? IS NULL OR type = ?) ${ids ? `AND a.id IN (${ids.map(() => '?').join(', ')})` : ''}`).all(type, type, ...(ids ?? [])) as { type: string; b: number }[];
   return accounts.reduce((sum, a) => sum + (NEGATIVE_TYPES.has(a.type) ? -a.b : a.b), 0);
 }
 
-export function getHome(db: Db): Omit<Home, 'owedToYouCents' | 'youOweCents' | 'repaymentSuggestions' | 'toReconcile'> {
+export function getHome(db: Db, today: string): Omit<Home, 'owedToYouCents' | 'youOweCents' | 'repaymentSuggestions' | 'toReconcile'> {
   const netWorthCents = liveNetWorthCents(db);
-  const recent = listTransactions(db, { limit: 10 }).transactions;
+  const recent = listTransactions(db, { limit: 10 }, today).transactions;
   const reconnect = (db.prepare("SELECT id, institution_name FROM items WHERE status = 'login_required' ORDER BY institution_name").all() as { id: string; institution_name: string }[])
     .map((i) => ({ itemId: i.id, institutionName: i.institution_name }));
   return { netWorthCents, recent, reconnect };

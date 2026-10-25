@@ -116,3 +116,29 @@ private struct ClearingTransport: HTTPTransport {
     _ = try await fresh.read("/v1/home", as: Home.self)
     #expect(cache.load(key: key) != nil)
 }
+
+@Test func cacheOrdersRequestsPerKeyEvenWhenTheLatestRequestFails() throws {
+    let cache = tempCache()
+    defer { cache.clear() }
+    let generation = cache.currentGeneration
+    let savedAt = Date(timeIntervalSince1970: 1)
+    let current = Data("current".utf8)
+    cache.store(Data("previous".utf8), key: "a", savedAt: savedAt, generation: generation)
+    let first = cache.beginRead(key: "a", generation: generation)
+    let other = cache.beginRead(key: "b", generation: generation)
+    cache.store(Data("other".utf8), key: "b", savedAt: savedAt, generation: generation, request: other)
+    cache.store(current, key: "a", savedAt: savedAt, generation: generation, request: first)
+    #expect(cache.load(key: "a")?.data == current && cache.load(key: "b") != nil)
+    // The newest read fails, so the previous cached response stays; an older in-flight read must not replace it.
+    _ = cache.beginRead(key: "a", generation: generation)
+    cache.store(Data("stale".utf8), key: "a", savedAt: savedAt, generation: generation, request: first)
+    #expect(cache.load(key: "a")?.data == current)
+
+    cache.clear()
+    let fresh = cache.beginRead(key: "a", generation: cache.currentGeneration)
+    let stale = cache.beginRead(key: "a", generation: generation)
+    #expect(stale == nil)
+    cache.store(current, key: "a", savedAt: savedAt, generation: cache.currentGeneration, request: fresh)
+    cache.store(Data("stale".utf8), key: "a", savedAt: savedAt, generation: generation, request: first)
+    #expect(cache.load(key: "a")?.data == current)
+}

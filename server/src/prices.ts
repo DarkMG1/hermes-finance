@@ -1,14 +1,9 @@
 import type { Deps } from './deps.ts';
-import { addDays } from './days.ts';
+import { addDays, localDay } from './days.ts';
 import { PRICED_TYPES } from './backfill.ts';
-import { localDay } from './networth.ts';
+import { PriceError, type DailyPrice } from './prices/port.ts';
 
-export type DailyPrice = { date: string; close: number; splitFactor: number };
-export interface PricePort { dailyPrices(ticker: string, from: string, to: string): Promise<DailyPrice[]> }
-export class PriceError extends Error {
-  code: string;
-  constructor(code: string) { super(code); this.name = 'PriceError'; this.code = code; }
-}
+export { PriceError, type DailyPrice, type PricePort } from './prices/port.ts';
 
 /** Tiingo writes share classes with a dash: BRK.B → BRK-B. */
 export const tiingoTicker = (ticker: string): string => ticker.toUpperCase().replace(/\./g, '-');

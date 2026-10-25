@@ -14,7 +14,7 @@ struct ExpensePicker: View {
 
     @State private var query = ""
     @State private var items: [LedgerTransaction] = []
-    @State private var cursor: String?
+    @State private var paging = PageCursor<String>()
     @State private var loading = false
     @State private var error: String?
     @State private var generation = 0
@@ -45,6 +45,8 @@ struct ExpensePicker: View {
         }
     }
 
+    private var cursor: String? { paging.next(for: query) }
+
     private var shareableItems: [LedgerTransaction] {
         items.filter { t in (allows ?? shareable)(t) && !(query.isEmpty && suggestions.contains { $0.id == t.id }) }
     }
@@ -60,20 +62,21 @@ struct ExpensePicker: View {
     }
 
     private func load(reset: Bool) async {
-        guard let reader = model.reader, reset || !loading else { return }
-        if reset { generation += 1 }
+        guard let reader = model.reader, reset || (!loading && cursor != nil) else { return }
+        if reset { generation += 1; paging.reset() }
         let gen = generation
+        let requested = query
         loading = true
         defer { if gen == generation { loading = false } }
         let request = TransactionQuery(q: query, cursor: reset ? nil : cursor)
         do {
             let page = try await reader.read("/v1/transactions", query: request.items, as: TransactionPage.self)
-            guard gen == generation, !Task.isCancelled else { return }
-            items = reset ? page.value.transactions : items + page.value.transactions
-            cursor = page.value.nextCursor
+            guard gen == generation, requested == query, !Task.isCancelled else { return }
+            items = (reset ? [] : items).appendingPage(page.value.transactions)
+            paging.didLoad(requested, nextCursor: page.value.nextCursor)
             error = nil
         } catch {
-            guard gen == generation, !Task.isCancelled else { return }
+            guard gen == generation, requested == query, !Task.isCancelled else { return }
             self.error = errorMessage(error)
         }
     }

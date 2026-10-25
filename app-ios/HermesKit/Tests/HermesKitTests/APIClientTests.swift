@@ -5,9 +5,9 @@ import Testing
 @Test func getSendsBearerAndBuildsTheURL() async throws {
     let transport = FakeTransport([FakeTransport.json(200, "[]")])
     let client = APIClient(baseURL: testBase, token: "t0k", transport: transport)
-    _ = try await client.getData("/v1/transactions", query: [URLQueryItem(name: "q", value: "a b")])
+    _ = try await client.getData("/v1/transactions", query: [URLQueryItem(name: "q", value: "Synthetic A+B %2B")])
     let request = try #require(transport.requests.first)
-    #expect(request.url.absoluteString == "https://hermes.example.com/v1/transactions?q=a%20b")
+    #expect(request.url.absoluteString == "https://hermes.example.com/v1/transactions?q=Synthetic%20A%2BB%20%252B")
     #expect(request.headers["Authorization"] == "Bearer t0k")
     #expect(request.headers["Idempotency-Key"] == nil)
     #expect(request.method == "GET")
@@ -43,14 +43,14 @@ import Testing
     #expect(result == .pending)
 }
 
-@Test func holdingKeyWithSlashStaysInTheQuery() async throws {
+@Test func holdingKeyWithSlashAndPlusStaysInTheQuery() async throws {
     let transport = FakeTransport([FakeTransport.json(200, "{}")])
     let client = APIClient(baseURL: testBase, token: "t", transport: transport)
-    let holding = Holding(key: "SYN/D", name: "Synthetic D Class", ticker: "SYN/D", type: "equity", quantity: 1, priceCents: 1, valueCents: 1,
+    let holding = Holding(key: "SYN/D+E", name: "Synthetic D Class", ticker: "SYN/D+E", type: "equity", quantity: 1, priceCents: 1, valueCents: 1,
                           costBasisCents: nil, gainCents: nil, accounts: [])
     _ = try await client.getData("/v1/investments/holding-history", query: holding.historyQuery + NetWorthRange.all.queryItems)
     let request = try #require(transport.requests.first)
-    #expect(request.url.absoluteString == "https://hermes.example.com/v1/investments/holding-history?key=SYN/D&range=all")
+    #expect(request.url.absoluteString == "https://hermes.example.com/v1/investments/holding-history?key=SYN/D%2BE&range=all")
 }
 
 @Test func receiptUploadSendsJPEGWithoutAKey() async throws {

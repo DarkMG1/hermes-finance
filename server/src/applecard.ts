@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { AppleCardImportResult } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
-import { merchantMemory } from './ledger.ts';
+import { fitSplitToAmount, merchantMemory } from './ledger.ts';
 import { localDay, snapshotBalances } from './networth.ts';
 
 // Wallet's Apple Card export: purchases positive, payments and credits negative. Hermes: negative = money out.
@@ -15,7 +15,7 @@ type Column = keyof typeof COLUMNS;
 const REQUIRED: Column[] = ['transactionDate', 'description', 'type', 'amount'];
 const MAX_ROWS = 20_000;
 
-export type AppleCardRow = {
+type AppleCardRow = {
   transactionDate: string; clearingDate: string | null; description: string; merchant: string | null;
   category: string | null; type: string; amountCents: number;
 };
@@ -86,17 +86,6 @@ export function parseAppleCardCsv(text: string): AppleCardRow[] {
 const baseOf = (r: AppleCardRow): string => [r.transactionDate, r.description, r.type, r.amountCents].join('\u001f');
 const idFor = (base: string, n: number): string => createHash('sha256').update(`${base}\u001f${n}`).digest('hex').slice(0, 32);
 
-// Stable per row; identical rows (two same-day identical purchases) are told apart by their occurrence index.
-export function sourceIds(rows: AppleCardRow[]): string[] {
-  const seen = new Map<string, number>();
-  return rows.map((r) => {
-    const base = baseOf(r);
-    const n = seen.get(base) ?? 0;
-    seen.set(base, n + 1);
-    return idFor(base, n);
-  });
-}
-
 export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): AppleCardImportResult {
   let accountId = (db.prepare("SELECT value FROM settings WHERE key = 'apple_card_account_id'").get() as { value: string } | undefined)?.value;
   if (!accountId || !db.prepare('SELECT 1 FROM accounts WHERE id = ?').get(accountId)) {
@@ -118,9 +107,9 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
       updated_at = excluded.updated_at`);
   const remembered = merchantMemory(db);
   const result: AppleCardImportResult = { accountId, rows: rows.length, added: 0, updated: 0, skippedBeforeCutover: 0 };
-  const stored = db.prepare("SELECT clearing_date AS c FROM transactions WHERE source = 'applecard' AND source_id = ?");
+  const stored = db.prepare("SELECT id, source_id AS sourceId, clearing_date AS c, amount_cents AS amount FROM transactions WHERE source = 'applecard' AND source_id = ?");
   const taken = new Set<string>();
-  type Stored = { c: string | null } | undefined;
+  type Stored = { id: string; sourceId: string; c: string | null; amount: number } | undefined;
   const ids: string[] = [];
   const found: Stored[] = [];
   // pass 1: a dated row first claims the stored charge that cleared that same day, so an undated row can't take it
@@ -154,6 +143,32 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
       break;
     }
   });
+  // Only a lone file row with one unclaimed stored counterpart can be a correction.
+  const correctionKey = (r: AppleCardRow) => JSON.stringify([r.transactionDate, r.description, r.type]);
+  const counts = new Map<string, number>();
+  for (const r of rows) counts.set(correctionKey(r), (counts.get(correctionKey(r)) ?? 0) + 1);
+  const counterparts = db.prepare(`SELECT id, source_id AS sourceId, clearing_date AS c, amount_cents AS amount FROM transactions
+    WHERE source = 'applecard' AND removed_at IS NULL AND account_id = ? AND COALESCE(authorized_date, date) = ? AND bank_description = ?`);
+  rows.forEach((r, i) => {
+    if (found[i] || counts.get(correctionKey(r)) !== 1) return;
+    const candidates = (counterparts.all(accountId, r.transactionDate, r.description) as NonNullable<Stored>[]).filter((s) => {
+      if (taken.has(s.sourceId)) return false;
+      // The source hash retains Apple's type; the ledger has no separate type column.
+      const base = baseOf({ ...r, amountCents: s.amount });
+      for (let n = 0; ; n += 1) {
+        const id = idFor(base, n);
+        if (id === s.sourceId) return true;
+        if (!stored.get(id)) return false;
+      }
+    });
+    // A clearing-date-only change is indistinguishable from a separate identical purchase.
+    if (candidates.length !== 1 || candidates[0]!.amount === r.amountCents) return;
+    const row = candidates[0]!;
+    if (cutover && r.transactionDate < cutover) return;
+    db.prepare('UPDATE transactions SET source_id = ? WHERE id = ?').run(ids[i]!, row.id);
+    taken.add(row.sourceId);
+    found[i] = row;
+  });
   rows.forEach((r, i) => {
     const sourceId = ids[i];
     const row = found[i];
@@ -164,6 +179,7 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
     upsert.run({ id: randomUUID(), accountId, sourceId, date: r.transactionDate, clearing: r.clearingDate, amount: r.amountCents, desc: r.description,
       merchant: r.merchant, plaidCategory,
       remembered: plaidCategory === 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' ? null : remembered(r.merchant, r.description), now: nowIso });
+    if (row && row.amount !== r.amountCents) fitSplitToAmount(db, row.id, nowIso);
   });
   const sum = (db.prepare("SELECT COALESCE(SUM(amount_cents), 0) AS s FROM transactions WHERE account_id = ? AND source = 'applecard' AND removed_at IS NULL")
     .get(accountId) as { s: number }).s;

@@ -13,10 +13,7 @@ public struct NetWorthHistory: Decodable, Sendable {
     public let estimatedThrough: String?
 
     /// Change over the range as a fraction, or nil when the range starts at or below zero.
-    public var changePercent: Double? {
-        guard let start = points.first?.netWorthCents, start > 0 else { return nil }
-        return Double(changeCents) / Double(start)
-    }
+    public var changePercent: Double? { Investments.percent(changeCents, of: points.first?.netWorthCents) }
 }
 
 public enum NetWorthRange: String, CaseIterable, Sendable, Hashable {

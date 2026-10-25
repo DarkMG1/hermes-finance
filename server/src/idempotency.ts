@@ -5,6 +5,7 @@ import { ApiError } from './errors.ts';
 
 // final: false marks a reply that must not be replayed (the work did not really happen yet)
 type Result = { status: number; body: unknown; final?: boolean };
+const inFlight = new WeakMap<Deps['db'], Map<string, { hash: string; promise: Promise<Result> }>>();
 
 function keyAndHash(req: FastifyRequest): { key: string; hash: string } {
   const key = req.headers['idempotency-key'];
@@ -16,6 +17,8 @@ function keyAndHash(req: FastifyRequest): { key: string; hash: string } {
 }
 
 function lookup(deps: Deps, key: string, hash: string): Result | null {
+  const pending = inFlight.get(deps.db)?.get(key);
+  if (pending && pending.hash !== hash) throw new ApiError(409, 'IDEMPOTENCY_KEY_REUSED', 'Idempotency-Key was used for a different request');
   const row = deps.db.prepare('SELECT request_hash, status_code, response_json FROM idempotency_keys WHERE key = ?').get(key) as
     | { request_hash: string; status_code: number; response_json: string } | undefined;
   if (!row) return null;
@@ -45,8 +48,17 @@ export async function idempotentAsync(deps: Deps, req: FastifyRequest, run: () =
   const { key, hash } = keyAndHash(req);
   const prior = lookup(deps, key, hash);
   if (prior) return prior;
-  const r = await run();
-  if (r.status === 202 || r.final === false) return r; // not final: a retry with the same key must re-check
-  deps.db.transaction(() => { if (!lookup(deps, key, hash)) save(deps, key, hash, r); })();
-  return r;
+  let pending = inFlight.get(deps.db);
+  if (!pending) { pending = new Map(); inFlight.set(deps.db, pending); }
+  const active = pending.get(key);
+  if (active) return active.promise;
+  // Reserve before run(), including synchronous throws; every outcome releases the key.
+  const promise = Promise.resolve().then(run).then((r) => {
+    if (r.status !== 202 && r.final !== false) {
+      deps.db.transaction(() => { if (!lookup(deps, key, hash)) save(deps, key, hash, r); })();
+    }
+    return r;
+  }).finally(() => pending.delete(key));
+  pending.set(key, { hash, promise });
+  return promise;
 }

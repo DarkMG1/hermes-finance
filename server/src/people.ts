@@ -1,11 +1,13 @@
 import type { HistoryEntry, PeopleSettings, Person, PersonDetail, RepaymentSuggestion } from '@hermes/shared';
 import type { Db } from './db.ts';
+import { localDay } from './days.ts';
+import { memberships } from './recurring.ts';
 import { ApiError } from './errors.ts';
 import { TXN_COLS, lookups, rowToTransaction, type TxnRow } from './ledger.ts';
 
 // Every live amount between the owner and a person: split lines and unsplit transactions tagged with them, and manual rows they paid.
 // Money out (negative) raises what they owe; money in, and a row they paid (its share counted as positive), lowers it.
-export const TAGGED = `
+const TAGGED = `
   SELECT sl.person_id AS person_id, t.id AS transaction_id, sl.id AS line_id, t.date AS date,
          COALESCE(sl.payee, t.payee, t.merchant_name, t.bank_description) AS payee, sl.amount_cents AS amount, 0 AS paid_by,
          t.created_at AS created_at, t.rowid AS row_order, t.forgiven AS forgiven
@@ -61,14 +63,15 @@ export function getPerson(db: Db, id: string): PersonDetail | null {
   return { person: toPerson(row, balance), history: history.reverse(), spentOnThemCents, forgivenCents };
 }
 
-/** A new tag or payer must name a live person; a person archived after being added stays valid on that same transaction. */
-export function assertPersonTaggable(db: Db, personId: string | null | undefined, field: string, transactionId: string): void {
+/** A new tag or payer must name a live person; an archived person stays valid in the same role on that transaction. */
+export function assertPersonTaggable(db: Db, personId: string | null | undefined, field: string, transactionId: string, role: 'person' | 'payer' = 'person'): void {
   if (personId === null || personId === undefined) return;
   const p = db.prepare('SELECT archived FROM people WHERE id = ?').get(personId) as { archived: number } | undefined;
   if (!p) throw new ApiError(400, 'INVALID_REQUEST', `${field}: unknown person`, field);
-  if (p.archived && !db.prepare(`SELECT 1 FROM transactions WHERE id = ? AND (person_id = ? OR paid_by_person_id = ?)
-      UNION ALL SELECT 1 FROM split_lines WHERE transaction_id = ? AND person_id = ?`)
-    .get(transactionId, personId, personId, transactionId, personId)) {
+  if (p.archived && !(role === 'payer'
+    ? db.prepare('SELECT 1 FROM transactions WHERE id = ? AND paid_by_person_id = ?').get(transactionId, personId)
+    : db.prepare(`SELECT 1 FROM transactions WHERE id = ? AND person_id = ?
+        UNION ALL SELECT 1 FROM split_lines WHERE transaction_id = ? AND person_id = ?`).get(transactionId, personId, transactionId, personId))) {
     throw new ApiError(400, 'INVALID_REQUEST', `${field}: person is archived`, field);
   }
 }
@@ -76,9 +79,8 @@ export function assertPersonTaggable(db: Db, personId: string | null | undefined
 const SUGGESTION_DAYS = 60;
 
 /** Untagged recent deposits that look like repayments, each with the person they most likely came from. */
-function repayments(db: Db, now: Date): { r: TxnRow; personId: string | null }[] {
+function repayments(db: Db, now: Date, people = listPeople(db, false).filter((p) => !p.archived)): { r: TxnRow; personId: string | null }[] {
   const since = new Date(now.getTime() - SUGGESTION_DAYS * 86_400_000).toISOString().slice(0, 10);
-  const people = listPeople(db, false).filter((p) => !p.archived);
   const rows = db.prepare(`SELECT ${TXN_COLS}, plaid_category FROM transactions t
      WHERE removed_at IS NULL AND person_id IS NULL AND category_id IS NULL AND amount_cents > 0 AND date >= ?
        AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
@@ -104,23 +106,20 @@ function repayments(db: Db, now: Date): { r: TxnRow; personId: string | null }[]
   return out;
 }
 
-/** Home shows only how many, so it never builds the Transactions. */
-export const suggestionCount = (db: Db, now: Date) => repayments(db, now).length;
-
 export function suggestions(db: Db, now: Date): RepaymentSuggestion[] {
   const found = repayments(db, now);
-  const l = lookups(db, found.map((f) => f.r));
-  return found.map((f) => ({ transaction: rowToTransaction(db, f.r, l), personId: f.personId }));
+  const l = lookups(db, found.map((f) => f.r), memberships(db, localDay(now)));
+  return found.map((f) => ({ transaction: rowToTransaction(f.r, l), personId: f.personId }));
 }
 
-/** What everyone together owes the owner; people who are ahead count as zero. */
-export function owedToYouCents(db: Db): number {
-  return listPeople(db, true).reduce((s, p) => s + Math.max(p.balanceCents, 0), 0);
-}
-
-/** What the owner owes everyone together; people who owe the owner count as zero. */
-export function youOweCents(db: Db): number {
-  return listPeople(db, true).reduce((s, p) => s + Math.max(-p.balanceCents, 0), 0);
+/** Home shares one balance read and counts suggestions without building Transactions. */
+export function homePeople(db: Db, now: Date) {
+  const people = listPeople(db, true);
+  return {
+    owedToYouCents: people.reduce((s, p) => s + Math.max(p.balanceCents, 0), 0),
+    youOweCents: people.reduce((s, p) => s + Math.max(-p.balanceCents, 0), 0),
+    repaymentSuggestions: repayments(db, now, people.filter((p) => !p.archived)).length,
+  };
 }
 
 export function peopleSettings(db: Db): PeopleSettings {

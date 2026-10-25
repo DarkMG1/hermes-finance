@@ -49,9 +49,12 @@ export function recurringRoutes(app: FastifyInstance, deps: Deps): void {
   app.post('/v1/recurring', async (req, reply) => {
     const body = parseBody(CreateRecurringBody, req.body);
     const r = idempotentWrite(deps, req, () => {
-      const t = getTransaction(db, body.transactionId);
+      const t = getTransaction(db, body.transactionId, localDay(deps.now()));
       if (!t) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
       if (t.amountCents >= 0) throw new ApiError(409, 'NOT_MONEY_OUT', 'only money out can recur');
+      if (t.personId !== null || (t.splitLines.length && !t.splitLines.some((l) => l.personId === null && l.amountCents < 0))) {
+        throw new ApiError(409, 'PERSON_TAGGED', "a charge for someone else can't be a bill");
+      }
       const matchText = normalizeName(t.payee);
       if (!matchText) throw new ApiError(409, 'NO_NAME', 'this charge has no name to match');
       const keys = [

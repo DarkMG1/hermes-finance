@@ -63,7 +63,7 @@ public enum ItemShares {
         guard !items.isEmpty, targetCents > 0 else { return nil }
         guard let itemsTotal = sum(items.map(\.amountCents)), itemsTotal > 0, let (order, base) = itemTotals(items) else { return nil }
         let people = order.contains(me) ? [me] + order.filter { $0 != me } : order
-        guard people.allSatisfy({ (base[$0] ?? 0) > 0 }) else { return nil }
+        guard people.count <= 20, people.allSatisfy({ (base[$0] ?? 0) > 0 }) else { return nil }
         var cents: [String: Int] = [:]
         var frac: [String: Int] = [:]
         for p in people {

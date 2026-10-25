@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-export type Finding = { path: string; line: number; kind: 'term' | 'email' | 'docs'; termIndex?: number };
+type Finding = { path: string; line: number; kind: 'term' | 'email' | 'docs'; termIndex?: number };
 
 const EMAIL = /(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/g;
 const ALLOWED_EMAIL = /(@users\.noreply\.github\.com|@example\.com|@example\.org|\.test)$/i;

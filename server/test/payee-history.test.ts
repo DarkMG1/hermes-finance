@@ -130,7 +130,7 @@ test('hasHistory: a name to match, not an unsplit IOU, not raw bank text alone',
   seedTxn(db, { id: 'raw', accountId: 'a1', date: '2026-03-01', amountCents: -100, bankDescription: 'SYNTHETIC POS PURCHASE', source: 'plaid', sourceId: 'raw' });
   seedTxn(db, { id: 'merchant', accountId: 'a1', date: '2026-03-01', amountCents: -100, bankDescription: 'SYNTHETIC POS PURCHASE', merchantName: 'Synthetic Cafe' });
   seedTxn(db, { id: 'renamed', accountId: 'a1', date: '2026-03-01', amountCents: -100, bankDescription: 'SYNTHETIC POS PURCHASE', payee: 'Synthetic Cafe' });
-  assert.deepEqual(['digits', 'number', 'iou', 'split', 'raw', 'merchant', 'renamed'].map((id) => getTransaction(db, id)!.hasHistory),
+  assert.deepEqual(['digits', 'number', 'iou', 'split', 'raw', 'merchant', 'renamed'].map((id) => getTransaction(db, id, '2026-03-15')!.hasHistory),
     [true, false, false, true, false, true, true]);
 });
 
@@ -148,7 +148,7 @@ test('hasHistory: only on a row that counts as spending', () => {
   row('card-payment', -50000, { plaidCategory: 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' });
   row('inflow', 50000, {});
   row('refund', 500, { categoryId: 'c-food' });
-  assert.deepEqual(['income', 'transfer', 'card-payment', 'inflow', 'refund'].map((id) => getTransaction(db, id)!.hasHistory),
+  assert.deepEqual(['income', 'transfer', 'card-payment', 'inflow', 'refund'].map((id) => getTransaction(db, id, '2026-03-15')!.hasHistory),
     [false, false, false, false, true]);
 });
 
@@ -162,9 +162,9 @@ test('hasHistory: a listed page matches the per-transaction values', () => {
   seedTxn(db, { id: 'x2', accountId: 'a1', date: '2026-03-05', amountCents: -100, categoryId: 'c-xfer', payee: 'Synthetic Cafe' });
   seedTxn(db, { id: 'x3', accountId: 'a1', date: '2026-03-09', amountCents: -100, categoryId: 'c-food', payee: 'Synthetic Cafe' });
   seedTxn(db, { id: 'x4', accountId: 'a1', date: '2026-03-09', amountCents: -100, bankDescription: 'SYNTHETIC POS PURCHASE' });
-  const page = listTransactions(db, { limit: 50 }).transactions;
+  const page = listTransactions(db, { limit: 50 }, '2026-03-15').transactions;
   assert.equal(page.length, 4);
-  assert.deepEqual(page.map((t) => t.hasHistory), page.map((t) => getTransaction(db, t.id)!.hasHistory));
+  assert.deepEqual(page.map((t) => t.hasHistory), page.map((t) => getTransaction(db, t.id, '2026-03-15')!.hasHistory));
   assert.deepEqual(page.filter((t) => t.hasHistory).map((t) => t.id).sort(), ['x1', 'x3']);
 });
 
@@ -211,7 +211,7 @@ test('payee history: bank text adds charges not renamed from it; reimbursed char
   // first charge in January, one this month: averaged over three months
   assert.deepEqual([h.totalCents, h.averageCents], [9000, 3000]);
   assert.deepEqual((await get('name=Synthetic%20AI')).rows.map((r) => r.transactionId), ['o1', 'o6', 'o9']);
-  assert.deepEqual(['o1', 'o7', 'o8'].map((id) => getTransaction(db, id)!.hasHistory), [true, false, false]);
+  assert.deepEqual(['o1', 'o7', 'o8'].map((id) => getTransaction(db, id, '2026-03-15')!.hasHistory), [true, false, false]);
   assert.equal((await app.inject({ method: 'GET', url: '/v1/payee-history?recurringId=x&bank=y', headers: AUTH })).statusCode, 400);
   assert.equal((await app.inject({ method: 'GET', url: '/v1/payee-history?name=x&bank=', headers: AUTH })).statusCode, 400);
 });

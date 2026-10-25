@@ -46,6 +46,73 @@ test('mark as recurring, rename, change interval, hide, show again, delete', asy
   assert.equal((await send('PATCH', '/v1/recurring/s-off', { hidden: false })).statusCode, 404);
 });
 
+test('renaming an irregular bill preserves its interval, prediction and monthly total', async () => {
+  const { get, send, db } = setup();
+  db.prepare("UPDATE recurring_streams SET frequency = 'unknown', next_date = NULL WHERE stream_id = 's-tv'").run();
+  const renamed = await send('PATCH', '/v1/recurring/s-tv', { name: 'Synthetic Wren' });
+  assert.equal(renamed.statusCode, 200);
+  assert.deepEqual([renamed.json().frequency, renamed.json().nextDate, renamed.json().monthlyCents], ['unknown', null, null]);
+  assert.equal((await get('/v1/recurring')).monthlyTotalCents, 0);
+  assert.equal((await send('PATCH', '/v1/recurring/s-tv', { frequency: 'unknown' })).statusCode, 400);
+});
+
+test('bill source fallback and matching refunds page in cursor order and average from the oldest month', async () => {
+  const { get, send, db } = setup();
+  const id = (await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly' })).json().id as string;
+  db.prepare("UPDATE transactions SET payee = 'Synthetic Wren' WHERE id = 'sub'").run();
+  seedCategory(db, { id: 'c-synthetic', name: 'Synthetic Category' });
+  for (const refund of ['refund-old', 'refund-new']) seedTxn(db, { id: refund, accountId: 'a1', date: '2026-01-10', amountCents: 100, payee: 'Synthetic Music', categoryId: 'c-synthetic' });
+  const first = await get(`/v1/payee-history?recurringId=${id}&limit=1`);
+  assert.deepEqual(first.rows.map((r: { transactionId: string }) => r.transactionId), ['sub']);
+  assert.deepEqual([first.totalCents, first.averageCents], [899, 300]);
+  const second = await get(`/v1/payee-history?recurringId=${id}&limit=1&cursor=${first.nextCursor}`);
+  assert.deepEqual(second.rows.map((r: { transactionId: string }) => r.transactionId), ['refund-new']);
+  const third = await get(`/v1/payee-history?recurringId=${id}&limit=1&cursor=${second.nextCursor}`);
+  assert.deepEqual(third.rows.map((r: { transactionId: string }) => r.transactionId), ['refund-old']);
+  assert.equal(third.nextCursor, null);
+});
+
+test('History sorts mixed timestamp formats in the same order as its cursor', async () => {
+  const { get, db } = setup();
+  for (const id of ['upper', 'lower-old', 'lower-new']) {
+    seedTxn(db, { id, accountId: 'a1', date: '2026-03-12', amountCents: -100, payee: 'Synthetic Quill' });
+    db.prepare('UPDATE transactions SET created_at = ? WHERE id = ?').run(`2026-03-12${id === 'upper' ? 'T' : 't'}00:00:00Z`, id);
+  }
+  let cursor: string | null = null;
+  for (const id of ['lower-new', 'lower-old', 'upper']) {
+    const page = await get(`/v1/payee-history?name=Synthetic%20Quill&limit=1${cursor ? `&cursor=${cursor}` : ''}`);
+    assert.deepEqual(page.rows.map((r: { transactionId: string }) => r.transactionId), [id]);
+    cursor = page.nextCursor;
+  }
+  assert.equal(cursor, null);
+});
+
+test('transaction membership uses the request clock across ledger, reconciliation and inbox reads', async () => {
+  const { deps, deps: { db } } = makeTestDeps();
+  seedItem(deps, { id: 'i1', plaidItemId: 'pi1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
+  seedAccount(db, { id: 'a1' });
+  seedTxn(db, { id: 'charge', accountId: 'a1', date: '2026-03-12', amountCents: -100, payee: 'Synthetic Wren' });
+  const insert = db.prepare("INSERT INTO recurring_streams VALUES (?, 'i1', 'Synthetic Wren', ?, 100, 100, ?, NULL, 1, 'mature', 'x', '[]')");
+  insert.run('missed', 'monthly', '2025-10-01');
+  insert.run('live', 'weekly', '2026-03-10');
+  db.prepare("INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at, purchase_date, total_cents) VALUES ('r1', x'ffd8ff', 3, '2026-03-12T12:00:00Z', '2026-03-12', 100)").run();
+  const app = buildApp(deps);
+  const get = async (url: string) => {
+    const res = await app.inject({ method: 'GET', url, headers: AUTH });
+    assert.equal(res.statusCode, 200);
+    return res.json();
+  };
+  for (const [day, expected] of [['2026-03-15', 'live'], ['2026-06-15', 'missed']]) {
+    deps.now = () => new Date(`${day}T12:00:00Z`);
+    assert.equal((await get('/v1/recurring')).items.find((i: { id: string }) => i.id === 'live').ended, expected !== 'live');
+    assert.equal((await get('/v1/transactions/charge')).recurring.id, expected);
+    assert.equal((await get('/v1/transactions')).transactions[0].recurring.id, expected);
+    assert.equal((await get('/v1/home')).recent[0].recurring.id, expected);
+    assert.equal((await get('/v1/reconcile?month=2026-03')).transactions[0].recurring.id, expected);
+    assert.equal((await get('/v1/receipts/inbox')).waiting[0].suggestions[0].recurring.id, expected);
+  }
+});
+
 test('refusals: money in, already recurring (Plaid name), bad frequency; replay creates once', async () => {
   const { get, send } = setup();
   assert.equal((await send('POST', '/v1/recurring', { transactionId: 'refund', frequency: 'monthly' })).statusCode, 409);
@@ -184,4 +251,17 @@ test('a stream Plaid stops listing stays as ended, still holding its charges; a 
   // a live twin wins a name match over the stopped stream; the stream keeps its own charges by id
   assert.deepEqual([(await get('/v1/transactions/tv-other')).recurring.id, (await get('/v1/transactions/tv')).recurring.id], ['man-tv', 's-tv']);
   assert.equal((await send('PATCH', '/v1/recurring/s-tv', { ended: true })).json().cancelled, true);
+});
+
+test("marking someone else's charge recurring explains the conflict and creates nothing", async () => {
+  for (const split of [false, true]) {
+    const { db, send } = setup();
+    seedPerson(db, { id: 'p1', name: 'Synthetic Quill' });
+    if (split) seedSplit(db, { id: 'a', transactionId: 'sub', amountCents: -1099, categoryId: null, personId: 'p1' });
+    else db.prepare("UPDATE transactions SET person_id = 'p1' WHERE id = 'sub'").run();
+    const r = await send('POST', '/v1/recurring', { transactionId: 'sub', frequency: 'monthly' });
+    assert.deepEqual([r.statusCode, r.json().code], [409, 'PERSON_TAGGED']);
+    assert.match(r.json().message, /someone else/);
+    assert.equal(db.prepare('SELECT COUNT(*) FROM recurring_manual').pluck().get(), 0);
+  }
 });

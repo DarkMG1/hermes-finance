@@ -7,7 +7,7 @@ import { syncHoldings } from '../investments.ts';
 import { matchInbox } from '../inbox.ts';
 import { refreshRecurring } from '../recurring.ts';
 
-export type ItemResult = {
+type ItemResult = {
   itemId: string; institutionName: string; result: 'ok' | 'login_required' | 'error' | 'already_running';
   added: number; modified: number; removed: number;
 };

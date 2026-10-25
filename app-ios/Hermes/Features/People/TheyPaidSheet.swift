@@ -10,6 +10,7 @@ struct TheyPaidSheet: View {
     var mePaid = false
     struct Prefill { let payee: String; let date: Date; let totalCents: Int? }
     var prefill: Prefill?
+    var inboxReceiptId: String?
     var onCreated: ((LedgerTransaction) async -> Void)?
     let onDone: () async -> Void
 
@@ -80,7 +81,7 @@ struct TheyPaidSheet: View {
         guard share > 0 else { return nil }
         guard mePaid else {
             return CreateTransactionBody(date: DayText.ymd(date), amountCents: -share, payee: trimmed, categoryId: categoryId,
-                                         notes: note, paidByPersonId: person.id)
+                                         notes: note, paidByPersonId: person.id, inboxReceiptId: inboxReceiptId)
         }
         // their share must be above zero, or there is nothing to split
         guard share < total else { return nil }
