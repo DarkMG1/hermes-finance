@@ -1,5 +1,7 @@
 import Foundation
+#if canImport(UniformTypeIdentifiers)
 import UniformTypeIdentifiers
+#endif
 
 /// Keep duplicate deliveries together until the current import finishes.
 public struct CSVImportQueue: Sendable {
@@ -27,9 +29,12 @@ public struct CSVImportQueue: Sendable {
         busy = false
     }
 
+    // UTType is Apple-only; HermesKit also builds on Linux CI
+    #if canImport(UniformTypeIdentifiers)
     public static func accepts(_ url: URL, contentType: UTType?) -> Bool {
         url.isFileURL && (contentType?.conforms(to: .commaSeparatedText) == true || url.pathExtension.lowercased() == "csv")
     }
+    #endif
 
     public func staleInboxCopies(_ urls: [URL], documents: URL) -> [URL] {
         guard files.isEmpty else { return [] }

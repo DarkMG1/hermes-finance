@@ -1,6 +1,8 @@
 import Foundation
 import Testing
+#if canImport(UniformTypeIdentifiers)
 import UniformTypeIdentifiers
+#endif
 @testable import HermesKit
 
 @Test func csvImportWaitsUntilTheAppIsReady() {
@@ -77,6 +79,7 @@ import UniformTypeIdentifiers
     #expect(!CSVImportQueue.isInboxCopy(URL(string: "https://synthetic.example/Documents/Inbox/Synthetic.csv")!, documents: documents))
 }
 
+#if canImport(UniformTypeIdentifiers)
 @Test func csvImportsAcceptTheSystemTypeOrFilenameExtension() throws {
     let typed = URL(fileURLWithPath: "/synthetic/Synthetic Quill")
     let csvSubtype = try #require(UTType(filenameExtension: "syntheticcsv", conformingTo: .commaSeparatedText))
@@ -89,6 +92,7 @@ import UniformTypeIdentifiers
     #expect(!CSVImportQueue.accepts(typed.appendingPathExtension("txt"), contentType: nil))
     #expect(!CSVImportQueue.accepts(URL(string: "https://synthetic.example/Synthetic.csv")!, contentType: .commaSeparatedText))
 }
+#endif
 
 @Test func staleInboxCopiesWaitUntilNoImportIsPending() {
     let documents = URL(fileURLWithPath: "/synthetic/Documents", isDirectory: true)
