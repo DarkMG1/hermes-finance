@@ -7,6 +7,8 @@ const DateStr = z.string().regex(DATE_RE, 'expected YYYY-MM-DD')
 // Leave year 9999 for exclusive period boundaries and derived dates in responses.
 const DateInput = DateStr.refine((s) => s < '9999-01-01', 'year must be at most 9998');
 const Cents = z.number().int().safe();
+export const MAX_AMOUNT_CENTS = 1_000_000_000;
+const LedgerCents = Cents.min(-MAX_AMOUNT_CENTS).max(MAX_AMOUNT_CENTS);
 
 export const ApiErrorBody = z.object({ code: z.string(), message: z.string(), field: z.string().optional() });
 export type ApiErrorBody = z.infer<typeof ApiErrorBody>;
@@ -73,7 +75,7 @@ export type PatchAccountBody = z.infer<typeof PatchAccountBody>;
  * Send personId and payee explicitly (null to clear); omitting either on an annotated split returns APP_OUTDATED. */
 export const PutSplitsBody = z.object({
   lines: z.array(z.object({
-    amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'), categoryId: Id.nullable(), notes: z.string().max(2000).nullable().optional(),
+    amountCents: LedgerCents.refine((n) => n !== 0, 'amount must not be zero'), categoryId: Id.nullable(), notes: z.string().max(2000).nullable().optional(),
     personId: Id.nullable().optional(),
     /** The line's own name; blank or missing shows the transaction's payee. */
     payee: z.string().trim().max(200).nullable().optional(),
@@ -130,7 +132,7 @@ export const PeopleSettings = z.object({ repaymentAccountId: Id.nullable() }).st
 export type PeopleSettings = z.infer<typeof PeopleSettings>;
 
 export const CreateTransactionBody = z.object({
-  date: DateInput, amountCents: Cents.refine((n) => n !== 0, 'amount must not be zero'),
+  date: DateInput, amountCents: LedgerCents.refine((n) => n !== 0, 'amount must not be zero'),
   payee: z.string().min(1).max(200), categoryId: Id.nullable().optional(), notes: z.string().max(2000).nullable().optional(),
   paidByPersonId: Id.optional(),
   /** Links a waiting receipt in the same write as its Paid-by transaction. */

@@ -22,6 +22,7 @@ sha=new
 before=22
 [ "$scenario" != unknown-before ] || before=unknown
 port=5010
+HERMES_API_TOKEN=synthetic-health-token
 stopped=0
 stops=0
 [ "$scenario" != env-fails ] || mkdir "$root/release.env"
@@ -45,6 +46,8 @@ schema_version() {
 ln() { echo switch >> "$root/trace"; [ "$scenario" != switch-fails ]; }
 mv() { echo move >> "$root/trace"; [ "$scenario" != move-fails ]; }
 curl() {
+  [ "$2" = -H ] && [ "$3" = "authorization: Bearer $HERMES_API_TOKEN" ] || return 22
+  [ "$4" = "http://127.0.0.1:5010/v1/health" ] || return 22
   echo health >> "$root/trace"
   if [ "$scenario" = unhealthy ] || [ "$scenario" = recovery-stop-fails ]; then echo '{"gitSha":"new"}'; else echo '{"gitSha":"old"}'; fi
 }
@@ -63,6 +66,35 @@ test('rollback stops the migrating server before reading its final schema', () =
   assert.deepEqual(r.trace.slice(0, 2), ['service:stop', 'schema:1']);
   assert.match(r.stderr, /schema changed 22 -> 23/);
   assert.doesNotMatch(r.stderr, /rolled back/);
+});
+
+test('deploy sources the host env and authenticates its detailed health probe', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hermes-health-'));
+  try {
+    const health = deploy.slice(deploy.indexOf('set -a\n'), deploy.indexOf('echo "deploy: /v1/health did not report'));
+    const r = spawnSync('bash', ['-s', '--', dir], { encoding: 'utf8', input: `
+set -euo pipefail
+root="$1"
+envfile="$root/host.env"
+printf '%s\n' 'HERMES_API_TOKEN="synthetic-health-token"' 'HERMES_PORT=5123' > "$envfile"
+HERMES_API_TOKEN=wrong-inherited-token
+HERMES_PORT=5999
+sha=new
+prev=old
+curl() {
+  [ "$2" = -H ] && [ "$3" = "authorization: Bearer synthetic-health-token" ] || return 22
+  [ "$4" = "http://127.0.0.1:5123/v1/health" ] || return 22
+  echo '{"ok":true,"gitSha":"new","dbVersion":23}'
+}
+find() { :; }
+xargs() { :; }
+sleep() { :; }
+${health}
+` });
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /healthy at new/);
+    assert.doesNotMatch(r.stdout + r.stderr, /synthetic-health-token/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('rollback reports success only after switching, starting and verifying the previous release', () => {

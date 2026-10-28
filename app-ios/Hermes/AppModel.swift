@@ -34,6 +34,7 @@ final class AppModel {
         let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         cache = ResponseCache(directory: caches.appending(path: "api-cache"))
         URLCache.shared.removeAllCachedResponses()
+        receiptQueue.selectServer(nil)
         loadStoredConnection()
     }
 
@@ -124,7 +125,7 @@ final class AppModel {
         do {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            let csv = try String(contentsOf: url, encoding: .utf8)
+            let csv = try CSVImportQueue.read(url)
             let imported = try await client.importAppleCard(csv: csv, idempotencyKey: importWrites.key)
             guard current == session else { return }
             importWrites.didSucceed()

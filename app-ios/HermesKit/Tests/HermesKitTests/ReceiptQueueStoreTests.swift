@@ -2,6 +2,31 @@ import Foundation
 import Testing
 @testable import HermesKit
 
+#if !os(Linux)
+@Test func existingReceiptQueueIsExcludedFromBackupsEvenWhenDisconnected() throws {
+    let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    var included = root
+    var values = URLResourceValues()
+    values.isExcludedFromBackup = false
+    try included.setResourceValues(values)
+    try Data([1]).write(to: root.appending(path: "legacy.jpg"))
+    var queue = ReceiptQueueStore(directory: root)
+    try queue.selectServer(nil)
+    let existing = URL(fileURLWithPath: root.path())
+    #expect(try existing.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup == true)
+    try queue.selectServer(testBase)
+    try queue.add(Data([2]), id: "protected")
+    #expect(queue.pending.contains("legacy"))
+    #if os(iOS)
+    let file = try #require(queue.file("protected"))
+    let attributes = try FileManager.default.attributesOfItem(atPath: file.path())
+    #expect(attributes[.protectionKey] as? FileProtectionType == .complete)
+    #endif
+}
+#endif
+
 @Test func queuedPhotosStayWithTheirServerAcrossDisconnects() throws {
     let root = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: root) }

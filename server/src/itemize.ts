@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Itemization, SaveItemsBody, Transaction } from '@hermes/shared';
+import { MAX_AMOUNT_CENTS, type Itemization, type SaveItemsBody, type Transaction } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { localDay } from './days.ts';
 import { ApiError } from './errors.ts';
@@ -28,9 +28,12 @@ export class ShareError extends Error {
  */
 export function computeShares(input: ShareInput): ShareResult {
   const { items, targetCents } = input;
+  if (![targetCents, input.taxCents, input.tipCents, input.feesCents, ...items.map((i) => i.amountCents)]
+    .every((n) => Number.isSafeInteger(n) && Math.abs(n) <= MAX_AMOUNT_CENTS)) throw new ShareError('amounts must be whole cents and at most 10,000,000.00');
   if (!items.length) throw new ShareError('add at least one item');
   if (targetCents <= 0) throw new ShareError('the total must be more than zero');
   const itemsTotal = items.reduce((s, i) => s + i.amountCents, 0);
+  if (!Number.isSafeInteger(itemsTotal)) throw new ShareError('the items total is too large');
   if (itemsTotal <= 0) throw new ShareError('the items must add up to more than zero');
   const order: string[] = [];
   const base = new Map<string, number>();
@@ -61,7 +64,8 @@ export function computeShares(input: ShareInput): ShareResult {
   let left = targetCents - [...cents.values()].reduce((a, b) => a + b, 0);
   const ranked = people.filter((p) => p !== ME).sort((a, b) => (frac.get(b) ?? 0) - (frac.get(a) ?? 0) || people.indexOf(a) - people.indexOf(b));
   const queue = people.includes(ME) ? [ME, ...ranked] : ranked;
-  for (let i = 0; left > 0; i += 1, left -= 1) cents.set(queue[i]!, (cents.get(queue[i]!) ?? 0) + 1);
+  for (let i = 0; left > 0 && i < queue.length; i += 1, left -= 1) cents.set(queue[i]!, (cents.get(queue[i]!) ?? 0) + 1);
+  if (left !== 0) throw new ShareError('the total could not be divided safely');
   if (people.some((p) => (cents.get(p) ?? 0) <= 0)) throw new ShareError("each person's share must be more than zero");
   return {
     shares: people.map((p) => ({ person: p, cents: cents.get(p) ?? 0 })),

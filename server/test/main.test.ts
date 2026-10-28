@@ -15,7 +15,9 @@ test('start migrates, listens and serves health; refuses bad config', async () =
   const server = await start(env);
   try {
     const res = await fetch(`http://127.0.0.1:${server.port}/v1/health`);
-    assert.deepEqual(await res.json(), { ok: true, gitSha: 'abc', dbVersion: 23 });
+    assert.deepEqual(await res.json(), { ok: true });
+    const detailed = await fetch(`http://127.0.0.1:${server.port}/v1/health`, { headers: { authorization: `Bearer ${env.HERMES_API_TOKEN}` } });
+    assert.deepEqual(await detailed.json(), { ok: true, gitSha: 'abc', dbVersion: 23 });
   } finally {
     await server.close();
   }

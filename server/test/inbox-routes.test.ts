@@ -53,6 +53,48 @@ test('upload rejects a non-JPEG, a wrong type and a body over 3 MB', async () =>
   assert.equal((await put(ID, Buffer.concat([JPEG, Buffer.alloc(3 * 1024 * 1024)]))).statusCode, 413);
 });
 
+test('inbox capacity rejects new uploads at 200 while retries and freeing a slot still work', async () => {
+  const { db, deps, put, del } = setup();
+  deps.receiptReader = null;
+  const insert = db.prepare("INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at, read_failed) VALUES (?, ?, ?, 'seed', 1)");
+  db.transaction(() => {
+    for (let i = 0; i < 199; i += 1) insert.run(`synthetic-${i}`, JPEG, JPEG.length);
+  })();
+  const responses = await Promise.all([put('synthetic-last'), put('synthetic-overflow')]);
+  assert.deepEqual(responses.map((r) => r.statusCode).sort(), [200, 409]);
+  const full = responses.find((r) => r.statusCode === 409)!;
+  assert.equal(full.json().code, 'INBOX_FULL');
+  assert.match(full.json().message, /200 waiting/);
+  assert.equal((await put('synthetic-0')).statusCode, 200);
+  assert.equal(db.prepare('SELECT COUNT(*) FROM inbox_receipts').pluck().get(), 200);
+  await del('synthetic-0');
+  assert.equal((await put('synthetic-next')).statusCode, 200);
+  assert.equal(db.prepare('SELECT COUNT(*) FROM inbox_receipts').pluck().get(), 200);
+});
+
+test('background and explicit reads share a guard even after the receipt is linked', async () => {
+  const { put, post, app, db, reader, deps } = setup();
+  const gate = Promise.withResolvers<void>();
+  const started = Promise.withResolvers<void>();
+  const original = reader.read.bind(reader);
+  reader.read = async () => { started.resolve(); await gate.promise; return original(); };
+  await put(ID);
+  await started.promise;
+  const overlap = await post(`/v1/receipts/inbox/${ID}/read`);
+  assert.deepEqual([overlap.statusCode, overlap.json().code], [409, 'READ_IN_PROGRESS']);
+  seedTxn(db, { id: 'synthetic-linked', accountId: 'card', date: '2026-03-15', amountCents: -999 });
+  assert.equal((await post(`/v1/receipts/inbox/${ID}/link`, { transactionId: 'synthetic-linked' })).statusCode, 200);
+  const readLinked = () => app.inject({ method: 'POST', url: '/v1/transactions/synthetic-linked/receipt/read', headers: AUTH });
+  assert.equal((await readLinked()).statusCode, 409);
+  gate.resolve();
+  await settle();
+  assert.equal((await readLinked()).statusCode, 200);
+  assert.equal((await readLinked()).statusCode, 429);
+  assert.equal(reader.calls, 2);
+  deps.now = () => new Date('2026-03-15T12:00:30.000Z');
+  assert.equal((await readLinked()).statusCode, 200);
+});
+
 test('a failed read and no reader both mark the receipt failed; read again recovers', async () => {
   const { put, get, post, reader, deps } = setup();
   reader.next = new Error('boom');
@@ -60,7 +102,9 @@ test('a failed read and no reader both mark the receipt failed; read again recov
   await settle();
   assert.equal((await get('/v1/receipts/inbox')).json().waiting[0].status, 'failed');
   assert.equal((await post(`/v1/receipts/inbox/${ID}/read`)).statusCode, 502);
+  assert.equal((await post(`/v1/receipts/inbox/${ID}/read`)).statusCode, 429);
   reader.next = { items: [{ name: 'Synthetic Pear', amountCents: 300 }], taxCents: 0, tipCents: 0, feesCents: 0, totalCents: 300, merchant: null, purchaseDate: null, model: 'fake-model' };
+  deps.now = () => new Date('2026-03-15T12:00:30.000Z');
   const ok = await post(`/v1/receipts/inbox/${ID}/read`);
   assert.deepEqual([ok.statusCode, ok.json().status, ok.json().totalCents], [200, 'read', 300]);
   (deps as { receiptReader: unknown }).receiptReader = null;
@@ -156,13 +200,14 @@ test('the capture time comes from x-captured-at when it is sane, otherwise now',
 });
 
 test('read again clears the tags; tags saved while it reads win with 409 CHANGED', async () => {
-  const { put, post, putItems, db, reader } = setup();
+  const { put, post, putItems, db, reader, deps } = setup();
   await put(ID);
   await settle();
   await putItems(ID, { items: [{ name: 'Synthetic Bread', amountCents: 400, people: ['me', 'p1'] }], taxCents: 0, tipCents: 0, feesCents: 0 });
   const again = await post(`/v1/receipts/inbox/${ID}/read`);
   assert.deepEqual([again.statusCode, again.json().tagged], [200, false]);
   const items = [{ name: 'Synthetic Jam', amountCents: 600, people: ['p1'] }];
+  deps.now = () => new Date('2026-03-15T12:00:30.000Z');
   reader.onRead = () => { db.prepare("UPDATE inbox_receipts SET items = ?, tagged = 1 WHERE id = ?").run(JSON.stringify(items), ID); };
   const raced = await post(`/v1/receipts/inbox/${ID}/read`);
   assert.deepEqual([raced.statusCode, raced.json().code], [409, 'CHANGED']);

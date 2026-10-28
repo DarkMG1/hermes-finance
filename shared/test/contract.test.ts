@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { CreateTransactionBody, PatchTransactionBody, SpendingQuery, ListTransactionsQuery, Reconcile, ReconcileSummary, ReconcileQuery, Reimbursements, Transaction } from '@hermes/shared';
+import { CreateTransactionBody, PatchTransactionBody, PutSplitsBody, SpendingQuery, ListTransactionsQuery, Reconcile, ReconcileSummary, ReconcileQuery, Reimbursements, Transaction } from '@hermes/shared';
 
 test('create body requires integer non-zero cents and a real date', () => {
   const ok = CreateTransactionBody.safeParse({ date: '2026-01-31', amountCents: -1250, payee: 'Coffee' });
@@ -8,6 +8,20 @@ test('create body requires integer non-zero cents and a real date', () => {
   assert.equal(CreateTransactionBody.safeParse({ date: '2026-01-31', amountCents: 12.5, payee: 'x' }).success, false);
   assert.equal(CreateTransactionBody.safeParse({ date: '2026-01-31', amountCents: 0, payee: 'x' }).success, false);
   assert.equal(CreateTransactionBody.safeParse({ date: '2026-13-01', amountCents: -1, payee: 'x' }).success, false);
+});
+
+test('manual and split amount inputs reject values outside the ledger bound as field errors', () => {
+  for (const amountCents of [-1_000_000_001, 1_000_000_001, Number.MAX_SAFE_INTEGER, Infinity]) {
+    const manual = CreateTransactionBody.safeParse({ date: '2026-01-31', amountCents, payee: 'Synthetic Quill' });
+    const split = PutSplitsBody.safeParse({ lines: [{ amountCents, categoryId: null }, { amountCents: -1, categoryId: null }] });
+    assert.equal(manual.success, false);
+    assert.equal(split.success, false);
+    if (!manual.success) assert.deepEqual(manual.error.issues[0]!.path, ['amountCents']);
+    if (!split.success) assert.deepEqual(split.error.issues[0]!.path, ['lines', 0, 'amountCents']);
+  }
+  for (const amountCents of [-1_000_000_000, 1_000_000_000]) {
+    assert.ok(CreateTransactionBody.safeParse({ date: '2026-01-31', amountCents, payee: 'Synthetic Quill' }).success);
+  }
 });
 
 test('patch body needs at least one field and allows clearing with null', () => {

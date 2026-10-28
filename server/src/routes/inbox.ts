@@ -5,7 +5,7 @@ import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { getInboxRow, inboxItemization, linkInbox, listInbox, matchInbox, saveInboxItems, storeRead, waitingRow } from '../inbox.ts';
-import { ReaderError } from '../receipt-reader.ts';
+import { readReceipt, ReaderError } from '../receipt-reader.ts';
 import { parseBody } from '../validate.ts';
 import { isJpeg, MAX_BYTES } from './receipts.ts';
 
@@ -32,7 +32,7 @@ export function inboxRoutes(app: FastifyInstance, deps: Deps): void {
     if (!row?.jpeg) return;
     if (!deps.receiptReader) { db.prepare('UPDATE inbox_receipts SET read_failed = 1 WHERE id = ?').run(id); return; }
     try {
-      const r = await deps.receiptReader.read(row.jpeg);
+      const r = await readReceipt(deps, `inbox:${id}`, row.jpeg, true);
       // tags the owner saved while the read ran win over it
       if (getInboxRow(db, id)?.tagged) return;
       if (storeRead(db, id, r, deps.now().toISOString())) rematch(id);
@@ -52,7 +52,11 @@ export function inboxRoutes(app: FastifyInstance, deps: Deps): void {
     const now = deps.now().getTime();
     const sent = Date.parse(String(req.headers['x-captured-at'] ?? ''));
     const captured = sent <= now + 5 * 60_000 && sent >= now - 60 * 86_400_000 ? sent : now;
-    db.prepare('INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at) VALUES (?, ?, ?, ?)').run(id, req.body, req.body.length, new Date(captured).toISOString());
+    db.transaction(() => {
+      const count = db.prepare('SELECT COUNT(*) FROM inbox_receipts WHERE linked_at IS NULL').pluck().get() as number;
+      if (count >= 200) throw new ApiError(409, 'INBOX_FULL', 'the receipt inbox is full (200 waiting); link or delete a receipt before uploading another');
+      db.prepare('INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at) VALUES (?, ?, ?, ?)').run(id, req.body, (req.body as Buffer).length, new Date(captured).toISOString());
+    })();
     void readInBackground(id).catch(() => console.error('[hermes] inbox read failed code=UNKNOWN'));
     return { id, bytes: req.body.length };
   });
@@ -71,8 +75,9 @@ export function inboxRoutes(app: FastifyInstance, deps: Deps): void {
     const before = state(row);
     let r;
     try {
-      r = await deps.receiptReader.read(row.jpeg!);
+      r = await readReceipt(deps, `inbox:${row.id}`, row.jpeg!);
     } catch (e) {
+      if (e instanceof ApiError) throw e;
       console.error(`[hermes] inbox read failed code=${e instanceof ReaderError ? e.code : 'UNKNOWN'}`);
       throw new ApiError(502, 'READ_FAILED', "couldn't read the receipt");
     }

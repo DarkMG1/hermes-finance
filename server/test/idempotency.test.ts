@@ -47,3 +47,23 @@ test('errors and nonfinal replies release reservations, and separate databases d
     assert.deepEqual(await idempotentAsync(other, request(), async () => ({ status: 201, body: 'second' })), { status: 201, body: 'second' });
   } finally { gate.resolve(); await pending; }
 });
+
+test('writes prune records older than seven days without bank sync and preserve newer replays', async () => {
+  for (const asyncWrite of [false, true]) {
+    const { deps } = makeTestDeps();
+    let now = new Date('2026-03-01T00:00:00.000Z');
+    deps.now = () => now;
+    let calls = 0;
+    const write = () => {
+      const run = () => ({ status: 200, body: ++calls });
+      return asyncWrite ? idempotentAsync(deps, request(), async () => run()) : idempotentWrite(deps, request(), run);
+    };
+    assert.equal((await write()).body, 1);
+    now = new Date('2026-03-08T00:00:00.000Z');
+    assert.equal((await write()).body, 1);
+    now = new Date('2026-03-08T00:00:00.001Z');
+    assert.equal((await write()).body, 2);
+    assert.equal(calls, 2);
+    assert.equal(deps.db.prepare('SELECT COUNT(*) FROM idempotency_keys').pluck().get(), 1);
+  }
+});

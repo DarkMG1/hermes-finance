@@ -47,6 +47,39 @@ test('read stores the items (all mine) and the extras', async () => {
   assert.equal(reader.calls, 1);
 });
 
+test('overlapping transaction reads get 409 and completed rereads have a 30-second cooldown', async () => {
+  const { read, reader, deps } = setup();
+  const started = Promise.withResolvers<void>();
+  const gate = Promise.withResolvers<void>();
+  const original = reader.read.bind(reader);
+  reader.read = async () => { started.resolve(); await gate.promise; return original(); };
+  const pending = read('own').then((r) => r);
+  await started.promise;
+  const overlap = await read('own');
+  assert.deepEqual([overlap.statusCode, overlap.json().code], [409, 'READ_IN_PROGRESS']);
+  gate.resolve();
+  assert.equal((await pending).statusCode, 200);
+  for (const time of ['2026-03-15T12:00:00.000Z', '2026-03-15T12:00:29.999Z']) {
+    deps.now = () => new Date(time);
+    const cooldown = await read('own');
+    assert.deepEqual([cooldown.statusCode, cooldown.json().code], [429, 'READ_COOLDOWN']);
+    assert.match(cooldown.json().message, /30 seconds/);
+  }
+  assert.equal(reader.calls, 1);
+  assert.equal((await read('paid')).statusCode, 200);
+  deps.now = () => new Date('2026-03-15T12:00:30.000Z');
+  assert.equal((await read('own')).statusCode, 200);
+  assert.equal(reader.calls, 3);
+});
+
+test('legacy oversized ledger amounts return a field error when items are applied', async () => {
+  const { save, deps } = setup();
+  deps.db.prepare("UPDATE transactions SET amount_cents = ? WHERE id = 'own'").run(-1e36);
+  const r = await save('own', body([['Synthetic Bread', 10, ['me', 'p1']]]));
+  assert.deepEqual([r.statusCode, r.json().field], [400, 'items']);
+  assert.equal(deps.db.prepare('SELECT COUNT(*) FROM split_lines').pluck().get(), 0);
+});
+
 test('a "they paid" read starts every item as shared by me and the payer', async () => {
   const { read } = setup();
   const got = (await read('paid')).json();
@@ -169,7 +202,8 @@ test('a new or deleted photo clears the items', async () => {
   await app.inject({ method: 'PUT', url: '/v1/transactions/own/receipt', headers: { ...AUTH, 'content-type': 'image/jpeg' }, payload: JPEG });
   assert.deepEqual((await items('own')).json().items, []);
   assert.equal((await items('own')).json().readAt, null);
-  await read('own');
+  deps.now = () => new Date('2026-03-15T12:00:30.000Z');
+  assert.equal((await read('own')).statusCode, 200);
   await app.inject({ method: 'DELETE', url: '/v1/transactions/own/receipt', headers: AUTH });
   assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM receipt_items').get() as { n: number }).n, 0);
 });
@@ -256,8 +290,10 @@ test('a hand save without a read leaves readAt null', async () => {
 
 test('a transaction reread rejects concurrent item, extra, split or payer changes', async () => {
   for (const change of ['items', 'extras', 'split', 'payer', 'edited split']) {
-    const { read, save, items, deps: { db }, reader } = setup();
+    const { read, save, items, deps, reader } = setup();
+    const { db } = deps;
     await read('own');
+    deps.now = () => new Date('2026-03-15T12:00:30.000Z');
     if (change === 'edited split') {
       await save('own', body([['Synthetic Bread', 2160, ['me', 'p1']]]));
       db.prepare("UPDATE split_lines SET amount_cents = amount_cents - 1 WHERE transaction_id = 'own' AND person_id IS NULL").run();

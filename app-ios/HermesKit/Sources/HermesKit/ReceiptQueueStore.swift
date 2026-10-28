@@ -23,16 +23,23 @@ public struct ReceiptQueueStore: Sendable {
         serverURL = server?.receiptServerURL
         pending = []
         directory = nil
-        guard let server = serverURL else { return }
-        // base64url of the normalised URL: a safe folder name, and Foundation-only so HermesKit builds on Linux CI
-        let key = Data(server.absoluteString.utf8).base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
-        let directory = root.appending(path: key, directoryHint: .isDirectory)
         #if os(iOS)
         let attributes: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.complete]
         #else
         let attributes: [FileAttributeKey: Any] = [:]
         #endif
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: attributes)
+        #if !os(Linux)
+        var excludedRoot = root
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try excludedRoot.setResourceValues(values)
+        #endif
+        guard let server = serverURL else { return }
+        // base64url of the normalised URL: a safe folder name, and Foundation-only so HermesKit builds on Linux CI
+        let key = Data(server.absoluteString.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        let directory = root.appending(path: key, directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: attributes)
         self.directory = directory
         try reload(migratingLegacy: migratingLegacy)

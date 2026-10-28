@@ -31,7 +31,6 @@ export function findPersonalData(
 ): Finding[] {
   const out: Finding[] = [];
   for (const { path, content } of files) {
-    if (path === 'package-lock.json' || path.endsWith('/package-lock.json')) continue;
     if (path.startsWith('docs/')) out.push({ path, line: 0, kind: 'docs' });
     content.split('\n').forEach((text, i) => {
       const line = i + 1;

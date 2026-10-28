@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { AppleCardImportResult } from '@hermes/shared';
+import { MAX_AMOUNT_CENTS, type AppleCardImportResult } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
 import { fitSplitToAmount, merchantMemory } from './ledger.ts';
@@ -58,6 +58,7 @@ function cents(value: string, rowNo: number): number {
   const m = /^(-)?\$?(\d{1,3}(?:,\d{3})+|\d+)(?:\.(\d{1,2}))?$/.exec(value);
   if (!m) bad(`row ${rowNo}: Amount is not a number`);
   const n = Number((m[2] ?? '').replaceAll(',', '')) * 100 + Number((m[3] ?? '').padEnd(2, '0'));
+  if (!Number.isSafeInteger(n) || n > MAX_AMOUNT_CENTS) bad(`row ${rowNo}: Amount must be at most 10,000,000.00`);
   return m[1] ? -n : n;
 }
 
@@ -110,38 +111,58 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
   const stored = db.prepare("SELECT id, source_id AS sourceId, clearing_date AS c, amount_cents AS amount FROM transactions WHERE source = 'applecard' AND source_id = ?");
   const taken = new Set<string>();
   type Stored = { id: string; sourceId: string; c: string | null; amount: number } | undefined;
+  type Slot = { sourceId: string; row: NonNullable<Stored>; n: number };
+  const groups = new Map<string, { all: Slot[]; dates: Map<string | null, Slot[]>; sourceIds: Set<string>; next: number; nextId: string }>();
+  const groupFor = (base: string) => {
+    let group = groups.get(base);
+    if (group) return group;
+    const all: Slot[] = [];
+    const dates = new Map<string | null, Slot[]>();
+    let n = 0;
+    let sourceId = idFor(base, n);
+    for (;;) {
+      const row = stored.get(sourceId) as Stored;
+      if (!row) break;
+      const slot = { sourceId, row, n };
+      all.push(slot);
+      if (!dates.has(row.c)) dates.set(row.c, []);
+      dates.get(row.c)!.push(slot);
+      sourceId = idFor(base, ++n);
+    }
+    for (const slots of dates.values()) slots.reverse();
+    group = { all: all.reverse(), dates, sourceIds: new Set(all.map((s) => s.sourceId)), next: n, nextId: sourceId };
+    groups.set(base, group);
+    return group;
+  };
+  const available = (slots: Slot[] | undefined) => {
+    while (slots?.length && taken.has(slots.at(-1)!.sourceId)) slots.pop();
+    return slots?.at(-1);
+  };
   const ids: string[] = [];
   const found: Stored[] = [];
   // pass 1: a dated row first claims the stored charge that cleared that same day, so an undated row can't take it
   rows.forEach((r, i) => {
     if (!r.clearingDate) return;
-    const base = baseOf(r);
-    for (let n = 0; ; n += 1) {
-      const sourceId = idFor(base, n);
-      const row = stored.get(sourceId) as Stored;
-      if (!row) break;
-      if (taken.has(sourceId) || row.c !== r.clearingDate) continue;
-      taken.add(sourceId);
-      ids[i] = sourceId;
-      found[i] = row;
-      break;
-    }
+    const slot = available(groupFor(baseOf(r)).dates.get(r.clearingDate));
+    if (!slot) return;
+    taken.add(slot.sourceId);
+    ids[i] = slot.sourceId;
+    found[i] = slot.row;
   });
-  // pass 2: every other row probes from 0 so it can claim a lower index an earlier identical row skipped;
-  // an identical purchase that cleared on another day is a different charge: move to the next occurrence
+  // pass 2: consume each compatible stored occurrence once, then allocate new occurrences in order.
   rows.forEach((r, i) => {
     if (ids[i]) return;
     const base = baseOf(r);
-    for (let n = 0; ; n += 1) {
-      const sourceId = idFor(base, n);
-      if (taken.has(sourceId)) continue;
-      const row = stored.get(sourceId) as Stored;
-      if (row?.c && r.clearingDate && row.c !== r.clearingDate) continue;
-      taken.add(sourceId);
-      ids[i] = sourceId;
-      found[i] = row;
-      break;
-    }
+    const group = groupFor(base);
+    const dated = available(group.dates.get(r.clearingDate));
+    const undated = available(group.dates.get(null));
+    const slot = !r.clearingDate ? available(group.all)
+      : dated && (!undated || dated.n < undated.n) ? dated : undated;
+    const sourceId = slot?.sourceId ?? group.nextId;
+    if (!slot) group.nextId = idFor(base, ++group.next);
+    taken.add(sourceId);
+    ids[i] = sourceId;
+    found[i] = slot?.row;
   });
   // Only a lone file row with one unclaimed stored counterpart can be a correction.
   const correctionKey = (r: AppleCardRow) => JSON.stringify([r.transactionDate, r.description, r.type]);
@@ -155,11 +176,7 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
       if (taken.has(s.sourceId)) return false;
       // The source hash retains Apple's type; the ledger has no separate type column.
       const base = baseOf({ ...r, amountCents: s.amount });
-      for (let n = 0; ; n += 1) {
-        const id = idFor(base, n);
-        if (id === s.sourceId) return true;
-        if (!stored.get(id)) return false;
-      }
+      return groupFor(base).sourceIds.has(s.sourceId);
     });
     // A clearing-date-only change is indistinguishable from a separate identical purchase.
     if (candidates.length !== 1 || candidates[0]!.amount === r.amountCents) return;

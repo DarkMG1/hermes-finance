@@ -5,12 +5,20 @@ import { idempotentWrite } from '../src/idempotency.ts';
 import { PlaidError } from '../src/plaid/port.ts';
 import { makeTestDeps, AUTH } from './helpers.ts';
 
-test('health needs no auth and reports sha and migration version', async () => {
+test('public health is minimal; only a valid token reveals sha and migration version', async () => {
   const { deps } = makeTestDeps();
   const app = buildApp(deps);
   const res = await app.inject({ method: 'GET', url: '/v1/health' });
   assert.equal(res.statusCode, 200);
-  assert.deepEqual(res.json(), { ok: true, gitSha: 'test-sha', dbVersion: 23 });
+  assert.deepEqual(res.json(), { ok: true });
+  for (const authorization of ['Bearer nope', 'Basic synthetic', 'Bearer test-token']) {
+    const wrong = await app.inject({ method: 'GET', url: '/v1/health', headers: { authorization } });
+    assert.equal(wrong.statusCode, 200);
+    assert.deepEqual(wrong.json(), { ok: true });
+  }
+  const detailed = await app.inject({ method: 'GET', url: '/v1/health', headers: AUTH });
+  assert.equal(detailed.statusCode, 200);
+  assert.deepEqual(detailed.json(), { ok: true, gitSha: 'test-sha', dbVersion: 23 });
 });
 
 test('other routes need the bearer token', async () => {
