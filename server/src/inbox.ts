@@ -188,6 +188,7 @@ export function listInbox(db: Db, today: string): InboxList {
     waiting: waiting.map((r) => ({
       id: r.id, capturedAt: r.captured_at, status: status(r), merchant: r.merchant, purchaseDate: r.purchase_date, totalCents: r.total_cents,
       tagged: r.tagged === 1, payee: payeeFor(known, r.merchant), forPersonId: r.for_person_id, suggestions: suggestionsFor(db, r, member),
+      taggedPersonIds: r.tagged ? [...new Set(itemsOf(r).flatMap((i) => i.people).filter((p) => p !== ME))].sort() : [],
     })),
     recentlyLinked: linked.map(toLinked),
   };

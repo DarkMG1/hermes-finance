@@ -353,6 +353,7 @@ export const InboxReceipt = z.object({
   /** the payee name already used for this store (Acme for "Acme Wholesale"), else merchant */
   payee: z.string().nullable(),
   forPersonId: Id.nullable().optional(),
+  taggedPersonIds: z.array(Id).optional(),
   suggestions: z.array(Transaction),
 });
 export type InboxReceipt = z.infer<typeof InboxReceipt>;

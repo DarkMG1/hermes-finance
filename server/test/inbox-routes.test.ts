@@ -30,6 +30,26 @@ function setup() {
   return { ...t, db, app, put, get, post, putItems, del };
 }
 
+test('inbox route names saved item tags alongside suggestions and a whole-charge For person', async () => {
+  const { db, get, putItems, app } = setup();
+  db.prepare("INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at) VALUES ('r1', ?, ?, '2026-03-10T18:00:00.000Z')").run(JPEG, JPEG.length);
+  storeRead(db, 'r1', READ, 'now');
+  seedTxn(db, { id: 'charge', accountId: 'card', date: '2026-03-10', amountCents: -1050 });
+  seedTxn(db, { id: 'other-charge', accountId: 'card', date: '2026-03-11', amountCents: -1050 });
+  const saved = await putItems('r1', { items: [{ name: 'Synthetic Pear', amountCents: 1050, people: ['me', 'p1'] }],
+    taxCents: 0, tipCents: 0, feesCents: 0 });
+  assert.equal(saved.statusCode, 200);
+  const waiting = (await get('/v1/receipts/inbox')).json().waiting[0];
+  assert.deepEqual(waiting.taggedPersonIds, ['p1']);
+  assert.equal(waiting.suggestions.length, 2);
+  const set = await app.inject({ method: 'PUT', url: '/v1/receipts/inbox/r1/for',
+    headers: { ...AUTH, 'idempotency-key': 'for' }, payload: { personId: 'p1' } });
+  assert.equal(set.statusCode, 200);
+  assert.equal(set.json().forPersonId, 'p1');
+  assert.deepEqual(set.json().taggedPersonIds, ['p1']);
+  await app.close();
+});
+
 test('For-person requires a key, sets and clears only waiting receipts, and replays the original response', async () => {
   const { app, db, get } = setup();
   db.prepare("INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at) VALUES ('r1', ?, ?, 'now')").run(JPEG, JPEG.length);

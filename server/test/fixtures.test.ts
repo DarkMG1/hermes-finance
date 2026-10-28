@@ -25,6 +25,7 @@ test('fixtures satisfy the shared contract', async () => {
   Investments.parse(f['investments.json']);
   Itemization.parse(f['itemization.json']);
   assert.equal(InboxList.parse(f['inbox.json']).waiting[0]!.forPersonId, 'person-1');
+  assert.deepEqual(InboxList.parse(f['inbox.json']).waiting[0]!.taggedPersonIds, ['person-1']);
   NetWorthHistory.parse(f['investments-history.json']);
   NetWorthHistory.parse(f['investments-history-excluded.json']);
   NetWorthHistory.parse(f['holding-history.json']);

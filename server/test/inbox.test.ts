@@ -24,6 +24,22 @@ function setup() {
   return { ...t, db, snap, charge };
 }
 
+test('inbox lists distinct tagged people without Me and never reports untagged item defaults as a split', () => {
+  const { db, snap } = setup();
+  snap('r1');
+  storeRead(db, 'r1', READ, 'now');
+  const listed = () => listInbox(db, '2026-03-15').waiting[0]!;
+  assert.deepEqual(listed().taggedPersonIds, []);
+  for (const people of [['me', 'p1'], ['p2', 'p1'], ['p1'], ['me']]) {
+    saveInboxItems(db, 'r1', { ...READ, items: READ.items.map((i) => ({ ...i, people })) });
+    assert.deepEqual(listed().taggedPersonIds, people.filter((p) => p !== 'me').sort());
+  }
+  db.prepare("UPDATE inbox_receipts SET for_person_id = 'p2' WHERE id = 'r1'").run();
+  assert.equal(listed().forPersonId, 'p2');
+  storeRead(db, 'r1', READ, 'again');
+  assert.deepEqual(listed().taggedPersonIds, []);
+});
+
 test('one exact charge in the window links on its own; the photo moves and the items default to me', () => {
   const { deps, db, snap, charge } = setup();
   snap('r1');

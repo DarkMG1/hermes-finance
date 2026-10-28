@@ -17,12 +17,7 @@ struct TransactionRow: View {
     }
 
     private var subtitle: String {
-        var tag = transaction.forgiven == true ? "Forgiven" : transaction.splitLines.isEmpty
-            ? model.tagLabel(personId: transaction.personId, categoryId: transaction.categoryId, amountCents: transaction.amountCents)
-            : "Split"
-        let yours = transaction.splitLines.filter { $0.personId == nil }.reduce(0) { $0 + $1.amountCents }
-        if transaction.forgiven != true, !transaction.splitLines.isEmpty, yours != transaction.amountCents { tag += " · yours \(Money.format(abs(yours)))" }
-        if let payer = transaction.paidByPersonId { tag += " · Paid by \(model.personName(payer))" }
-        return [DayText.display(transaction.date), tag, transaction.pending ? "Pending" : nil].compactMap { $0 }.joined(separator: " · ")
+        TransactionLabel.subtitle(transaction, day: DayText.display(transaction.date),
+                                  categoryName: model.categoryName(transaction.categoryId), personName: model.personName)
     }
 }
