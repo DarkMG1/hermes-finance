@@ -8,12 +8,11 @@ import { join } from 'node:path';
 
 const read = (path: string) => readFileSync(new URL(`../../${path}`, import.meta.url), 'utf8');
 
-test('CI containers use exact versions with the documented offline digest fallback', () => {
+test('CI containers are pinned by digest', () => {
   const workflow = read('.github/workflows/ci.yml');
   const images = [...workflow.matchAll(/(?:container:\s*|\/work\s+)((?:ghcr\.io\/realm\/swiftlint|swift):[^\s]+)/g)].map((m) => m[1]);
   assert.equal(images.length, 2);
-  for (const image of images) assert.match(image!, /:\d+\.\d+\.\d+(?:-noble)?(?:@sha256:[a-f0-9]{64})?$/);
-  assert.equal((workflow.match(/shortcut: no trusted digest available offline/g) ?? []).length, images.filter((image) => !image!.includes('@sha256:')).length);
+  for (const image of images) assert.match(image!, /@sha256:[a-f0-9]{64}$/);
 });
 
 test('hooks and CI scan lockfile contents through stdin to bypass inherited path exclusions', () => {
