@@ -1,5 +1,26 @@
 import Foundation
 
+/// One receipt item being edited on the Itemize screen.
+public struct DraftItem: Identifiable, Equatable, Sendable {
+    public let id: String
+    public var name: String
+    public var amountCents: Int
+    public var people: [String]
+
+    public init(id: String, name: String, amountCents: Int, people: [String]) {
+        self.id = id; self.name = name; self.amountCents = amountCents; self.people = people
+    }
+
+    /// The server's cap on an item price and on each of tax, tip and fees: 100,000.00.
+    public static let maxCents = 10_000_000
+
+    public static func splitAll(_ items: inout [Self], with people: Set<String>) {
+        // Sets have no order; keep odd-cent ties stable, with Me first when selected.
+        let ordered = (people.contains(ItemShares.me) ? [ItemShares.me] : []) + people.filter { $0 != ItemShares.me }.sorted()
+        for i in items.indices { items[i].people = ordered }
+    }
+}
+
 public struct ReceiptItem: Codable, Sendable, Hashable, Identifiable {
     public let id: String
     public let name: String

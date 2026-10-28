@@ -16,6 +16,23 @@ private struct VectorCase: Decodable {
 }
 private struct VectorFile: Decodable { let cases: [VectorCase] }
 
+@Test func splitAllReplacesPeopleAndPreservesItemDetails() {
+    let original = [DraftItem(id: "item-1", name: "Synthetic Bagel", amountCents: 101, people: ["person-old"]),
+                    DraftItem(id: "item-2", name: "Synthetic Discount", amountCents: -1, people: [ItemShares.me])]
+    var items = original
+    DraftItem.splitAll(&items, with: ["person-2", ItemShares.me, "person-1"])
+    #expect(items.map(\.people) == [[ItemShares.me, "person-1", "person-2"], [ItemShares.me, "person-1", "person-2"]])
+    #expect(items.map(\.id) == original.map(\.id))
+    #expect(items.map(\.name) == original.map(\.name))
+    #expect(items.map(\.amountCents) == original.map(\.amountCents))
+
+    DraftItem.splitAll(&items, with: ["person-2", "person-1"])
+    #expect(items.allSatisfy { $0.people == ["person-1", "person-2"] })
+
+    DraftItem.splitAll(&items, with: [ItemShares.me, "person-1"])
+    #expect(items.allSatisfy { $0.people == [ItemShares.me, "person-1"] })
+}
+
 @Test func shareVectorsMatchTheServer() throws {
     let file = try JSONDecoder().decode(VectorFile.self, from: try fixture("item-shares"))
     #expect(file.cases.count >= 10)
