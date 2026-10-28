@@ -14,10 +14,8 @@ test('non-finite amounts are rejected', () => {
   assert.throws(() => plaidAmountToCents(Number.NaN));
 });
 
-test('Plaid ledger amounts are bounded on both sides', () => {
-  for (const amount of [10_000_000.01, -10_000_000.01, 1e34, Infinity]) {
-    assert.throws(() => plaidAmountToCents(amount));
-  }
-  assert.equal(plaidAmountToCents(10_000_000), -1_000_000_000);
-  assert.equal(plaidAmountToCents(-10_000_000), 1_000_000_000);
+test('Plaid amounts only need to be exact: a huge bank row never fails the sync', () => {
+  for (const amount of [1e34, -1e34, Infinity]) assert.throws(() => plaidAmountToCents(amount));
+  assert.equal(plaidAmountToCents(10_000_000.01), -1_000_000_001);
+  assert.equal(plaidAmountToCents(-10_000_000.01), 1_000_000_001);
 });
