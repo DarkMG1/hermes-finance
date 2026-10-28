@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import { syncBuiltinESMExports } from 'node:module';
 import { parseAppleCardCsv, parseCsv } from '../src/applecard.ts';
 import { buildApp } from '../src/app.ts';
 import { getSpending } from '../src/cashflow.ts';
@@ -37,6 +39,38 @@ test('parseAppleCardCsv names the missing column and the bad row', () => {
   assert.throws(() => parseAppleCardCsv(`${HEADER}\n2026-09-01,,X,,,Purchase,1.00,`), /row 2: Transaction Date must be MM\/DD\/YYYY/);
   assert.throws(() => parseAppleCardCsv(`${HEADER}\n09/01/2026,,X,,,Purchase,abc,`), /row 2: Amount is not a number/);
   assert.throws(() => parseAppleCardCsv(`${HEADER}\n02/30/2026,,X,,,Purchase,1.00,`), /row 2: Transaction Date/);
+});
+
+test('CSV amount bounds reject huge purchases and credits before any ledger writes', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  for (const amount of ['10000000.01', '-10000000.01', '10000000000000000000000000000000000', '9'.repeat(400)]) {
+    const r = await post(app, `${HEADER}\n09/01/2026,,SYNTHETIC LIMIT,,,Purchase,${amount},`, `limit-${amount}`.slice(0, 200));
+    assert.equal(r.statusCode, 400);
+    assert.deepEqual([r.json().code, r.json().field], ['INVALID_CSV', 'csv']);
+  }
+  assert.equal(deps.db.prepare("SELECT COUNT(*) FROM transactions WHERE source = 'applecard'").pluck().get(), 0);
+  for (const amount of ['10000000.00', '-10000000.00']) {
+    assert.equal(Math.abs(parseAppleCardCsv(`${HEADER}\n09/01/2026,,SYNTHETIC LIMIT,,,Purchase,${amount},`)[0]!.amountCents), 1_000_000_000);
+  }
+});
+
+test('20,000 duplicate rows use linear hashing on import and dated or undated reimport', async (t) => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  const createHash = crypto.createHash;
+  let hashes = 0;
+  t.mock.method(crypto, 'createHash', (...args: Parameters<typeof createHash>) => { hashes += 1; return createHash(...args); });
+  syncBuiltinESMExports();
+  t.after(() => { t.mock.restoreAll(); syncBuiltinESMExports(); });
+  for (const [index, clearing] of ['', '09/02/2026', '09/02/2026', ''].entries()) {
+    hashes = 0;
+    const csv = [HEADER, ...Array<string>(20_000).fill(`09/01/2026,${clearing},SYNTHETIC DUPLICATE,,,Purchase,1.00,`)].join('\n');
+    const r = await post(app, csv, `linear-${index}`);
+    assert.equal(r.statusCode, 200);
+    assert.deepEqual([r.json().added, r.json().updated], index === 0 ? [20_000, 0] : [0, 20_000]);
+    assert.ok(hashes <= 20_010, `hash count: ${hashes}`);
+  }
 });
 
 test('import creates the Apple Card account, stores rows and computes the owed balance', async () => {

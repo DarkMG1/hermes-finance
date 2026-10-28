@@ -1,4 +1,7 @@
 #!/bin/sh
 set -e
 gitleaks protect --staged --no-banner --redact
+# stdin bypasses gitleaks' inherited lockfile path exclusion; scan the staged copy.
+lockfile="$(git show :package-lock.json)"
+printf '%s\n' "$lockfile" | gitleaks stdin --no-banner --redact
 node scripts/check-personal-data.ts

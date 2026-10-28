@@ -43,6 +43,8 @@ struct ItemizeView: View {
     @State private var showingPhoto = false
     @State private var loadingPhoto = false
     @State private var unread = false
+    @State private var showingSplit = false
+    @State private var splitPeople: Set<String> = [ItemShares.me]
 
     var body: some View {
         Sheet(title: "Itemize", canSave: canSave, busy: busy || reading || loading, unresolved: writes.unresolved,
@@ -100,10 +102,11 @@ struct ItemizeView: View {
                     if !items.isEmpty {
                         let others = choices.filter { $0 != ItemShares.me }
                         if others.count == 1 {
-                            Button("Split everything 50/50") { splitAll(with: others[0]) }
+                            Button("Split everything 50/50") { splitAll(with: [ItemShares.me, others[0]]) }
                         } else if !others.isEmpty {
-                            Menu("Split everything 50/50 with…") {
-                                ForEach(others, id: \.self) { person in Button(label(person)) { splitAll(with: person) } }
+                            Button("Split everything evenly…") {
+                                splitPeople = [ItemShares.me]
+                                showingSplit = true
                             }
                         }
                     }
@@ -147,6 +150,26 @@ struct ItemizeView: View {
                 error = nil
             }
         }
+        .sheet(isPresented: $showingSplit) {
+            Sheet(title: "Split evenly", saveTitle: "Split", canSave: splitPeople.count >= 2 && !locked,
+                  onCancel: { showingSplit = false }, onSave: {
+                splitAll(with: splitPeople)
+                showingSplit = false
+            }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
+                Section {
+                    ForEach(choices, id: \.self) { person in
+                        Button {
+                            if splitPeople.contains(person) { splitPeople.remove(person) } else { splitPeople.insert(person) }
+                        } label: {
+                            SelectionRow(title: label(person), selected: splitPeople.contains(person))
+                        }
+                        .accessibilityAddTraits(splitPeople.contains(person) ? .isSelected : [])
+                    }
+                }
+                .disabled(locked)
+            }
+            .presentationDetents([.medium, .large])
+        }
         .task { await load() }
     }
 
@@ -160,9 +183,9 @@ struct ItemizeView: View {
         return [ItemShares.me] + active + Array(Set(onItems)).sorted()
     }
 
-    /// Every item shared by me and `person`; single items can then be changed by hand.
-    private func splitAll(with person: String) {
-        for i in items.indices { items[i].people = [ItemShares.me, person] }
+    private func splitAll(with people: Set<String>) {
+        guard !locked else { return }
+        DraftItem.splitAll(&items, with: people)
     }
 
     private func label(_ person: String) -> String { person == ItemShares.me ? "Me" : model.personName(person) }

@@ -35,8 +35,12 @@ test('docs/ path is flagged at line 0', () => {
   ]);
 });
 
-test('package-lock.json is skipped', () => {
-  assert.deepEqual(findPersonalData(f('package-lock.json', `Zorblax Bank x${AT}y.io`), terms), []);
+test('root and nested package lockfiles are scanned', () => {
+  for (const path of ['package-lock.json', 'server/package-lock.json']) {
+    assert.deepEqual(findPersonalData(f(path, `Zorblax Bank x${AT}y.io`), terms), [
+      { path, line: 1, kind: 'term', termIndex: 0 }, { path, line: 1, kind: 'email' },
+    ]);
+  }
 });
 
 test('clean input returns []', () => {

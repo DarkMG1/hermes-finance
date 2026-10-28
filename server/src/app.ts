@@ -54,7 +54,8 @@ export function buildApp(deps: Deps): FastifyInstance {
 
   app.setNotFoundHandler((_req, reply) => reply.code(404).send({ code: 'NOT_FOUND', message: 'not found' }));
 
-  app.get('/v1/health', async () => {
+  app.get('/v1/health', async (req) => {
+    if (!tokenMatches(req.headers.authorization, deps.config.apiToken)) return { ok: true };
     const row = deps.db.prepare('SELECT MAX(version) AS v FROM migrations').get() as { v: number };
     return { ok: true, gitSha: deps.config.gitSha, dbVersion: row.v };
   });

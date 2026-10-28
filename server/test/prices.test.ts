@@ -52,6 +52,19 @@ test('errors never throw; not found skips, others stop the run', async () => {
   assert.deepEqual(asked, ['SYN.B', 'SYNA']);
 });
 
+test('price failures retain error codes without exposing tickers or provider messages', async (t) => {
+  const { deps, prices } = makeTestDeps();
+  seed(deps);
+  const logs: unknown[][] = [];
+  t.mock.method(console, 'error', (...args: unknown[]) => logs.push(args));
+  prices.failWith.set('SYN.B', 'NOT_FOUND');
+  await syncPrices(deps);
+  assert.deepEqual(logs, [['[hermes] prices failed code=NOT_FOUND']]);
+  deps.prices = { dailyPrices: async () => { throw new Error('SYNA private provider message'); } };
+  await syncPrices(deps);
+  assert.deepEqual(logs.at(-1), ['[hermes] prices failed code=PRICES_FAILED']);
+});
+
 test('no price port: nothing happens', async () => {
   const { deps, prices } = makeTestDeps();
   seed(deps);

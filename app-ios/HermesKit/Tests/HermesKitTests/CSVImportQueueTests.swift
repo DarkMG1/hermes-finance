@@ -5,6 +5,27 @@ import UniformTypeIdentifiers
 #endif
 @testable import HermesKit
 
+@Test func csvFileReadsAreBoundedBeforeDecoding() throws {
+    let file = FileManager.default.temporaryDirectory.appending(path: UUID().uuidString + ".csv")
+    defer { try? FileManager.default.removeItem(at: file) }
+    try Data("Synthetic Quill,12.34\n".utf8).write(to: file)
+    #expect(try CSVImportQueue.read(file) == "Synthetic Quill,12.34\n")
+    let limit = 5 * 1024 * 1024
+    try Data(repeating: 65, count: limit).write(to: file)
+    #expect(try CSVImportQueue.read(file).utf8.count == limit)
+    let handle = try FileHandle(forWritingTo: file)
+    try handle.truncate(atOffset: UInt64(limit + 1))
+    try handle.close()
+    do {
+        _ = try CSVImportQueue.read(file)
+        Issue.record("Oversized CSV was accepted")
+    } catch let error as CocoaError {
+        #expect(error.code == .fileReadTooLarge)
+    }
+    try Data([0xff]).write(to: file)
+    #expect(throws: CocoaError.self) { try CSVImportQueue.read(file) }
+}
+
 @Test func csvImportWaitsUntilTheAppIsReady() {
     var queue = CSVImportQueue()
     let file = URL(fileURLWithPath: "/synthetic/Synthetic Quill.csv")

@@ -17,6 +17,7 @@ function keyAndHash(req: FastifyRequest): { key: string; hash: string } {
 }
 
 function lookup(deps: Deps, key: string, hash: string): Result | null {
+  deps.db.prepare('DELETE FROM idempotency_keys WHERE created_at < ?').run(new Date(deps.now().getTime() - 7 * 86_400_000).toISOString());
   const pending = inFlight.get(deps.db)?.get(key);
   if (pending && pending.hash !== hash) throw new ApiError(409, 'IDEMPOTENCY_KEY_REUSED', 'Idempotency-Key was used for a different request');
   const row = deps.db.prepare('SELECT request_hash, status_code, response_json FROM idempotency_keys WHERE key = ?').get(key) as

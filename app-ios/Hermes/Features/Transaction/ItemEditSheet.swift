@@ -1,17 +1,6 @@
 import HermesKit
 import SwiftUI
 
-/// One receipt item being edited on the Itemize screen.
-struct DraftItem: Identifiable, Equatable {
-    let id: String
-    var name: String
-    var amountCents: Int
-    var people: [String]
-
-    /// The server's cap on an item price and on each of tax, tip and fees: 100,000.00.
-    static let maxCents = 10_000_000
-}
-
 /// Name, price and who had it. A discount is entered as a positive amount with Discount on.
 struct ItemEditSheet: View {
     @Environment(AppModel.self) private var model

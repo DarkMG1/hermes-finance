@@ -60,9 +60,13 @@ systemctl --user enable hermes.service >/dev/null
 systemctl --user enable --now hermes-backup.timer >/dev/null
 systemctl --user restart hermes.service
 
-port="$(sed -n 's/^HERMES_PORT=//p' "$envfile")"
+set -a
+# shellcheck source=/dev/null
+. "$envfile"
+set +a
+port="${HERMES_PORT:-5010}"
 for _ in $(seq 1 30); do
-  if curl -fsS "http://127.0.0.1:${port:-5010}/v1/health" 2>/dev/null | grep -q "\"gitSha\":\"$sha\""; then
+  if curl -fsS -H "authorization: Bearer $HERMES_API_TOKEN" "http://127.0.0.1:${port:-5010}/v1/health" 2>/dev/null | grep -q "\"gitSha\":\"$sha\""; then
     echo "deploy: healthy at $sha (previous: ${prev:-none})"
     find "$root/releases" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' | sort -rn | tail -n +6 | cut -d' ' -f2- | xargs -r rm -rf
     exit 0
@@ -81,7 +85,7 @@ if [ -n "$prev" ]; then
     if ln -sfn "$prev" "$root/current.new" && mv -T "$root/current.new" "$root/current" &&
       printf 'HERMES_GIT_SHA=%s\n' "$previous_sha" > "$root/release.env" && systemctl --user start hermes.service; then
       for _ in $(seq 1 30); do
-        if curl -fsS "http://127.0.0.1:${port:-5010}/v1/health" 2>/dev/null | grep -q "\"gitSha\":\"$previous_sha\""; then
+        if curl -fsS -H "authorization: Bearer $HERMES_API_TOKEN" "http://127.0.0.1:${port:-5010}/v1/health" 2>/dev/null | grep -q "\"gitSha\":\"$previous_sha\""; then
           echo "deploy: rolled back to $previous_sha (schema unchanged at version $before)" >&2
           exit 1
         fi

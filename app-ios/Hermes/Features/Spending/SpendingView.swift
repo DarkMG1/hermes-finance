@@ -48,6 +48,8 @@ struct SpendingView: View {
                                 .foregroundStyle(Palette.accent)
                         }
                         .chartXAxis(.hidden)
+                        // names beside their bars: iOS 26's default category axis stacks them over gridlines, out of line with the bars
+                        .chartYAxis { AxisMarks(preset: .extended, position: .leading) { _ in AxisValueLabel(horizontalSpacing: Space.s) } }
                         .frame(height: CGFloat(top.count) * Space.xxl)
                     }
                     Card {

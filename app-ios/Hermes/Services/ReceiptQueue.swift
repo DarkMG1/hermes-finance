@@ -66,6 +66,8 @@ final class ReceiptQueue {
             return true
         } catch {
             guard store.isCurrent(upload) else { return false }
+            // a full inbox won't clear by retrying: say why
+            if case .api(409, let body) = error as? ClientError, body.code == "INBOX_FULL" { self.error = body.message; return false }
             self.error = "Some receipts are waiting to upload. They'll retry when Hermes is back in the foreground."
             return false
         }

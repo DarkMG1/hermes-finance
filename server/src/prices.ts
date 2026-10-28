@@ -31,7 +31,7 @@ export async function syncPrices(deps: Deps): Promise<void> {
         rows = await prices.dailyPrices(ticker, from, today);
       } catch (e) {
         const code = e instanceof PriceError ? e.code : 'PRICES_FAILED';
-        console.error(`[hermes] prices failed ticker=${ticker} code=${code}`);
+        console.error(`[hermes] prices failed code=${code}`);
         if (code === 'NOT_FOUND') continue;
         return;
       }
@@ -39,7 +39,7 @@ export async function syncPrices(deps: Deps): Promise<void> {
         for (const r of rows) insert.run(ticker, r.date, Math.round(r.close * 100), r.splitFactor || 1);
       })();
     }
-  } catch (e) {
-    console.error(`[hermes] prices store failed ${e instanceof Error ? e.message : String(e)}`);
+  } catch {
+    console.error('[hermes] prices store failed');
   }
 }

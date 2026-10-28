@@ -21,6 +21,15 @@ test('shares always add up to the target', () => {
   assert.equal(r.shares.reduce((s, x) => s + x.cents, 0), 1201);
 });
 
+test('receipt math rejects unsafe stored targets and item amounts without entering a remainder loop', () => {
+  const input = { items: [{ amountCents: 10, people: Array.from({ length: 10 }, (_, i) => `synthetic-${i}`) }], taxCents: 0, tipCents: 0, feesCents: 0, targetCents: 100 };
+  for (const amount of [1e36, Infinity, NaN, 1_000_000_001, 1.5]) {
+    assert.throws(() => computeShares({ ...input, targetCents: amount }), ShareError);
+    assert.throws(() => computeShares({ ...input, items: [{ amountCents: amount, people: ['me'] }] }), ShareError);
+  }
+  assert.equal(computeShares({ ...input, targetCents: 1_000_000_000 }).shares.reduce((sum, s) => sum + s.cents, 0), 1_000_000_000);
+});
+
 test('applyItems writes the split and stores the items and applied lines', () => {
   const { deps } = makeTestDeps();
   const { db } = deps;

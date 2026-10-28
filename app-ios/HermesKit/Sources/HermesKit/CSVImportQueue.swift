@@ -11,6 +11,18 @@ public struct CSVImportQueue: Sendable {
 
     public init() {}
 
+    public static func read(_ url: URL) throws -> String {
+        let maxBytes = 5 * 1024 * 1024
+        let file = try FileHandle(forReadingFrom: url)
+        defer { try? file.close() }
+        guard try file.seekToEnd() <= UInt64(maxBytes) else { throw CocoaError(.fileReadTooLarge) }
+        try file.seek(toOffset: 0)
+        let data = try file.read(upToCount: maxBytes + 1) ?? Data()
+        guard data.count <= maxBytes else { throw CocoaError(.fileReadTooLarge) }
+        guard let csv = String(data: data, encoding: .utf8) else { throw CocoaError(.fileReadInapplicableStringEncoding) }
+        return csv
+    }
+
     public mutating func add(_ url: URL, fileExists: Bool = true) {
         guard !files.contains(url), fileExists || !completed.contains(url) else { return }
         completed.remove(url)
