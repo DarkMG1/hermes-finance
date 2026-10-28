@@ -6,10 +6,66 @@ import Testing
     let list: InboxList = try JSONDecoder().decode(InboxList.self, from: try fixture("inbox"))
     #expect(list.waiting.first?.id == "inbox-1" && list.waiting.first?.status == "read" && list.waiting.first?.totalCents == 640)
     #expect(list.waiting.first?.payee == "Synthetic Grocer")
+    #expect(list.waiting.first?.forPersonId == "person-1")
+    #expect(list.waiting.first?.taggedPersonIds == ["person-1"])
     #expect(list.recentlyLinked.first?.transactionId == "txn-1" && list.recentlyLinked.first?.splitApplied == true)
     let items = try JSONDecoder().decode(Itemization.self, from: try fixture("inbox-items"))
-    #expect(items.items.first?.people == ["me"])
+    #expect(items.items.first?.people == ["me", "person-1"])
     _ = try JSONDecoder().decode(LinkedReceipt.self, from: try fixture("inbox-linked"))
+}
+
+@Test func inboxDecodesWithoutPersonFieldsFromOlderServer() throws {
+    var json = try #require(JSONSerialization.jsonObject(with: fixture("inbox")) as? [String: Any])
+    var waiting = try #require(json["waiting"] as? [[String: Any]])
+    waiting[0].removeValue(forKey: "forPersonId")
+    waiting[0].removeValue(forKey: "taggedPersonIds")
+    json["waiting"] = waiting
+    let list = try JSONDecoder().decode(InboxList.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(list.waiting.first?.forPersonId == nil)
+    #expect(list.waiting.first?.taggedPersonIds == nil)
+    #expect(list.waiting.first?.subtitle(day: "Today", personName: { _ in "Someone" }) == "Today · Split")
+}
+
+@Test func inboxSubtitleKeepsTagsAndSuggestionsTogether() throws {
+    let suggestion = try decode(LedgerTransaction.self, "transaction")
+    func subtitle(status: String = "read", tagged: Bool = true, people: [String]? = ["p1"],
+                  forPerson: String? = nil, suggestions: [LedgerTransaction] = []) -> String {
+        let receipt = InboxReceipt(id: "r1", capturedAt: "2026-03-10T18:00:00.000Z", status: status,
+                                   merchant: nil, purchaseDate: nil, totalCents: nil, tagged: tagged,
+                                   forPersonId: forPerson, taggedPersonIds: people, payee: nil, suggestions: suggestions)
+        return receipt.subtitle(day: "Today", personName: { $0 == "p1" ? "Synthetic Quill" : "Synthetic Wren" })
+    }
+    #expect(subtitle() == "Today · Split with Synthetic Quill")
+    #expect(subtitle(suggestions: [suggestion]) == "Today · Split with Synthetic Quill · 1 suggestion")
+    #expect(subtitle(people: ["p1", "p2"], suggestions: [suggestion, suggestion]) == "Today · Split with 2 people · 2 suggestions")
+    #expect(subtitle(forPerson: "p2", suggestions: [suggestion]) == "Today · For Synthetic Wren · 1 suggestion")
+    #expect(subtitle(tagged: false, forPerson: "p1") == "Today · For Synthetic Quill")
+    #expect(subtitle(tagged: false) == "Today · Waiting for the charge")
+    #expect(subtitle(people: []) == "Today · Waiting for the charge")
+    #expect(subtitle(tagged: false, suggestions: [suggestion]) == "Today · 1 suggestion")
+    #expect(subtitle(status: "reading", tagged: false) == "Today · Reading…")
+    #expect(subtitle(status: "failed", tagged: false) == "Today · Couldn't read")
+    #expect(subtitle(status: "reading", forPerson: "p1") == "Today · Reading… · For Synthetic Quill")
+    #expect(subtitle(status: "failed", forPerson: "p1") == "Today · Couldn't read · For Synthetic Quill")
+}
+
+@Test func inboxForSendsThePersonOrExplicitNullWithAKey() async throws {
+    let list = try JSONSerialization.jsonObject(with: fixture("inbox")) as? [String: Any]
+    let waiting = try #require(list?["waiting"] as? [[String: Any]])
+    for personId in ["person-1", nil] {
+        var receipt = waiting[0]
+        receipt["forPersonId"] = personId.map { $0 as Any } ?? NSNull()
+        let response = try JSONSerialization.data(withJSONObject: receipt)
+        let transport = FakeTransport([.success(HTTPResponse(status: 200, body: response))])
+        let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+        let saved = try await client.setInboxFor(id: "r1", body: InboxForBody(personId: personId), idempotencyKey: "for")
+        #expect(saved.forPersonId == personId)
+        let request = try #require(transport.requests.first)
+        #expect(request.method == "PUT" && request.url.path() == "/v1/receipts/inbox/r1/for" && request.headers["Idempotency-Key"] == "for")
+        let body = try #require(request.body)
+        let sent = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        if let personId { #expect(sent["personId"] as? String == personId) } else { #expect(sent["personId"] is NSNull) }
+    }
 }
 
 @Test func uploadPutsTheJpegWithoutAKey() async throws {

@@ -16,6 +16,14 @@ private struct VectorCase: Decodable {
 }
 private struct VectorFile: Decodable { let cases: [VectorCase] }
 
+@Test func splitPickerAllowsAnySelectionWithAnotherPerson() {
+    #expect(!DraftItem.canSplitAll(with: []))
+    #expect(!DraftItem.canSplitAll(with: [ItemShares.me]))
+    #expect(DraftItem.canSplitAll(with: ["person-1"]))
+    #expect(DraftItem.canSplitAll(with: [ItemShares.me, "person-1"]))
+    #expect(DraftItem.canSplitAll(with: ["person-1", "person-2"]))
+}
+
 @Test func splitAllReplacesPeopleAndPreservesItemDetails() {
     let original = [DraftItem(id: "item-1", name: "Synthetic Bagel", amountCents: 101, people: ["person-old"]),
                     DraftItem(id: "item-2", name: "Synthetic Discount", amountCents: -1, people: [ItemShares.me])]
@@ -31,6 +39,12 @@ private struct VectorFile: Decodable { let cases: [VectorCase] }
 
     DraftItem.splitAll(&items, with: [ItemShares.me, "person-1"])
     #expect(items.allSatisfy { $0.people == [ItemShares.me, "person-1"] })
+
+    DraftItem.splitAll(&items, with: ["person-1"])
+    #expect(items.allSatisfy { $0.people == ["person-1"] })
+    let shares = ItemShares.compute(items: items.map { .init(amountCents: $0.amountCents, people: $0.people) },
+                                   taxCents: 10, tipCents: 20, feesCents: 0, targetCents: 130)
+    #expect(shares?.shares == [.init(person: "person-1", cents: 130)])
 }
 
 @Test func shareVectorsMatchTheServer() throws {

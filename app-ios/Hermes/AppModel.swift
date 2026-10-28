@@ -190,10 +190,9 @@ final class AppModel {
         people.first { $0.id == id }?.name ?? "Someone"
     }
 
-    /// What a row or split line shows where its category would go: "Owed · Quill" / "Repaid · Quill", or the category name.
+    /// What a row or split line shows where its category would go.
     func tagLabel(personId: String?, categoryId: String?, amountCents: Int) -> String {
-        guard let personId else { return categoryName(categoryId) }
-        return "\(amountCents < 0 ? "Owed" : "Repaid") · \(personName(personId))"
+        TransactionLabel.tag(personName: personId.map(personName), categoryName: categoryName(categoryId), amountCents: amountCents)
     }
 
     private func configure(url: URL, token: String) {

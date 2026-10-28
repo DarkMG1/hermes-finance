@@ -1,11 +1,12 @@
 import type { FastifyInstance } from 'fastify';
-import { LinkInboxBody, SaveItemsBody } from '@hermes/shared';
+import { InboxForBody, LinkInboxBody, SaveItemsBody } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { getInboxRow, inboxItemization, linkInbox, listInbox, matchInbox, saveInboxItems, storeRead, waitingRow } from '../inbox.ts';
 import { readReceipt, ReaderError } from '../receipt-reader.ts';
+import { assertPersonTaggable } from '../people.ts';
 import { parseBody } from '../validate.ts';
 import { isJpeg, MAX_BYTES } from './receipts.ts';
 
@@ -91,6 +92,17 @@ export function inboxRoutes(app: FastifyInstance, deps: Deps): void {
   });
 
   app.get<{ Params: { id: string } }>('/v1/receipts/inbox/:id/items', async (req) => inboxItemization(waiting(req.params.id)));
+
+  app.put<{ Params: { id: string } }>('/v1/receipts/inbox/:id/for', async (req, reply) => {
+    const body = parseBody(InboxForBody, req.body);
+    const r = idempotentWrite(deps, req, () => {
+      waiting(req.params.id);
+      assertPersonTaggable(db, body.personId, 'personId', '');
+      db.prepare('UPDATE inbox_receipts SET for_person_id = ? WHERE id = ?').run(body.personId, req.params.id);
+      return { status: 200, body: entry(req.params.id) };
+    });
+    return reply.code(r.status).send(r.body);
+  });
 
   app.put<{ Params: { id: string } }>('/v1/receipts/inbox/:id/items', async (req, reply) => {
     const body = parseBody(SaveItemsBody, req.body);

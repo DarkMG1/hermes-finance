@@ -115,6 +115,10 @@ extension APIClient {
 
     public func inboxItems(id: String) async throws -> Itemization { try decode(try await getData("/v1/receipts/inbox/\(id)/items")) }
 
+    public func setInboxFor(id: String, body: InboxForBody, idempotencyKey: String) async throws -> InboxReceipt {
+        try await write("PUT", "/v1/receipts/inbox/\(id)/for", body: body, key: idempotencyKey)
+    }
+
     public func saveInboxItems(id: String, body: SaveItemsBody, idempotencyKey: String) async throws -> Itemization {
         try await write("PUT", "/v1/receipts/inbox/\(id)/items", body: body, key: idempotencyKey)
     }

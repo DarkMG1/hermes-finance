@@ -5,7 +5,8 @@
       "name": "Synthetic Pear",
       "amountCents": 600,
       "people": [
-        "me"
+        "me",
+        "person-1"
       ]
     }
   ],

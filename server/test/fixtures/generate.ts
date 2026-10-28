@@ -79,7 +79,8 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   const inboxPhoto = Buffer.from([0xff, 0xd8, 0xff]);
   db.prepare(`INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at, read_at, model, merchant, purchase_date, total_cents, tax_cents, tip_cents, fees_cents, items)
     VALUES ('inbox-1', ?, 3, '2026-03-15T10:00:00.000Z', '2026-03-15T10:00:05.000Z', 'fixture-model', 'Synthetic Grocer', '2026-03-15', 640, 40, 0, 0, ?)`)
-    .run(inboxPhoto, JSON.stringify([{ name: 'Synthetic Pear', amountCents: 600, people: ['me'] }]));
+    .run(inboxPhoto, JSON.stringify([{ name: 'Synthetic Pear', amountCents: 600, people: ['me', 'person-1'] }]));
+  db.prepare("UPDATE inbox_receipts SET for_person_id = 'person-1', tagged = 1 WHERE id = 'inbox-1'").run();
   db.prepare(`INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at, read_at, model, merchant, total_cents, linked_transaction_id, linked_at, split_applied)
     VALUES ('inbox-2', NULL, 3, '2026-03-14T10:00:00.000Z', '2026-03-14T10:00:05.000Z', 'fixture-model', 'Synthetic Cafe', 1250, 'txn-1', '2026-03-15T11:30:00.000Z', 1)`).run();
   out.inbox = await get('/v1/receipts/inbox');

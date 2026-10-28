@@ -7,9 +7,13 @@
       "merchant": "Synthetic Grocer",
       "purchaseDate": "2026-03-15",
       "totalCents": 640,
-      "tagged": false,
+      "tagged": true,
       "payee": "Synthetic Grocer",
-      "suggestions": []
+      "forPersonId": "person-1",
+      "suggestions": [],
+      "taggedPersonIds": [
+        "person-1"
+      ]
     }
   ],
   "recentlyLinked": [

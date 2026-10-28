@@ -24,6 +24,22 @@ function setup() {
   return { ...t, db, snap, charge };
 }
 
+test('inbox lists distinct tagged people without Me and never reports untagged item defaults as a split', () => {
+  const { db, snap } = setup();
+  snap('r1');
+  storeRead(db, 'r1', READ, 'now');
+  const listed = () => listInbox(db, '2026-03-15').waiting[0]!;
+  assert.deepEqual(listed().taggedPersonIds, []);
+  for (const people of [['me', 'p1'], ['p2', 'p1'], ['p1'], ['me']]) {
+    saveInboxItems(db, 'r1', { ...READ, items: READ.items.map((i) => ({ ...i, people })) });
+    assert.deepEqual(listed().taggedPersonIds, people.filter((p) => p !== 'me').sort());
+  }
+  db.prepare("UPDATE inbox_receipts SET for_person_id = 'p2' WHERE id = 'r1'").run();
+  assert.equal(listed().forPersonId, 'p2');
+  storeRead(db, 'r1', READ, 'again');
+  assert.deepEqual(listed().taggedPersonIds, []);
+});
+
 test('one exact charge in the window links on its own; the photo moves and the items default to me', () => {
   const { deps, db, snap, charge } = setup();
   snap('r1');
@@ -38,6 +54,84 @@ test('one exact charge in the window links on its own; the photo moves and the i
   assert.deepEqual((db.prepare("SELECT people FROM receipt_items WHERE transaction_id = 'c1' ORDER BY position").all() as { people: string }[]).map((r) => r.people), ['["me"]', '["me"]']);
   assert.deepEqual(listInbox(db, '2026-03-15').recentlyLinked.map((l) => [l.id, l.transactionId, l.splitApplied]), [['r1', 'c1', false]]);
   assert.equal(listInbox(db, '2026-03-15').waiting.length, 0);
+});
+
+for (const auto of [false, true]) for (const tagged of [false, true]) test(`For-person ${auto ? 'auto' : 'manual'} link tags the whole charge (items tagged: ${tagged})`, () => {
+  const { deps, db, snap, charge } = setup();
+  snap('r1');
+  storeRead(db, 'r1', READ, 'now');
+  if (tagged) saveInboxItems(db, 'r1', { ...READ, items: READ.items.map((i) => ({ ...i, people: ['me', 'p2'] })) });
+  db.prepare("UPDATE inbox_receipts SET for_person_id = 'p1' WHERE id = 'r1'").run();
+  const before = getInboxRow(db, 'r1')!;
+  charge('c1', '2026-03-11', -1050);
+  if (auto) assert.equal(matchInbox(deps), 1);
+  else assert.equal(linkInbox(deps, 'r1', 'c1').splitApplied, false);
+  const transaction = getTransaction(db, 'c1', '2026-03-15')!;
+  assert.equal(transaction.personId, 'p1');
+  assert.equal(transaction.categoryId, null);
+  assert.deepEqual(transaction.splitLines, []);
+  assert.equal(db.prepare("SELECT category_owner_set FROM transactions WHERE id = 'c1'").pluck().get(), 1);
+  assert.equal(getPerson(db, 'p1')!.person.balanceCents, 1050);
+  assert.equal(getPerson(db, 'p2')!.person.balanceCents, 0);
+  assert.equal(getInboxRow(db, 'r1')!.split_applied, 0);
+  const receipt = getItemization(db, 'c1');
+  assert.deepEqual(receipt.items.map(({ name, amountCents, people }) => ({ name, amountCents, people })), JSON.parse(before.items!));
+  assert.deepEqual([receipt.totalCents, receipt.taxCents, receipt.tipCents, receipt.feesCents], [1050, 50, 0, 0]);
+});
+
+for (const removed of [false, true]) test(`For-person survives ${removed ? 'Plaid removal' : 'manual deletion'} and relinking`, async () => {
+  const { deps, db, snap, charge } = setup();
+  snap('r1');
+  storeRead(db, 'r1', READ, 'now');
+  db.prepare("UPDATE inbox_receipts SET for_person_id = 'p1' WHERE id = 'r1'").run();
+  charge('old', '2026-03-11', -1050, removed ? {} : { source: 'manual', sourceId: undefined });
+  linkInbox(deps, 'r1', 'old');
+  if (removed) {
+    db.prepare("UPDATE transactions SET removed_at = 'gone' WHERE id = 'old'").run();
+    matchInbox(deps);
+  } else {
+    const app = buildApp(deps);
+    const response = await app.inject({ method: 'DELETE', url: '/v1/transactions/old', headers: { ...AUTH, 'idempotency-key': 'delete' } });
+    assert.equal(response.statusCode, 200);
+    await app.close();
+  }
+  assert.equal(listInbox(db, '2026-03-15').waiting[0]!.forPersonId, 'p1');
+  assert.equal(getInboxRow(db, 'r1')!.linked_at, null);
+  charge('new', '2026-03-12', -1050);
+  assert.equal(matchInbox(deps), 1);
+  assert.equal(getTransaction(db, 'new', '2026-03-15')!.personId, 'p1');
+  assert.equal(getPerson(db, 'p1')!.person.balanceCents, 1050);
+});
+
+test('For-person refuses Paid-by and split targets without changing them', () => {
+  const { deps, db, snap, charge } = setup();
+  snap('r1');
+  storeRead(db, 'r1', READ, 'now');
+  db.prepare("UPDATE inbox_receipts SET for_person_id = 'p1' WHERE id = 'r1'").run();
+  charge('paid', '2026-03-11', -1050, { source: 'manual', sourceId: undefined, paidByPersonId: 'p2' });
+  charge('split', '2026-03-11', -1050);
+  seedSplit(db, { id: 'l1', transactionId: 'split', amountCents: -500, categoryId: 'cat-food' });
+  seedSplit(db, { id: 'l2', transactionId: 'split', amountCents: -550, categoryId: null, personId: 'p2' });
+  for (const [id, code] of [['paid', 'PAID_BY_PERSON'], ['split', 'SPLIT_TRANSACTION']] as const) {
+    const before = getTransaction(db, id, '2026-03-15');
+    assert.throws(() => linkInbox(deps, 'r1', id), (e: { code: string }) => e.code === code);
+    assert.deepEqual(getTransaction(db, id, '2026-03-15'), before);
+  }
+  assert.deepEqual(listInbox(db, '2026-03-15').waiting[0]!.suggestions, []);
+  assert.equal(matchInbox(deps), 0);
+  assert.equal(getInboxRow(db, 'r1')!.linked_at, null);
+});
+
+test('a person archived after selecting For cannot acquire a new charge on link', () => {
+  const { deps, db, snap, charge } = setup();
+  snap('r1');
+  db.prepare("UPDATE inbox_receipts SET for_person_id = 'p1' WHERE id = 'r1'").run();
+  db.prepare("UPDATE people SET archived = 1 WHERE id = 'p1'").run();
+  charge('c1', '2026-03-11', -1050);
+  const before = getTransaction(db, 'c1', '2026-03-15');
+  assert.throws(() => linkInbox(deps, 'r1', 'c1'), /person is archived/);
+  assert.deepEqual(getTransaction(db, 'c1', '2026-03-15'), before);
+  assert.equal(getInboxRow(db, 'r1')!.linked_at, null);
 });
 
 test('two exact charges, or two receipts after one charge, only suggest', () => {

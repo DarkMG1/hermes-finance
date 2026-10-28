@@ -352,6 +352,8 @@ export const InboxReceipt = z.object({
   merchant: z.string().nullable(), purchaseDate: DateStr.nullable(), totalCents: Cents.nullable(), tagged: z.boolean(),
   /** the payee name already used for this store (Acme for "Acme Wholesale"), else merchant */
   payee: z.string().nullable(),
+  forPersonId: Id.nullable().optional(),
+  taggedPersonIds: z.array(Id).optional(),
   suggestions: z.array(Transaction),
 });
 export type InboxReceipt = z.infer<typeof InboxReceipt>;
@@ -366,6 +368,9 @@ export type InboxList = z.infer<typeof InboxList>;
 
 export const LinkInboxBody = z.object({ transactionId: Id }).strict();
 export type LinkInboxBody = z.infer<typeof LinkInboxBody>;
+
+export const InboxForBody = z.object({ personId: Id.nullable() }).strict();
+export type InboxForBody = z.infer<typeof InboxForBody>;
 
 const WritableFrequency = RecurringFrequency.exclude(['unknown']);
 export const RecurringItem = z.object({

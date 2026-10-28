@@ -104,14 +104,8 @@ struct InboxView: View {
     }
 
     private func subtitle(_ r: InboxReceipt) -> String {
-        let state = switch r.status {
-        case "reading": "Reading…"
-        case "failed": "Couldn't read"
-        default: r.suggestions.isEmpty ? (r.tagged ? "Tagged" : "Waiting for the charge")
-            : r.suggestions.count == 1 ? "1 suggestion" : "\(r.suggestions.count) suggestions"
-        }
         let day = r.purchaseDate.map(DayText.display) ?? DayText.display(String(r.capturedAt.prefix(10)))
-        return [day, state].joined(separator: " · ")
+        return r.subtitle(day: day, personName: model.personName)
     }
 
     private func load() async {
