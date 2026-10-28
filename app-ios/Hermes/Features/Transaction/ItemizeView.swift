@@ -103,8 +103,9 @@ struct ItemizeView: View {
                         let others = choices.filter { $0 != ItemShares.me }
                         if others.count == 1 {
                             Button("Split everything 50/50") { splitAll(with: [ItemShares.me, others[0]]) }
-                        } else if !others.isEmpty {
-                            Button("Split everything evenly…") {
+                        }
+                        if !others.isEmpty {
+                            Button("Split everything…") {
                                 splitPeople = [ItemShares.me]
                                 showingSplit = true
                             }
@@ -151,7 +152,7 @@ struct ItemizeView: View {
             }
         }
         .sheet(isPresented: $showingSplit) {
-            Sheet(title: "Split evenly", saveTitle: "Split", canSave: splitPeople.count >= 2 && !locked,
+            Sheet(title: "Split evenly", saveTitle: "Split", canSave: DraftItem.canSplitAll(with: splitPeople) && !locked,
                   onCancel: { showingSplit = false }, onSave: {
                 splitAll(with: splitPeople)
                 showingSplit = false

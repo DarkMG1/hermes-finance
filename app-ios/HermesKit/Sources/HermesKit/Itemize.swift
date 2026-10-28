@@ -14,6 +14,8 @@ public struct DraftItem: Identifiable, Equatable, Sendable {
     /// The server's cap on an item price and on each of tax, tip and fees: 100,000.00.
     public static let maxCents = 10_000_000
 
+    public static func canSplitAll(with people: Set<String>) -> Bool { people.contains { $0 != ItemShares.me } }
+
     public static func splitAll(_ items: inout [Self], with people: Set<String>) {
         // Sets have no order; keep odd-cent ties stable, with Me first when selected.
         let ordered = (people.contains(ItemShares.me) ? [ItemShares.me] : []) + people.filter { $0 != ItemShares.me }.sorted()

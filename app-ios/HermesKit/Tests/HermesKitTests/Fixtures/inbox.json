@@ -9,6 +9,7 @@
       "totalCents": 640,
       "tagged": false,
       "payee": "Synthetic Grocer",
+      "forPersonId": "person-1",
       "suggestions": []
     }
   ],

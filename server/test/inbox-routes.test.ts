@@ -30,6 +30,67 @@ function setup() {
   return { ...t, db, app, put, get, post, putItems, del };
 }
 
+test('For-person requires a key, sets and clears only waiting receipts, and replays the original response', async () => {
+  const { app, db, get } = setup();
+  db.prepare("INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at) VALUES ('r1', ?, ?, 'now')").run(JPEG, JPEG.length);
+  const setFor = (personId: string | null, key?: string, id = 'r1') => app.inject({
+    method: 'PUT', url: `/v1/receipts/inbox/${id}/for`, headers: { ...AUTH, ...(key ? { 'idempotency-key': key } : {}) }, payload: { personId },
+  });
+  assert.equal((await setFor('p1')).json().code, 'IDEMPOTENCY_KEY_REQUIRED');
+  const set = await setFor('p1', 'for');
+  assert.equal(set.statusCode, 200);
+  assert.equal(set.json().forPersonId, 'p1');
+  assert.equal((await get('/v1/receipts/inbox')).json().waiting[0].forPersonId, 'p1');
+  assert.equal((await setFor(null, 'clear')).json().forPersonId, null);
+  assert.deepEqual((await setFor('p1', 'for')).json(), set.json());
+  assert.equal(getInboxRow(db, 'r1')!.for_person_id, null, 'replay must not reapply the old value');
+  assert.equal((await setFor(null, 'for')).json().code, 'IDEMPOTENCY_KEY_REUSED');
+  assert.equal((await setFor('p1', 'missing', 'missing')).statusCode, 404);
+  assert.equal((await setFor('p1', 'again')).statusCode, 200);
+  seedTxn(db, { id: 'charge', accountId: 'card', date: '2026-03-10', amountCents: -1050 });
+  const headers = { ...AUTH, 'idempotency-key': 'link' };
+  assert.equal((await app.inject({ method: 'POST', url: '/v1/receipts/inbox/r1/link', headers, payload: { transactionId: 'charge' } })).statusCode, 200);
+  const linked = (await get('/v1/transactions/charge')).json();
+  assert.equal(linked.personId, 'p1', 'a receipt does not need to be read to tag its whole charge');
+  assert.deepEqual(linked.splitLines, []);
+  assert.equal((await setFor('p1', 'linked')).statusCode, 404);
+});
+
+test('For-person rejects unknown, archived and invalid people and its foreign key clears on deletion', async () => {
+  const { app, db } = setup();
+  db.prepare("INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at) VALUES ('r1', ?, ?, 'now')").run(JPEG, JPEG.length);
+  db.prepare("UPDATE people SET archived = 1 WHERE id = 'p1'").run();
+  let n = 0;
+  const setFor = (payload: object) => app.inject({ method: 'PUT', url: '/v1/receipts/inbox/r1/for',
+    headers: { ...AUTH, 'idempotency-key': `for-${n += 1}` }, payload });
+  for (const payload of [{ personId: 'p1' }, { personId: 'missing' }, { personId: '' }, {}, { personId: null, extra: true }]) {
+    assert.equal((await setFor(payload)).statusCode, 400);
+    assert.equal(getInboxRow(db, 'r1')!.for_person_id, null);
+  }
+  db.prepare("UPDATE people SET archived = 0 WHERE id = 'p1'").run();
+  assert.equal((await setFor({ personId: 'p1' })).statusCode, 200);
+  db.prepare("DELETE FROM people WHERE id = 'p1'").run();
+  assert.equal(getInboxRow(db, 'r1')!.for_person_id, null);
+});
+
+for (const forFirst of [false, true]) test(`For-person and Paid-by creation are mutually exclusive (For first: ${forFirst})`, async () => {
+  const { app, db, post } = setup();
+  db.prepare("INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at) VALUES ('r1', ?, ?, 'now')").run(JPEG, JPEG.length);
+  const setFor = () => app.inject({ method: 'PUT', url: '/v1/receipts/inbox/r1/for',
+    headers: { ...AUTH, 'idempotency-key': 'for' }, payload: { personId: 'p1' } });
+  if (forFirst) assert.equal((await setFor()).statusCode, 200);
+  const paid = await post('/v1/transactions', { date: '2026-03-10', amountCents: -1050, payee: 'Synthetic Grocer', paidByPersonId: 'p1', inboxReceiptId: 'r1' });
+  if (forFirst) {
+    assert.deepEqual([paid.statusCode, paid.json().code], [409, 'PAID_BY_PERSON']);
+    assert.equal(db.prepare('SELECT COUNT(*) FROM transactions').pluck().get(), 0);
+    assert.equal(getInboxRow(db, 'r1')!.linked_at, null);
+  } else {
+    assert.equal(paid.statusCode, 201);
+    assert.equal((await setFor()).statusCode, 404);
+    assert.equal(getInboxRow(db, 'r1')!.for_person_id, null);
+  }
+});
+
 test('upload replies at once, reads in the background, and a retried id changes nothing', async () => {
   const { put, get, reader } = setup();
   const r = await put(ID);

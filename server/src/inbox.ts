@@ -15,10 +15,10 @@ type InboxRow = {
   id: string; jpeg: Buffer | null; bytes: number; captured_at: string; read_at: string | null; read_failed: number; model: string | null;
   merchant: string | null; purchase_date: string | null; total_cents: number | null; tax_cents: number | null; tip_cents: number | null;
   fees_cents: number | null; items: string | null; tagged: number; linked_transaction_id: string | null; linked_at: string | null;
-  split_applied: number; dismissed_at: string | null;
+  split_applied: number; dismissed_at: string | null; for_person_id: string | null;
 };
 type Item = { name: string; amountCents: number; people: string[] };
-const INBOX_COLS = 'id, bytes, captured_at, read_at, read_failed, model, merchant, purchase_date, total_cents, tax_cents, tip_cents, fees_cents, items, tagged, linked_transaction_id, linked_at, split_applied, dismissed_at';
+const INBOX_COLS = 'id, bytes, captured_at, read_at, read_failed, model, merchant, purchase_date, total_cents, tax_cents, tip_cents, fees_cents, items, tagged, linked_transaction_id, linked_at, split_applied, dismissed_at, for_person_id';
 type InboxMetadata = Omit<InboxRow, 'jpeg'>;
 
 export const getInboxRow = (db: Db, id: string) => db.prepare('SELECT * FROM inbox_receipts WHERE id = ?').get(id) as InboxRow | undefined;
@@ -47,7 +47,7 @@ function candidates(db: Db, row: InboxMetadata, member: Member): { exact: Transa
         AND NOT EXISTS (SELECT 1 FROM receipts r WHERE r.transaction_id = t.id)
       ORDER BY t.date DESC, t.created_at DESC, t.id DESC`).all(addDays(day, -1), addDays(day, 5)) as TxnRow[];
   const l = lookups(db, rows, member);
-  const txns = rows.map((r) => rowToTransaction(r, l));
+  const txns = rows.map((r) => rowToTransaction(r, l)).filter((t) => !row.for_person_id || t.splitLines.length === 0);
   const total = row.total_cents;
   const store = words(row.merchant);
   const exact = txns.filter((t) => -t.amountCents === total);
@@ -123,12 +123,19 @@ export function linkInbox(deps: Deps, inboxId: string, transactionId: string): L
     if (txn.amountCents >= 0) throw new ApiError(409, 'NOT_MONEY_OUT', 'only money out can have a receipt from the inbox');
     if (txn.hasReceipt) throw new ApiError(409, 'HAS_RECEIPT', 'this transaction already has a receipt');
     const now = deps.now().toISOString();
+    if (row.for_person_id) {
+      if (txn.paidByPersonId) throw new ApiError(409, 'PAID_BY_PERSON', 'a receipt for someone cannot be paid by someone else');
+      if (txn.splitLines.length) throw new ApiError(409, 'SPLIT_TRANSACTION', 'tag a split transaction through its lines');
+      assertPersonTaggable(db, row.for_person_id, 'personId', txn.id);
+      db.prepare('UPDATE transactions SET person_id = ?, category_id = NULL, category_owner_set = 1, updated_at = ? WHERE id = ?')
+        .run(row.for_person_id, now, transactionId);
+    }
     db.prepare(`INSERT INTO receipts (transaction_id, jpeg, bytes, created_at, tax_cents, tip_cents, fees_cents, total_cents, read_at, model)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(transactionId, row.jpeg, row.bytes, now, row.tax_cents, row.tip_cents, row.fees_cents, row.total_cents, row.read_at, row.model);
     const items = itemsOf(row);
     let applied = false;
-    if (row.tagged && items.length && txn.splitLines.length === 0 && txn.personId === null) {
+    if (!row.for_person_id && row.tagged && items.length && txn.splitLines.length === 0 && txn.personId === null) {
       try {
         // a savepoint: a rejected apply undoes only itself, and the link still happens
         db.transaction(() => applyItems(db, transactionId,
@@ -180,7 +187,7 @@ export function listInbox(db: Db, today: string): InboxList {
   return {
     waiting: waiting.map((r) => ({
       id: r.id, capturedAt: r.captured_at, status: status(r), merchant: r.merchant, purchaseDate: r.purchase_date, totalCents: r.total_cents,
-      tagged: r.tagged === 1, payee: payeeFor(known, r.merchant), suggestions: suggestionsFor(db, r, member),
+      tagged: r.tagged === 1, payee: payeeFor(known, r.merchant), forPersonId: r.for_person_id, suggestions: suggestionsFor(db, r, member),
     })),
     recentlyLinked: linked.map(toLinked),
   };

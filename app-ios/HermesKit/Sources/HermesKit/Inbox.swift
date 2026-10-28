@@ -7,8 +7,9 @@ public struct InboxReceipt: Codable, Sendable, Identifiable {
     public let merchant: String?
     public let purchaseDate: String?
     public let totalCents: Int?
-    /// Items were tagged in the inbox; linking applies them as the split.
+    /// Items were tagged in the inbox; linking applies them unless the whole charge is for someone.
     public let tagged: Bool
+    public let forPersonId: String?
     /// The payee name already used for this store ("Acme" for "Acme Wholesale"), else `merchant`.
     public let payee: String?
     public let suggestions: [LedgerTransaction]
@@ -29,6 +30,16 @@ public struct InboxList: Codable, Sendable {
 }
 
 struct LinkInboxBody: Encodable { let transactionId: String }
+
+public struct InboxForBody: Encodable, Sendable {
+    public let personId: String?
+    public init(personId: String?) { self.personId = personId }
+    private enum CodingKeys: String, CodingKey { case personId }
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(personId, forKey: .personId)
+    }
+}
 
 public struct PendingReceiptLink: Sendable {
     public var unlinked: LedgerTransaction?
