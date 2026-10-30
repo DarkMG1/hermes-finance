@@ -1,4 +1,3 @@
-import Charts
 import HermesKit
 import SwiftUI
 
@@ -43,14 +42,21 @@ struct SpendingView: View {
                 } else {
                     Card {
                         let top = Array(loaded.value.categories.prefix(8))
-                        Chart(top, id: \.name) { category in
-                            BarMark(x: .value("Spent", Double(category.spentCents) / 100), y: .value("Category", category.name))
-                                .foregroundStyle(Palette.accent)
+                        let most = max(top.map(\.spentCents).max() ?? 1, 1)
+                        // plain rows, not Swift Charts: on device its category axis drew each name half a row above its bar
+                        Grid(alignment: .leading, horizontalSpacing: Space.s, verticalSpacing: Space.s) {
+                            ForEach(top, id: \.name) { category in
+                                GridRow {
+                                    Text(category.name).textStyle(.caption, color: Palette.secondaryText).lineLimit(1)
+                                    GeometryReader { bar in
+                                        RoundedRectangle(cornerRadius: Space.xs)
+                                            .fill(Palette.accent)
+                                            .frame(width: bar.size.width * max(CGFloat(category.spentCents), 0) / CGFloat(most))
+                                    }
+                                    .frame(height: Space.l + Space.s)
+                                }
+                            }
                         }
-                        .chartXAxis(.hidden)
-                        // names beside their bars: iOS 26's default category axis stacks them over gridlines, out of line with the bars
-                        .chartYAxis { AxisMarks(preset: .extended, position: .leading) { _ in AxisValueLabel(horizontalSpacing: Space.s) } }
-                        .frame(height: CGFloat(top.count) * Space.xxl)
                     }
                     Card {
                         ForEach(loaded.value.categories, id: \.listId) { category in
