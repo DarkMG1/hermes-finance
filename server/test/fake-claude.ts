@@ -20,7 +20,7 @@ export const thinking = (i: number, thought: string, signature: string): Ev[] =>
   { type: 'content_block_stop', index: i },
 ];
 export const end = (stop: string): Ev[] => [{ type: 'message_delta', delta: { stop_reason: stop }, usage: { output_tokens: 50 } }, { type: 'message_stop' }];
-type Message = { role: string; content: string | { type: string; id?: string; tool_use_id?: string }[] };
+type Message = { role: string; content: string | { type: string; id?: string; tool_use_id?: string; text?: string }[] };
 
 /** The request rules the Messages API enforces on history: starts with user, roles alternate, tool_use and tool_result pair up. */
 export function assertValid(messages: Message[]): void {
@@ -28,7 +28,10 @@ export function assertValid(messages: Message[]): void {
   const ids = (m: Message | undefined, type: string, key: 'id' | 'tool_use_id') =>
     (Array.isArray(m?.content) ? m.content : []).filter((b) => b.type === type).map((b) => b[key]);
   messages.forEach((m, i) => {
-    if (Array.isArray(m.content)) assert.ok(m.content.length, `message ${i} has content`);
+    if (Array.isArray(m.content)) {
+      assert.ok(m.content.length, `message ${i} has content`);
+      assert.ok(m.content.every((b) => b.type !== 'text' || b.text), `message ${i} has no empty text block`);
+    }
     if (i) assert.notEqual(m.role, messages[i - 1]!.role, `roles alternate at ${i}`);
     if (m.role === 'assistant') assert.deepEqual(ids(messages[i + 1], 'tool_result', 'tool_use_id'), ids(m, 'tool_use', 'id'), `tool results answer message ${i}`);
     else assert.deepEqual(ids(m, 'tool_result', 'tool_use_id'), ids(messages[i - 1], 'tool_use', 'id'), `tool results at ${i} have their tool_use`);

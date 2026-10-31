@@ -65,6 +65,17 @@ test('tool round then answer', async () => {
   assert.equal((s.events.at(-1) as { costCents: number }).costCents, toCents(2 * costMicros('fake-chat-model', { input_tokens: 1000, output_tokens: 50 })));
 });
 
+test('an empty text block is never sent back on the next round', async () => {
+  const s = setup([
+    [start(), ...text(0), ...tool(1, 'tu1', 'spending', { period: 'month', date: '2026-03' }), ...end('tool_use')],
+    [start(), ...text(0, 'Done.'), ...end('end_turn')],
+  ]);
+  await s.run();
+  assert.equal(s.fake.requests.length, 2);
+  assert.deepEqual((bare(s.fake.requests[1]!.messages as Msg[]).at(-2)!.content as { type: string }[]).map((b) => b.type), ['tool_use']);
+  assert.equal(s.events.at(-1)!.type, 'done');
+});
+
 test('round cap', async () => {
   const rounds = Array.from({ length: MAX_ROUNDS + 2 }, (_, r) => [start(), ...tool(0, `tu${r}`, 'categories', {}), ...end('tool_use')]);
   rounds[MAX_ROUNDS - 1] = [start(), ...text(0, 'Final.'), ...end('end_turn')];

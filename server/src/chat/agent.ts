@@ -88,7 +88,7 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
       } finally {
         cost += claude.record('chat', model, key, usage);
       }
-      turn.push({ role: 'assistant', content: content.filter(Boolean) });
+      turn.push({ role: 'assistant', content: content.filter((b) => b && !(b.type === 'text' && !b.text)) });
       const uses = content.filter((b) => b?.type === 'tool_use');
       content = [];
       if (stop !== 'tool_use' || last || !uses.length) break;
