@@ -7,7 +7,7 @@ import { idempotentWrite } from '../idempotency.ts';
 import { parseBody } from '../validate.ts';
 import { answer, type ChatEvent } from '../chat/agent.ts';
 import { toolLabel } from '../chat/tools.ts';
-import { addUserMessage, createChat, deleteChat, dropFailedTail, findByClientId, getChat, listChats, startAssistant } from '../chat/store.ts';
+import { addUserMessage, createChat, deleteChat, dropFailedTail, findByClientId, getChat, listChats, saveAssistant, startAssistant } from '../chat/store.ts';
 
 const busyChats = new WeakMap<Deps['db'], Set<string>>();
 
@@ -35,6 +35,7 @@ export function chatRoutes(app: FastifyInstance, deps: Deps): void {
   app.get<{ Params: { id: string } }>('/v1/chats/:id', async (req) => find(req.params.id));
 
   app.delete<{ Params: { id: string } }>('/v1/chats/:id', async (req, reply) => {
+    if (busy.has(req.params.id)) throw chatBusy();
     if (!deleteChat(db, req.params.id)) throw new ApiError(404, 'NOT_FOUND', 'chat not found');
     return reply.code(204).send();
   });
@@ -61,13 +62,13 @@ export function chatRoutes(app: FastifyInstance, deps: Deps): void {
 
     reply.hijack();
     const raw = reply.raw;
-    raw.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', 'x-accel-buffering': 'no', connection: 'keep-alive' });
+    raw.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-accel-buffering': 'no', connection: 'keep-alive' });
     raw.flushHeaders();
     const write = (e: ChatEvent) => { raw.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`); };
     if (!assistantId) {
       for (const t of stored!.tools) write({ type: 'tool', name: t.name, label: toolLabel(t.name, t.input), input: t.input });
       if (stored!.text) write({ type: 'text', text: stored!.text });
-      write({ type: 'done', messageId: stored!.id, costCents: 0 });
+      write({ type: 'done', messageId: stored!.id, costCents: 0, status: stored!.status as 'done' | 'stopped' });
       raw.end();
       return;
     }
@@ -78,6 +79,11 @@ export function chatRoutes(app: FastifyInstance, deps: Deps): void {
     const keepalive = setInterval(() => raw.write(': keepalive\n\n'), 15_000);
     try {
       await answer(deps, chatId, assistantId, write, ac.signal);
+    } catch (e) {
+      // answer() handles Claude errors itself; anything else must not leave the row streaming or reject after hijack
+      console.error(`[hermes] chat route failed ${(e as Error).name}`);
+      try { saveAssistant(db, assistantId, [], 'failed', 'INTERNAL'); } catch { /* the stream still ends with the error */ }
+      write({ type: 'error', code: 'INTERNAL' });
     } finally {
       finished = true;
       clearInterval(keepalive);

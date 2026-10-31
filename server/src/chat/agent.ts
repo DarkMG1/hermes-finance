@@ -5,7 +5,7 @@ import { TOOLS, runTool, toolLabel } from './tools.ts';
 import { replay, saveAssistant, type ApiMessage } from './store.ts';
 
 export type ChatEvent = { type: 'tool'; name: string; label: string; input: Record<string, unknown> } | { type: 'text'; text: string }
-  | { type: 'done'; messageId: string; costCents: number } | { type: 'error'; code: string };
+  | { type: 'done'; messageId: string; costCents: number; status: 'done' | 'stopped' } | { type: 'error'; code: string };
 export const MAX_ROUNDS = 10;
 
 type Block = Record<string, unknown>;
@@ -97,5 +97,5 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
     return;
   }
   saveAssistant(deps.db, assistantId, turn, 'done', null);
-  emit({ type: 'done', messageId: assistantId, costCents: cost });
+  emit({ type: 'done', messageId: assistantId, costCents: cost, status: 'done' });
 }

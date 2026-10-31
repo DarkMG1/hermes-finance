@@ -27,7 +27,7 @@ test('plain answer streams text and saves done', async () => {
   await s.run();
   assert.deepEqual(s.fake.requests[0]!.messages, [{ role: 'user', content: 'How much did I spend?' }]);
   const cost = costCents('fake-chat-model', { input_tokens: 1000, output_tokens: 50 });
-  assert.deepEqual(s.events, [{ type: 'text', text: 'You spent ' }, { type: 'text', text: '$12.34.' }, { type: 'done', messageId: s.assistantId, costCents: cost }]);
+  assert.deepEqual(s.events, [{ type: 'text', text: 'You spent ' }, { type: 'text', text: '$12.34.' }, { type: 'done', messageId: s.assistantId, costCents: cost, status: 'done' }]);
   const msg = getChat(s.db, s.chatId)!.messages[1]!;
   assert.equal(msg.text, 'You spent $12.34.');
   assert.equal(msg.status, 'done');

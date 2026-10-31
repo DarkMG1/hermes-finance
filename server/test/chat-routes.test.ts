@@ -67,11 +67,13 @@ test('send streams events in order', async () => {
   assert.equal(res.statusCode, 200);
   assert.match(String(res.headers['content-type']), /^text\/event-stream/);
   assert.equal(res.headers['x-accel-buffering'], 'no');
+  assert.equal(res.headers['cache-control'], 'no-store');
+  assert.equal(res.headers['x-content-type-options'], 'nosniff');
   const ev = events(res.payload);
   assert.deepEqual(ev.map((e) => e.type), ['tool', 'text', 'text', 'done']);
   assert.deepEqual(ev[0], { type: 'tool', name: 'categories', label: 'Categories', input: {} });
   const chat = getChat(s.db, id)!;
-  assert.equal(ev[3]!.messageId, chat.messages[1]!.id);
+  assert.deepEqual([ev[3]!.messageId, ev[3]!.status], [chat.messages[1]!.id, 'done']);
   assert.deepEqual(chat.messages.map((m) => [m.role, m.status, m.text]), [['user', 'done', 'How much did I spend?'], ['assistant', 'done', 'You spent $12.34.']]);
   assert.equal(chat.title, 'How much did I spend?');
 });
@@ -82,7 +84,7 @@ test('same clientId after done replays without calling Claude', async () => {
   const first = events((await s.send(id, 'a')).payload);
   const again = events((await s.send(id, 'a')).payload);
   assert.equal(s.fake.requests.length, 2);
-  assert.deepEqual(again, [first[0], { type: 'text', text: 'You spent $12.34.' }, { ...first[3]!, costCents: 0 }]);
+  assert.deepEqual(again, [first[0], { type: 'text', text: 'You spent $12.34.' }, { ...first[3]!, costCents: 0, status: 'done' }]);
   assert.equal(getChat(s.db, id)!.messages.length, 2);
 });
 
@@ -96,6 +98,26 @@ test('same clientId after failed reruns', async () => {
   assert.deepEqual(getChat(s.db, id)!.messages.map((m) => [m.role, m.status]), [['user', 'done'], ['assistant', 'done']]);
 });
 
+test('a failed answer dropped by a later send: resending its clientId asks again as a new question', async () => {
+  const s = setup([[], answerRound('B.'), answerRound('A.')]);
+  s.fake.fail = { round: 0, code: 'HTTP_500' };
+  const id = await s.create();
+  await s.send(id, 'a', 'Question A');
+  await s.send(id, 'b', 'Question B');
+  assert.deepEqual(events((await s.send(id, 'a', 'Question A')).payload).map((e) => e.type), ['text', 'done']);
+  assert.deepEqual(getChat(s.db, id)!.messages.map((m) => [m.role, m.status, m.text]),
+    [['user', 'done', 'Question B'], ['assistant', 'done', 'B.'], ['user', 'done', 'Question A'], ['assistant', 'done', 'A.']]);
+});
+
+test('an unexpected throw ends the stream with INTERNAL and a failed row', async () => {
+  const s = setup();
+  Object.defineProperty(s.deps.config, 'chatModel', { get() { throw new Error('boom'); } });
+  const id = await s.create();
+  assert.deepEqual(events((await s.send(id, 'a')).payload), [{ type: 'error', code: 'INTERNAL' }]);
+  const m = getChat(s.db, id)!.messages[1]!;
+  assert.deepEqual([m.status, m.errorCode], ['failed', 'INTERNAL']);
+});
+
 test('second send while one is streaming → 409 CHAT_BUSY', async () => {
   const s = setup([answerRound('Slow ', 'answer.')]);
   let release!: () => void;
@@ -103,8 +125,7 @@ test('second send while one is streaming → 409 CHAT_BUSY', async () => {
   const id = await s.create();
   const first = s.send(id, 'a');
   await until(() => s.fake.requests.length === 1);
-  for (const clientId of ['b', 'a']) {
-    const busy = await s.send(id, clientId);
+  for (const busy of [await s.send(id, 'b'), await s.send(id, 'a'), await s.app.inject({ method: 'DELETE', url: `/v1/chats/${id}`, headers: AUTH })]) {
     assert.equal(busy.statusCode, 409);
     assert.equal(busy.json().code, 'CHAT_BUSY');
   }
@@ -176,13 +197,19 @@ test('keepalive comment written while waiting', async () => {
     let release!: () => void;
     s.fake.hold = { event: 0, until: new Promise<void>((r) => { release = r; }) };
     const id = await s.create();
+    const set = mock.method(globalThis, 'setInterval');
+    const clear = mock.method(globalThis, 'clearInterval');
     const res = s.send(id, 'a');
     await until(() => s.fake.requests.length === 1);
     await tick();
     mock.timers.tick(15_000);
     release();
-    assert.match((await res).payload, /^: keepalive\n\n/m);
+    const payload = (await res).payload;
+    assert.equal(payload.match(/^: keepalive\n\n/gm)?.length, 1);
+    // the keepalive interval is cleared once the stream ends
+    assert.equal(clear.mock.calls.some((c) => c.arguments[0] === set.mock.calls[0]!.result), true);
   } finally {
+    mock.restoreAll();
     mock.timers.reset();
   }
 });
@@ -206,7 +233,9 @@ test('client disconnect aborts and saves the partial text as stopped', async () 
     const m = getChat(s.db, id)!.messages[1]!;
     assert.deepEqual([m.status, m.text], ['stopped', 'Partial ']);
     // not busy any more: the same clientId replays the stopped answer
-    assert.deepEqual(events((await s.send(id, 'a')).payload).map((e) => e.type), ['text', 'done']);
+    const replayed = events((await s.send(id, 'a')).payload);
+    assert.deepEqual(replayed.map((e) => e.type), ['text', 'done']);
+    assert.equal(replayed[1]!.status, 'stopped');
   } finally {
     await s.app.close();
   }
