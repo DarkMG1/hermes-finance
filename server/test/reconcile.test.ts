@@ -204,3 +204,25 @@ test('moving a charge into a fully reconciled month marks it reconciled; open, e
   assert.equal((await move('y', '2026-01-20')).reconciled, true);
   assert.deepEqual((await get('/v1/reconcile/months')).months, [{ month: '2026-04', open: 1 }]);
 });
+
+test('move into a closed month: uncounted rows stay unmarked, pending and removed rows do not keep a month open, an amount-changed row does', async () => {
+  const { deps, mark } = api();
+  seedCategory(deps.db, { id: 'pay', name: 'Synthetic Pay', isIncome: true });
+  seedCategory(deps.db, { id: 'xfer', name: 'Synthetic Transfer', isTransfer: true });
+  const move = async (id: string, date: string) =>
+    (await buildApp(deps).inject({ method: 'PATCH', url: `/v1/transactions/${id}`, headers: { ...AUTH, 'idempotency-key': `mv-${id}-${date}` }, payload: { date } })).json();
+  await mark('jan', true);
+  seedTxn(deps.db, { id: 'pend', accountId: 'chk', date: '2026-01-10', amountCents: -70, categoryId: 'food', pending: true });
+  seedTxn(deps.db, { id: 'gone', accountId: 'chk', date: '2026-01-11', amountCents: -80, categoryId: 'food', removedAt: 'x' });
+  seedTxn(deps.db, { id: 'inc', accountId: 'chk', date: '2026-03-03', amountCents: -90, categoryId: 'pay' });
+  seedTxn(deps.db, { id: 'tr', accountId: 'chk', date: '2026-03-04', amountCents: -95, categoryId: 'xfer' });
+  assert.equal((await move('inc', '2026-01-20')).reconciled, false);
+  assert.equal((await move('tr', '2026-01-21')).reconciled, false);
+  const moved = await move('mar', '2026-01-22');
+  assert.equal(moved.reconciled, true);
+  assert.equal(moved.amountCents, -400);
+  assert.equal((deps.db.prepare("SELECT reconciled_cents AS c FROM transactions WHERE id = 'mar'").get() as { c: number }).c, -400);
+  deps.db.prepare("UPDATE transactions SET amount_cents = -150 WHERE id = 'jan'").run();
+  seedTxn(deps.db, { id: 'z', accountId: 'chk', date: '2026-03-05', amountCents: -60, categoryId: 'food' });
+  assert.equal((await move('z', '2026-01-25')).reconciled, false);
+});
