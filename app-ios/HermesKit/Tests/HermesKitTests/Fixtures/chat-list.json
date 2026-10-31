@@ -2,9 +2,9 @@
   "chats": [
     {
       "id": "chat-1",
-      "title": "Groceries",
+      "title": "How much did I spend on food?",
       "createdAt": "2026-03-15T12:00:00.000Z",
-      "updatedAt": "2026-03-15T12:00:05.000Z"
+      "updatedAt": "2026-03-15T12:00:00.000Z"
     }
   ]
 }

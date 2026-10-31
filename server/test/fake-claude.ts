@@ -1,7 +1,19 @@
 import assert from 'node:assert/strict';
 import { ClaudeError, type Claude } from '../src/chat/anthropic.ts';
 
-type Event = { type: string; [k: string]: unknown };
+export type Ev = { type: string; [k: string]: unknown };
+export const start = (): Ev => ({ type: 'message_start', message: { usage: { input_tokens: 1000 } } });
+export const text = (i: number, ...parts: string[]): Ev[] => [
+  { type: 'content_block_start', index: i, content_block: { type: 'text', text: '' } },
+  ...parts.map((p) => ({ type: 'content_block_delta', index: i, delta: { type: 'text_delta', text: p } })),
+  { type: 'content_block_stop', index: i },
+];
+export const tool = (i: number, id: string, name: string, input: unknown): Ev[] => [
+  { type: 'content_block_start', index: i, content_block: { type: 'tool_use', id, name, input: {} } },
+  { type: 'content_block_delta', index: i, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } },
+  { type: 'content_block_stop', index: i },
+];
+export const end = (stop: string): Ev[] => [{ type: 'message_delta', delta: { stop_reason: stop }, usage: { output_tokens: 50 } }, { type: 'message_stop' }];
 type Message = { role: string; content: string | { type: string; id?: string; tool_use_id?: string }[] };
 
 /** The request rules the Messages API enforces on history: starts with user, roles alternate, tool_use and tool_result pair up. */
@@ -21,8 +33,10 @@ export class FakeClaude implements Claude {
   requests: Record<string, unknown>[] = [];
   /** Throws ClaudeError(code) in round `round`: before the response when `event` is undefined, else before that event index. */
   fail?: { round: number; event?: number; code: string };
-  private readonly rounds: Event[][];
-  constructor(rounds: Event[][]) { this.rounds = rounds; }
+  /** Every round waits before event index `event` until `until` settles or the call is aborted. */
+  hold?: { event: number; until: Promise<unknown> };
+  private readonly rounds: Ev[][];
+  constructor(rounds: Ev[][]) { this.rounds = rounds; }
 
   async messages(): Promise<never> { throw new Error('not scripted'); }
   async stream(_feature: string, body: Record<string, unknown>, signal?: AbortSignal) {
@@ -32,8 +46,10 @@ export class FakeClaude implements Claude {
     const fail = this.fail?.round === round ? this.fail : undefined;
     if (fail && fail.event === undefined) throw new ClaudeError(fail.code);
     const events = this.rounds[round] ?? [];
+    const hold = this.hold;
     async function* gen() {
       for (const [i, e] of events.entries()) {
+        if (hold?.event === i) await new Promise((r) => { void hold.until.then(r); signal?.addEventListener('abort', r); });
         if (signal?.aborted) throw new ClaudeError('ABORTED');
         if (fail?.event === i) throw new ClaudeError(fail.code);
         yield e;

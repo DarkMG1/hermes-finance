@@ -4,22 +4,9 @@ import { answer, MAX_ROUNDS, type ChatEvent } from '../src/chat/agent.ts';
 import { addUserMessage, createChat, dropFailedTail, getChat, replay, saveAssistant, startAssistant } from '../src/chat/store.ts';
 import { runTool } from '../src/chat/tools.ts';
 import { costCents } from '../src/chat/anthropic.ts';
-import { FakeClaude } from './fake-claude.ts';
+import { FakeClaude, end, start, text, tool, type Ev } from './fake-claude.ts';
 import { makeTestDeps, seedAccount, seedTxn } from './helpers.ts';
 
-type Ev = { type: string; [k: string]: unknown };
-const start = (): Ev => ({ type: 'message_start', message: { usage: { input_tokens: 1000 } } });
-const text = (i: number, ...parts: string[]): Ev[] => [
-  { type: 'content_block_start', index: i, content_block: { type: 'text', text: '' } },
-  ...parts.map((p) => ({ type: 'content_block_delta', index: i, delta: { type: 'text_delta', text: p } })),
-  { type: 'content_block_stop', index: i },
-];
-const tool = (i: number, id: string, name: string, input: unknown): Ev[] => [
-  { type: 'content_block_start', index: i, content_block: { type: 'tool_use', id, name, input: {} } },
-  { type: 'content_block_delta', index: i, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } },
-  { type: 'content_block_stop', index: i },
-];
-const end = (stop: string): Ev[] => [{ type: 'message_delta', delta: { stop_reason: stop }, usage: { output_tokens: 50 } }, { type: 'message_stop' }];
 const NOW = '2026-03-15T12:00:00.000Z';
 
 function setup(rounds: Ev[][], question = 'How much did I spend?') {

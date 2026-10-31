@@ -40,12 +40,12 @@ export function deleteChat(db: Db, id: string): boolean {
   return db.prepare('DELETE FROM chat_conversations WHERE id = ?').run(id).changes > 0;
 }
 
-export function findByClientId(db: Db, clientId: string): { userId: string; assistant: { id: string; status: string } | null } | null {
+export function findByClientId(db: Db, clientId: string): { userId: string; chatId: string; assistant: { id: string; status: string } | null } | null {
   const user = db.prepare('SELECT id, conversation_id, seq FROM chat_messages WHERE client_id = ?').get(clientId) as { id: string; conversation_id: string; seq: number } | undefined;
   if (!user) return null;
   const assistant = db.prepare('SELECT id, status FROM chat_messages WHERE conversation_id = ? AND seq = ? AND role = \'assistant\'')
     .get(user.conversation_id, user.seq + 1) as { id: string; status: string } | undefined;
-  return { userId: user.id, assistant: assistant ?? null };
+  return { userId: user.id, chatId: user.conversation_id, assistant: assistant ?? null };
 }
 
 function insert(db: Db, chatId: string, role: Row['role'], clientId: string | null, content: unknown, status: Row['status'], nowIso: string): string {
