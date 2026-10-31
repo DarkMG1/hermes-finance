@@ -29,7 +29,7 @@ CREATE TABLE ai_usage (
   output_tokens INTEGER NOT NULL,
   cache_read_tokens INTEGER NOT NULL,
   cache_write_tokens INTEGER NOT NULL,
-  cost_cents INTEGER NOT NULL
+  cost_microdollars INTEGER NOT NULL
 );
 CREATE INDEX ai_usage_month ON ai_usage(month);
 CREATE TABLE ai_key_state (month TEXT PRIMARY KEY, backup_active INTEGER NOT NULL);

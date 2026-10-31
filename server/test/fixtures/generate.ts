@@ -1,7 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildApp } from '../../src/app.ts';
-import { createClaude } from '../../src/chat/anthropic.ts';
 import { FakeClaude, end, start, text as textRound, tool } from '../fake-claude.ts';
 import { AUTH, makeTestDeps, seedAccount, seedCategory, seedItem, seedPerson, seedSplit, seedTxn } from '../helpers.ts';
 
@@ -151,8 +150,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
     .reduce((t, id, i) => t.replaceAll(id, i ? `msg-${i}` : 'chat-1'), JSON.stringify(v))) as unknown;
   out['chat-list'] = chatIds(await get('/v1/chats'));
   out['chat-detail'] = chatIds(detail);
-  deps.claude = createClaude(deps);
-  db.prepare("INSERT INTO ai_usage (at, month, key, feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_cents) VALUES (?, '2026-03', 'main', 'chat', 'fixture-model', 1000, 50, 0, 0, 42)").run(deps.now().toISOString());
+  db.prepare("INSERT INTO ai_usage (at, month, key, feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_microdollars) VALUES (?, '2026-03', 'main', 'chat', 'fixture-model', 1000, 50, 0, 0, 420000)").run(deps.now().toISOString());
   out['ai-usage'] = await get('/v1/ai/usage');
   // ids minted at runtime are replaced so the files are stable
   const text = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;

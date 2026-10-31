@@ -1,6 +1,6 @@
 import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ClaudeError, costCents, createClaude } from '../src/chat/anthropic.ts';
+import { ClaudeError, costMicros, createClaude, usage as monthUsage } from '../src/chat/anthropic.ts';
 import { makeTestDeps } from './helpers.ts';
 
 const CREDIT = () => new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API.' } }), { status: 400 });
@@ -18,7 +18,7 @@ function setup(responses: ((init: RequestInit) => Response | Promise<Response>)[
     if (!next) throw new Error('no scripted response');
     return next(init!);
   })!;
-  return { deps, claude, keys };
+  return { deps, claude, keys, usage: () => monthUsage(deps.db, deps.now()) };
 }
 const code = async (p: Promise<unknown>) => { try { await p; } catch (e) { return e instanceof ClaudeError ? e.code : `not ClaudeError: ${String(e)}`; } return 'resolved'; };
 
@@ -28,16 +28,17 @@ test('no main key: no client', () => {
   assert.equal(createClaude(deps), null);
 });
 
-test('main key used, usage row written with month 2026-03, key main, feature receipt, cost from costCents', async () => {
+test('main key used, usage row written with month 2026-03, key main, feature receipt, cost from costMicros', async () => {
   const s = setup([OK]);
   const r = await s.claude.messages('receipt', BODY);
   assert.equal(r.key, 'main');
   assert.deepEqual(s.keys, ['synthetic-main']);
-  const row = s.deps.db.prepare('SELECT month, key, feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_cents FROM ai_usage').get();
+  const row = s.deps.db.prepare('SELECT month, key, feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_microdollars FROM ai_usage').get();
   const usage = { input_tokens: 1000, output_tokens: 200, cache_read_input_tokens: 50, cache_creation_input_tokens: 10 };
   assert.deepEqual({ ...row as object }, { month: '2026-03', key: 'main', feature: 'receipt', model: 'claude-opus-5-5', input_tokens: 1000, output_tokens: 200,
-    cache_read_tokens: 50, cache_write_tokens: 10, cost_cents: costCents('claude-opus-5-5', usage) });
-  assert.deepEqual(s.claude.usage(), { month: '2026-03', costCents: costCents('claude-opus-5-5', usage), backupActive: false });
+    cache_read_tokens: 50, cache_write_tokens: 10, cost_microdollars: costMicros('claude-opus-5-5', usage) });
+  // 4000 + 2.5 + 50 + 4000 microdollars rounds to 1 cent
+  assert.deepEqual(s.usage(), { month: '2026-03', costCents: 1, backupActive: false });
 });
 
 test('credit error on main switches to backup, retries once, and stays on backup for the month', async () => {
@@ -47,7 +48,7 @@ test('credit error on main switches to backup, retries once, and stays on backup
   assert.equal((await s.claude.messages('chat', BODY)).key, 'backup');
   assert.deepEqual(s.keys, ['synthetic-main', 'synthetic-backup', 'synthetic-backup']);
   assert.deepEqual({ ...s.deps.db.prepare('SELECT month, backup_active FROM ai_key_state').get() as object }, { month: '2026-03', backup_active: 1 });
-  assert.equal(s.claude.usage().backupActive, true);
+  assert.equal(s.usage().backupActive, true);
   assert.deepEqual(s.deps.db.prepare('SELECT key FROM ai_usage ORDER BY id').pluck().all(), ['backup', 'backup']);
 });
 
@@ -57,14 +58,14 @@ test('next month starts on main', async () => {
   s.deps.now = () => new Date('2026-04-01T12:00:00Z');
   assert.equal((await s.claude.messages('chat', BODY)).key, 'main');
   assert.equal(s.keys[2], 'synthetic-main');
-  assert.deepEqual(s.claude.usage(), { month: '2026-04', costCents: costCents('claude-opus-5-5', { input_tokens: 1000, output_tokens: 200, cache_read_input_tokens: 50, cache_creation_input_tokens: 10 }), backupActive: false });
+  assert.deepEqual(s.usage(), { month: '2026-04', costCents: 1, backupActive: false });
 });
 
 test('no backup configured or backup also out of credit is AI_CREDITS_EXHAUSTED', async () => {
   const none = setup([CREDIT], null);
   assert.equal(await code(none.claude.messages('chat', BODY)), 'AI_CREDITS_EXHAUSTED');
   // no backup in use, so nothing claims one
-  assert.equal(none.claude.usage().backupActive, false);
+  assert.equal(none.usage().backupActive, false);
   assert.equal(none.deps.db.prepare('SELECT COUNT(*) FROM ai_key_state').pluck().get(), 0);
   const both = setup([CREDIT, CREDIT, CREDIT]);
   assert.equal(await code(both.claude.messages('chat', BODY)), 'AI_CREDITS_EXHAUSTED');
@@ -85,7 +86,7 @@ test('other 400 / 529 / network / timeout / caller abort map to codes and never 
     const s = setup([f]);
     assert.equal(await code(s.claude.messages('chat', BODY)), want);
     assert.deepEqual(s.keys, ['synthetic-main']);
-    assert.equal(s.claude.usage().backupActive, false);
+    assert.equal(s.usage().backupActive, false);
   }
   const ctl = new AbortController();
   const s = setup([(init) => new Promise((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason)))]);
@@ -112,7 +113,7 @@ test('stream(): credit error before the stream starts falls back; events parse a
   assert.deepEqual(s.keys, ['synthetic-main', 'synthetic-backup']);
   // streamed calls record once the caller knows the totals
   assert.equal(s.deps.db.prepare('SELECT COUNT(*) FROM ai_usage').pluck().get(), 0);
-  s.claude.record('chat', 'claude-opus-5-5', key, { input_tokens: 10, output_tokens: 5 });
+  assert.equal(s.claude.record('chat', 'claude-opus-5-5', key, { input_tokens: 10, output_tokens: 5 }), 140);
   assert.deepEqual({ ...s.deps.db.prepare('SELECT key, feature, input_tokens, output_tokens, cache_read_tokens FROM ai_usage').get() as object },
     { key: 'backup', feature: 'chat', input_tokens: 10, output_tokens: 5, cache_read_tokens: 0 });
 });
@@ -124,11 +125,57 @@ test('stream(): an upstream error event throws STREAM_<type>', async () => {
   assert.equal(await code((async () => { for await (const e of events) void e; })()), 'STREAM_overloaded_error');
 });
 
-test('costCents: Opus 1M in + 1M out is 3000; unknown model priced as Opus; cache reads and writes', () => {
-  assert.equal(costCents('claude-opus-5-5', { input_tokens: 1_000_000, output_tokens: 1_000_000 }), 3000);
-  assert.equal(costCents('synthetic-model', { input_tokens: 1_000_000, output_tokens: 1_000_000 }), 3000);
-  assert.equal(costCents('claude-sonnet-5-5', { cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 1_000_000 }), 30 + 375);
-  assert.equal(costCents('claude-opus-5-5', {}), 0);
+test('costMicros: Opus $4 in / $20 out per MTok, Sonnet $2 / $10, cache reads 0.05x, writes 1.25x; unknown model priced as Opus', () => {
+  assert.equal(costMicros('claude-opus-5-5', { input_tokens: 1_000_000, output_tokens: 1_000_000 }), 24_000_000);
+  assert.equal(costMicros('synthetic-model', { input_tokens: 1_000_000, output_tokens: 1_000_000 }), 24_000_000);
+  assert.equal(costMicros('claude-opus-5-5', { cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 1_000_000 }), 200_000 + 5_000_000);
+  assert.equal(costMicros('claude-sonnet-5-5', { input_tokens: 1_000_000, output_tokens: 1_000_000, cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 1_000_000 }),
+    2_000_000 + 10_000_000 + 100_000 + 2_500_000);
+  assert.equal(costMicros('claude-opus-5-5', {}), 0);
+  // sub-cent calls add up: one 1000-token Sonnet input is 2000 microdollars (0.2 cent)
+  assert.equal(costMicros('claude-sonnet-5-5', { input_tokens: 1000 }), 2000);
+});
+
+test('usage() sums microdollars and rounds once; it reads the rows without a configured key', () => {
+  const { deps } = makeTestDeps();
+  const ins = deps.db.prepare("INSERT INTO ai_usage (at, month, key, feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_microdollars) VALUES ('x', ?, 'main', 'chat', 'm', 1, 1, 0, 0, ?)");
+  for (let i = 0; i < 3; i++) ins.run('2026-03', 4000);
+  ins.run('2026-02', 990_000);
+  assert.deepEqual(monthUsage(deps.db, deps.now()), { month: '2026-03', costCents: 1, backupActive: false });
+});
+
+test('the monthly spend limit error also switches to the backup key', async () => {
+  const limit = () => new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'You have reached your specified API usage limits. You will regain access on 2026-04-01 at 00:00 UTC.' } }), { status: 400 });
+  const s = setup([limit, OK]);
+  assert.equal((await s.claude.messages('chat', BODY)).key, 'backup');
+  assert.equal(s.usage().backupActive, true);
+});
+
+test('a prompt over the context window is CHAT_TOO_LONG', async () => {
+  for (const message of ['prompt is too long: 1000500 tokens > 1000000 maximum', 'input length and `max_tokens` exceed context limit: 990000 + 16000 > 1000000']) {
+    const s = setup([() => new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message } }), { status: 400 })]);
+    assert.equal(await code(s.claude.messages('chat', BODY)), 'CHAT_TOO_LONG');
+    assert.deepEqual(s.keys, ['synthetic-main']);
+  }
+});
+
+test('a failed call logs the error type (and the message for 4xx), never the key or the request', async () => {
+  const lines: string[] = [];
+  const { error } = console;
+  console.error = (...a: unknown[]) => { lines.push(a.join(' ')); };
+  try {
+    const s = setup([
+      () => new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'messages: roles must alternate' } }), { status: 400 }),
+      () => new Response(JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'SYNTHETIC SERVER DETAIL' } }), { status: 500 }),
+    ]);
+    const body = { ...BODY, messages: [{ role: 'user', content: 'SYNTHETIC QUESTION TEXT' }] };
+    await code(s.claude.messages('chat', body));
+    await code(s.claude.messages('chat', body));
+  } finally {
+    console.error = error;
+  }
+  assert.deepEqual(lines, ['[hermes] claude HTTP 400 type=invalid_request_error message=messages: roles must alternate', '[hermes] claude HTTP 500 type=api_error']);
+  for (const l of lines) assert.ok(!/synthetic-main|synthetic-backup|SYNTHETIC/.test(l), l);
 });
 
 test('logs never contain the key', async () => {
