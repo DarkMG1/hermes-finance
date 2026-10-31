@@ -39,26 +39,48 @@ function fail(e: unknown, signal?: AbortSignal): ClaudeError {
   return new ClaudeError(e instanceof Error && e.name === 'TimeoutError' ? 'TIMEOUT' : 'UNREACHABLE');
 }
 
-async function* sse(body: ReadableStream<Uint8Array>, signal?: AbortSignal): AsyncGenerator<Event> {
+function parseEvent(block: string): Event | null {
+  const data = block.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).replace(/^ /, '')).join('\n');
+  if (!data) return null;
+  let event: Event;
+  try { event = JSON.parse(data) as Event; } catch { throw new ClaudeError('INVALID_OUTPUT'); }
+  if (event.type === 'error') throw new ClaudeError(`STREAM_${(event.error as { type?: string } | undefined)?.type ?? 'unknown'}`);
+  return event;
+}
+
+async function* sse(body: ReadableStream<Uint8Array>, timer: Timer, signal?: AbortSignal): AsyncGenerator<Event> {
   let buf = '';
   const decoder = new TextDecoder();
   try {
     for await (const chunk of body) {
-      buf += decoder.decode(chunk, { stream: true });
-      let end;
-      while ((end = buf.indexOf('\n\n')) >= 0) {
-        const data = buf.slice(0, end).split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).replace(/^ /, '')).join('\n');
-        buf = buf.slice(end + 2);
-        if (!data) continue;
-        let event: Event;
-        try { event = JSON.parse(data) as Event; } catch { throw new ClaudeError('INVALID_OUTPUT'); }
-        if (event.type === 'error') throw new ClaudeError(`STREAM_${(event.error as { type?: string } | undefined)?.type ?? 'unknown'}`);
-        yield event;
-      }
+      timer.arm();
+      // a \r at the end of one chunk pairs with the \n starting the next, so normalize the joined buffer
+      buf = (buf + decoder.decode(chunk, { stream: true })).replace(/\r\n/g, '\n');
+      const blocks = buf.split('\n\n');
+      buf = blocks.pop()!;
+      for (const b of blocks) { const e = parseEvent(b); if (e) yield e; }
     }
+    const last = parseEvent((buf + decoder.decode()).replace(/\r\n/g, '\n'));
+    if (last) yield last;
   } catch (e) {
     throw fail(e, signal);
+  } finally {
+    timer.disarm();
   }
+}
+
+type Timer = { signal: AbortSignal; arm(): void; disarm(): void };
+/** Aborts with TimeoutError when not re-armed within ms: covers the wait for headers, then each idle gap of a stream. */
+function idleTimer(ms: number): Timer {
+  const ctl = new AbortController();
+  let t: ReturnType<typeof setTimeout> | undefined;
+  const timer = {
+    signal: ctl.signal,
+    arm() { clearTimeout(t); t = setTimeout(() => ctl.abort(new DOMException('timed out', 'TimeoutError')), ms); },
+    disarm() { clearTimeout(t); },
+  };
+  timer.arm();
+  return timer;
 }
 
 export function createClaude(deps: { db: Db; config: Config; now: () => Date }, fetchFn: typeof fetch = fetch): Claude | null {
@@ -69,46 +91,48 @@ export function createClaude(deps: { db: Db; config: Config; now: () => Date }, 
   const backupActive = (m: string) => db.prepare('SELECT backup_active FROM ai_key_state WHERE month = ?').pluck().get(m) === 1;
 
   // Falls back to the backup key only on the initial HTTP status, before any of the reply is used.
-  async function post(feature: Feature, body: Record<string, unknown>, signal?: AbortSignal): Promise<{ res: Response; key: Key }> {
+  async function post(feature: Feature, body: Record<string, unknown>, signal?: AbortSignal): Promise<{ res: Response; key: Key; timer: Timer }> {
     const m = month();
     let key: Key = backupActive(m) && config.anthropicBackupKey ? 'backup' : 'main';
     const json = JSON.stringify(body);
     for (;;) {
+      const timer = idleTimer(feature === 'chat' ? 120_000 : 60_000);
       let res: Response;
       try {
         res = await fetchFn('https://api.anthropic.com/v1/messages', {
           method: 'POST',
           headers: { 'x-api-key': key === 'main' ? mainKey! : config.anthropicBackupKey!, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
           body: json,
-          signal: AbortSignal.any([signal, AbortSignal.timeout(feature === 'chat' ? 120_000 : 60_000)].filter((s) => s !== undefined)),
+          signal: signal ? AbortSignal.any([signal, timer.signal]) : timer.signal,
         });
       } catch (e) {
+        timer.disarm();
         throw fail(e, signal);
       }
-      if (res.ok) return { res, key };
-      const text = await res.text().catch((e: unknown) => { throw fail(e, signal); });
+      if (res.ok) return { res, key, timer };
+      const text = await res.text().catch((e: unknown) => { throw fail(e, signal); }).finally(() => timer.disarm());
       if (res.status !== 400 || !CREDIT.test(text)) throw new ClaudeError(`HTTP_${res.status}`);
-      if (key === 'backup') throw new ClaudeError('AI_CREDITS_EXHAUSTED');
+      if (key === 'backup' || !config.anthropicBackupKey) throw new ClaudeError('AI_CREDITS_EXHAUSTED');
       db.prepare('INSERT OR REPLACE INTO ai_key_state (month, backup_active) VALUES (?, 1)').run(m);
       console.log('[hermes] claude main key out of credit: backup key for the rest of the month');
-      if (!config.anthropicBackupKey) throw new ClaudeError('AI_CREDITS_EXHAUSTED');
       key = 'backup';
     }
   }
 
   const claude: Claude = {
     async messages(feature, body, signal) {
-      const { res, key } = await post(feature, body, signal);
+      const { res, key, timer } = await post(feature, body, signal);
       let reply: unknown;
-      try { reply = await res.json(); } catch (e) { throw e instanceof SyntaxError ? new ClaudeError('INVALID_OUTPUT') : fail(e, signal); }
+      timer.arm();
+      try { reply = await res.json(); } catch (e) { throw e instanceof SyntaxError ? new ClaudeError('INVALID_OUTPUT') : fail(e, signal); } finally { timer.disarm(); }
       if (reply === null || typeof reply !== 'object') throw new ClaudeError('INVALID_OUTPUT');
       claude.record(feature, String(body.model), key, (reply as { usage?: Usage }).usage ?? {});
       return { reply, key };
     },
     async stream(feature, body, signal) {
-      const { res, key } = await post(feature, body, signal);
-      if (!res.body) throw new ClaudeError('INVALID_OUTPUT');
-      return { events: sse(res.body, signal), key };
+      const { res, key, timer } = await post(feature, body, signal);
+      if (!res.body) { timer.disarm(); throw new ClaudeError('INVALID_OUTPUT'); }
+      return { events: sse(res.body, timer, signal), key };
     },
     record(feature, model, key, u) {
       const cents = costCents(model, u);

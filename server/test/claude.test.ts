@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ClaudeError, costCents, createClaude } from '../src/chat/anthropic.ts';
 import { makeTestDeps } from './helpers.ts';
@@ -63,7 +63,9 @@ test('next month starts on main', async () => {
 test('no backup configured or backup also out of credit is AI_CREDITS_EXHAUSTED', async () => {
   const none = setup([CREDIT], null);
   assert.equal(await code(none.claude.messages('chat', BODY)), 'AI_CREDITS_EXHAUSTED');
-  assert.equal(none.claude.usage().backupActive, true);
+  // no backup in use, so nothing claims one
+  assert.equal(none.claude.usage().backupActive, false);
+  assert.equal(none.deps.db.prepare('SELECT COUNT(*) FROM ai_key_state').pluck().get(), 0);
   const both = setup([CREDIT, CREDIT, CREDIT]);
   assert.equal(await code(both.claude.messages('chat', BODY)), 'AI_CREDITS_EXHAUSTED');
   assert.equal(await code(both.claude.messages('chat', BODY)), 'AI_CREDITS_EXHAUSTED');
@@ -144,4 +146,67 @@ test('logs never contain the key', async () => {
   }
   assert.ok(lines.length > 0);
   for (const l of lines) assert.ok(!l.includes('synthetic-main') && !l.includes('synthetic-backup'), l);
+});
+
+const enc = (t: string) => new TextEncoder().encode(t);
+const streamOf = (chunks: string[]) => () => new Response(new ReadableStream({ start(c) { for (const ch of chunks) c.enqueue(enc(ch)); c.close(); } }), { status: 200 });
+const types = async (events: AsyncIterable<{ type: string }>) => { const got = []; for await (const e of events) got.push(e.type); return got; };
+
+test('stream(): CRLF line endings, split between chunks, and a last event without the blank line still parse', async () => {
+  const s = setup([streamOf(['event: message_start\r\ndata: {"type":"message_start"}\r', '\n\r\ndata: {"type":"ping"}\r\n\r\n', 'data: {"type":"message_stop"}\n'])]);
+  assert.deepEqual(await types((await s.claude.stream('chat', BODY)).events), ['message_start', 'ping', 'message_stop']);
+});
+
+// the scripted body emits one event after each delay, then closes; an abort errors it like a real fetch body
+const timed = (delays: number[]) => (init: RequestInit) => {
+  let i = 0;
+  return new Response(new ReadableStream({
+    start(c) { init.signal!.addEventListener('abort', () => c.error(init.signal!.reason)); },
+    async pull(c) {
+      if (i === delays.length) return c.close();
+      await new Promise((r) => setTimeout(r, delays[i]));
+      c.enqueue(enc(`data: {"type":"e${i++}"}\n\n`));
+    },
+  }), { status: 200 });
+};
+async function drive<T>(p: Promise<T>, ms: number): Promise<T> {
+  let done = false;
+  void p.then(() => { done = true; }, () => { done = true; });
+  for (let t = 0; t < ms && !done; t += 10_000) {
+    await new Promise((r) => setImmediate(r));
+    mock.timers.tick(10_000);
+  }
+  return p;
+}
+
+test('stream(): the timeout is per idle gap, not on the whole answer; a stall over 120 s is TIMEOUT', async (t) => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => mock.timers.reset());
+  const slow = setup([timed([50_000, 50_000, 50_000, 50_000])]);
+  const { events } = await slow.claude.stream('chat', BODY);
+  assert.deepEqual(await drive(types(events), 400_000), ['e0', 'e1', 'e2', 'e3']);
+  const stall = setup([timed([10_000, 130_000])]);
+  const s2 = await stall.claude.stream('chat', BODY);
+  assert.equal(await drive(code(types(s2.events)), 400_000), 'TIMEOUT');
+  const ctl = new AbortController();
+  const aborted = setup([timed([10_000, 130_000])]);
+  const s3 = await aborted.claude.stream('chat', BODY, ctl.signal);
+  const p = code(types(s3.events));
+  await drive(Promise.race([p, new Promise((r) => setTimeout(r, 20_000))]), 30_000);
+  ctl.abort();
+  assert.equal(await p, 'ABORTED');
+});
+
+test('the request timeout covers the wait for headers: chat 120 s, receipts 60 s', async (t) => {
+  mock.timers.enable({ apis: ['setTimeout'] });
+  t.after(() => mock.timers.reset());
+  const hang = (init: RequestInit) => new Promise<Response>((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason)));
+  for (const [feature, ms] of [['chat', 120_000], ['receipt', 60_000]] as const) {
+    const s = setup([hang]);
+    let settled = false;
+    const p = code(s.claude.messages(feature, BODY)).finally(() => { settled = true; });
+    await drive(new Promise((r) => setTimeout(r, ms - 10_000)), ms);
+    assert.equal(settled, false);
+    assert.equal(await drive(p, 30_000), 'TIMEOUT');
+  }
 });

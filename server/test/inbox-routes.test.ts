@@ -4,6 +4,7 @@ import { buildApp } from '../src/app.ts';
 import { getInboxRow, matchInbox, storeRead } from '../src/inbox.ts';
 import { applyPages } from '../src/sync/apply.ts';
 import { txn } from './fake-plaid.ts';
+import { ReaderError } from '../src/receipt-reader.ts';
 import { AUTH, makeTestDeps, seedAccount, seedCategory, seedPerson, seedTxn } from './helpers.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2]);
@@ -194,6 +195,16 @@ test('a failed read and no reader both mark the receipt failed; read again recov
   await settle();
   assert.equal((await get('/v1/receipts/inbox')).json().waiting.find((w: { id: string }) => w.id === other).status, 'failed');
   assert.equal((await post(`/v1/receipts/inbox/${other}/read`)).statusCode, 503);
+});
+
+test('an inbox read with both API keys out of credit is 402 AI_CREDITS_EXHAUSTED; the background read marks it failed', async () => {
+  const { put, get, post, reader } = setup();
+  reader.next = new ReaderError('AI_CREDITS_EXHAUSTED');
+  await put(ID);
+  await settle();
+  assert.equal((await get('/v1/receipts/inbox')).json().waiting[0].status, 'failed');
+  const r = await post(`/v1/receipts/inbox/${ID}/read`);
+  assert.deepEqual([r.statusCode, r.json().code], [402, 'AI_CREDITS_EXHAUSTED']);
 });
 
 test('a read that finishes after a hand link stores nothing', async () => {
