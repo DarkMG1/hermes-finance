@@ -58,21 +58,34 @@ export const TOOLS: ToolDef[] = [...ENTRIES.values()].map((e) => e.def);
 
 const ARRAY_KEYS = ['transactions', 'rows', 'items', 'points', 'holdings'];
 
-function serialize(result: unknown): string {
+const NOTE = { truncated: true, note: 'Result cut; narrow the dates or filters.' };
+
+/** Fits a result under RESULT_MAX. Paged results are re-run with a smaller limit so nextCursor stays the function's own; other arrays are trimmed, largest first. */
+function fit(e: Entry, deps: Deps, input: Record<string, unknown>, today: string, result: unknown): string {
   let s = JSON.stringify(result);
   if (s.length <= RESULT_MAX) return s;
-  const obj = result as Record<string, unknown>;
-  const key = result && typeof result === 'object' ? ARRAY_KEYS.filter((k) => Array.isArray(obj[k])).sort((a, b) => (obj[b] as unknown[]).length - (obj[a] as unknown[]).length)[0] : undefined;
-  if (key) {
-    const all = obj[key] as unknown[];
-    let n = all.length;
-    do {
-      n = Math.floor(n * 0.8);
-      s = JSON.stringify({ ...obj, [key]: all.slice(0, n), truncated: true, note: 'Result cut; narrow the dates or filters.' });
-    } while (s.length > RESULT_MAX && n > 0);
-    return s;
+  let out = result;
+  let limit = typeof input.limit === 'number' ? input.limit : 0;
+  while (s.length > RESULT_MAX && limit > 1) {
+    limit = Math.floor(limit * 0.8);
+    out = e.run(deps, { ...input, limit }, today);
+    s = JSON.stringify({ ...(out as object), ...NOTE });
   }
-  return JSON.stringify({ truncated: true, partial: s.slice(0, RESULT_MAX - 100) });
+  if (out && typeof out === 'object' && !Array.isArray(out)) {
+    const obj: Record<string, unknown> = { ...(out as Record<string, unknown>), ...NOTE };
+    const arrays = () => ARRAY_KEYS.filter((k) => Array.isArray(obj[k]) && (obj[k] as unknown[]).length);
+    s = JSON.stringify(obj);
+    while (s.length > RESULT_MAX && arrays().length) {
+      const k = arrays().sort((x, y) => (obj[y] as unknown[]).length - (obj[x] as unknown[]).length)[0]!;
+      obj[k] = (obj[k] as unknown[]).slice(0, Math.floor((obj[k] as unknown[]).length * 0.8));
+      s = JSON.stringify(obj);
+    }
+    if (s.length <= RESULT_MAX) return s;
+  }
+  let n = RESULT_MAX;
+  const raw = JSON.stringify(out);
+  do { n = Math.floor(n * 0.8); s = JSON.stringify({ truncated: true, partial: raw.slice(0, n) }); } while (s.length > RESULT_MAX);
+  return s;
 }
 
 export function runTool(deps: Deps, name: string, input: unknown): { content: string; isError: boolean } {
@@ -82,8 +95,9 @@ export function runTool(deps: Deps, name: string, input: unknown): { content: st
   const parsed = e.schema.safeParse(input ?? {});
   if (!parsed.success) return fail(z.prettifyError(parsed.error));
   try {
-    const result = e.run(deps, parsed.data, localDay(deps.now()));
-    return result == null ? fail('not found') : { content: serialize(result), isError: false };
+    const today = localDay(deps.now());
+    const result = e.run(deps, parsed.data, today);
+    return result == null ? fail('not found') : { content: fit(e, deps, parsed.data as Record<string, unknown>, today, result), isError: false };
   } catch (err) {
     return fail(err instanceof ApiError ? err.message : 'tool failed');
   }
@@ -95,6 +109,7 @@ const LABELS: Record<string, string> = {
 };
 
 export function toolLabel(name: string, input: Record<string, unknown>): string {
-  const detail = [input.date ?? input.month, input.name, input.range].find((v) => typeof v === 'string');
+  const span = input.from || input.to ? `${input.from ?? ''} – ${input.to ?? ''}` : undefined;
+  const detail = [span, input.date ?? input.month, input.name, input.range].find((v) => typeof v === 'string');
   return `${LABELS[name] ?? name}${detail ? ` · ${detail}` : ''}`;
 }

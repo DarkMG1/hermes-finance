@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { RESULT_MAX, TOOLS, runTool, toolLabel } from '../src/chat/tools.ts';
-import { getSpending } from '../src/cashflow.ts';
+import { getExpenses, getSpending } from '../src/cashflow.ts';
 import { getNetWorth, localDay } from '../src/networth.ts';
+import { getInvestments } from '../src/investments.ts';
 import { getRecurring } from '../src/recurring.ts';
 import { listAccounts, listTransactions } from '../src/ledger.ts';
 import { listPeople } from '../src/people.ts';
@@ -68,4 +69,40 @@ test('every TOOLS entry has an object input_schema and a runTool branch', () => 
 test('toolLabel', () => {
   assert.equal(toolLabel('spending', { period: 'month', date: '2026-09' }), 'Spending · 2026-09');
   assert.equal(toolLabel('accounts', {}), 'Accounts');
+});
+
+test('a cut page keeps a cursor that continues with no gap or duplicate', () => {
+  const { deps, db } = setup();
+  for (let i = 0; i < 300; i++) seedTxn(db, { id: `m${String(i).padStart(3, '0')}`, accountId: 'a1', date: '2026-02-01', amountCents: -100, payee: 'SYNTHETIC GROCER WITH A LONG NAME' });
+  const ids: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const r = JSON.parse(runTool(deps, 'transactions', { limit: 200, from: '2026-02-01', to: '2026-02-01', ...(cursor ? { cursor } : {}) }).content);
+    ids.push(...r.transactions.map((t: { id: string }) => t.id));
+    cursor = r.nextCursor ?? undefined;
+  } while (cursor);
+  assert.equal(ids.length, 300);
+  assert.equal(new Set(ids).size, 300);
+  assert.deepEqual(ids, [...ids].sort().reverse());
+});
+
+test('results always fit the cap, even quote-heavy ones', () => {
+  const { deps, db } = setup();
+  for (let i = 0; i < 40; i++) seedTxn(db, { id: `q${i}`, accountId: 'a1', date: '2026-02-01', amountCents: -100, payee: '"'.repeat(150), bankDescription: '\\"'.repeat(400) });
+  for (const input of [{ limit: 200 }, { limit: 1 }]) {
+    const c = runTool(deps, 'transactions', input).content;
+    assert.ok(c.length <= RESULT_MAX);
+    if (input.limit === 200) assert.equal(JSON.parse(c).truncated, true);
+  }
+});
+
+test('toolLabel shows a date range', () => {
+  assert.equal(toolLabel('transactions', { from: '2026-09-01', to: '2026-09-30' }), 'Transactions · 2026-09-01 – 2026-09-30');
+});
+
+test('investments and expenses match their functions', () => {
+  const { deps, db } = setup();
+  assert.deepEqual(call(deps, 'investments', {}), JSON.parse(JSON.stringify(getInvestments(db))));
+  const q = { period: 'month' as const, date: '2026-03', kind: 'out' as const, limit: 50 };
+  assert.deepEqual(call(deps, 'expenses', { period: 'month', date: '2026-03' }), getExpenses(db, q));
 });
