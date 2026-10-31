@@ -399,8 +399,8 @@ export const ChatSummary = z.object({ id: Id, title: z.string(), createdAt: z.st
 export type ChatSummary = z.infer<typeof ChatSummary>;
 export const ChatList = z.object({ chats: z.array(ChatSummary) });
 export type ChatList = z.infer<typeof ChatList>;
-/** One tool Claude used for an answer; input is the tool's arguments, shown when tapped. */
-export const ChatToolUse = z.object({ name: z.string(), input: z.record(z.string(), z.unknown()) });
+/** One tool Claude used for an answer; input is the tool's arguments, shown when tapped; label is how the app names it. */
+export const ChatToolUse = z.object({ name: z.string(), input: z.record(z.string(), z.unknown()), label: z.string().optional() });
 export type ChatToolUse = z.infer<typeof ChatToolUse>;
 export const ChatMessage = z.object({
   id: Id, role: z.enum(['user', 'assistant']), text: z.string(), tools: z.array(ChatToolUse),

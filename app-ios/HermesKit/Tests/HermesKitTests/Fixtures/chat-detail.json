@@ -26,7 +26,8 @@
           "input": {
             "period": "month",
             "date": "2026-03"
-          }
+          },
+          "label": "Spending · March 2026"
         }
       ]
     }

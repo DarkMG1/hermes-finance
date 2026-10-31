@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import { request } from 'node:http';
 import { setImmediate as tick } from 'node:timers/promises';
 import { buildApp } from '../src/app.ts';
-import { createClaude } from '../src/chat/anthropic.ts';
 import { addUserMessage, createChat, getChat, startAssistant } from '../src/chat/store.ts';
 import { FakeClaude, end, start, text, tool, type Ev } from './fake-claude.ts';
 import { AUTH, makeTestDeps } from './helpers.ts';
@@ -44,7 +43,7 @@ test('create, list newest first, get, delete (usage rows kept)', async () => {
   assert.deepEqual((await s.app.inject({ method: 'GET', url: '/v1/chats', headers: AUTH })).json().chats.map((c: { id: string }) => c.id), [second, res.json().id]);
   const got = await s.app.inject({ method: 'GET', url: `/v1/chats/${second}`, headers: AUTH });
   assert.deepEqual(got.json().messages, []);
-  s.db.prepare("INSERT INTO ai_usage (at, month, key, feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_cents) VALUES ('x', '2026-03', 'main', 'chat', 'm', 1, 1, 0, 0, 5)").run();
+  s.db.prepare("INSERT INTO ai_usage (at, month, key, feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_microdollars) VALUES ('x', '2026-03', 'main', 'chat', 'm', 1, 1, 0, 0, 50000)").run();
   assert.equal((await s.app.inject({ method: 'DELETE', url: `/v1/chats/${second}`, headers: AUTH })).statusCode, 204);
   assert.equal((await s.app.inject({ method: 'GET', url: `/v1/chats/${second}`, headers: AUTH })).json().code, 'NOT_FOUND');
   assert.equal((await s.app.inject({ method: 'DELETE', url: `/v1/chats/${second}`, headers: AUTH })).statusCode, 404);
@@ -54,7 +53,7 @@ test('create, list newest first, get, delete (usage rows kept)', async () => {
 test('chat routes need the token', async () => {
   const s = setup([answerRound('x')]);
   const id = await s.create();
-  for (const [method, url] of [['GET', '/v1/chats'], ['POST', `/v1/chats/${id}/messages`], ['GET', '/v1/ai/usage']] as const) {
+  for (const [method, url] of [['GET', '/v1/chats'], ['POST', `/v1/chats/${id}/messages`], ['POST', `/v1/chats/${id}/stop`], ['GET', '/v1/ai/usage']] as const) {
     assert.equal((await s.app.inject({ method, url, payload: method === 'POST' ? { clientId: 'a', text: 'hi' } : undefined })).statusCode, 401);
   }
   assert.equal(s.fake.requests.length, 0);
@@ -118,6 +117,21 @@ test('an unexpected throw ends the stream with INTERNAL and a failed row', async
   assert.deepEqual([m.status, m.errorCode], ['failed', 'INTERNAL']);
 });
 
+test('a throw after the answer was saved leaves the saved answer as it is', async () => {
+  const s = setup([answerRound('Kept.')]);
+  const id = await s.create();
+  const stringify = JSON.stringify;
+  mock.method(JSON, 'stringify', (v: unknown, ...rest: []) => {
+    if ((v as { type?: string } | null)?.type === 'done') throw new Error('boom');
+    return stringify(v, ...rest);
+  });
+  let payload: string;
+  try { payload = (await s.send(id, 'a')).payload; } finally { mock.restoreAll(); }
+  assert.deepEqual(events(payload).map((e) => e.type), ['text', 'error']);
+  const m = getChat(s.db, id)!.messages[1]!;
+  assert.deepEqual([m.status, m.text], ['done', 'Kept.']);
+});
+
 test('second send while one is streaming → 409 CHAT_BUSY', async () => {
   const s = setup([answerRound('Slow ', 'answer.')]);
   let release!: () => void;
@@ -166,16 +180,15 @@ test('credits exhausted → error event AI_CREDITS_EXHAUSTED and failed row', as
   assert.deepEqual([m.status, m.errorCode], ['failed', 'AI_CREDITS_EXHAUSTED']);
 });
 
-test('GET /v1/ai/usage sums this month only and reports backupActive', async () => {
+test('GET /v1/ai/usage sums this month only and reports backupActive, with or without a configured key', async () => {
   const s = setup();
   const usage = async () => (await s.app.inject({ method: 'GET', url: '/v1/ai/usage', headers: AUTH })).json();
   s.deps.claude = null;
   assert.deepEqual(await usage(), { month: '2026-03', costCents: 0, backupActive: false });
-  s.deps.claude = createClaude(s.deps);
-  const ins = s.db.prepare("INSERT INTO ai_usage (at, month, key, feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_cents) VALUES ('x', ?, 'main', 'chat', 'm', 1, 1, 0, 0, ?)");
-  ins.run('2026-02', 500);
-  ins.run('2026-03', 30);
-  ins.run('2026-03', 12);
+  const ins = s.db.prepare("INSERT INTO ai_usage (at, month, key, feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_microdollars) VALUES ('x', ?, 'main', 'chat', 'm', 1, 1, 0, 0, ?)");
+  ins.run('2026-02', 5_000_000);
+  ins.run('2026-03', 300_000);
+  ins.run('2026-03', 120_000);
   s.db.prepare("INSERT INTO ai_key_state (month, backup_active) VALUES ('2026-03', 1)").run();
   assert.deepEqual(await usage(), { month: '2026-03', costCents: 42, backupActive: true });
 });
@@ -214,9 +227,10 @@ test('keepalive comment written while waiting', async () => {
   }
 });
 
-test('client disconnect aborts and saves the partial text as stopped', async () => {
-  const s = setup([answerRound('Partial ', 'never sent.')]);
-  s.fake.hold = { event: 3, until: new Promise(() => {}) };
+test('a client that goes away mid-answer does not stop it: the answer finishes and is saved done', async () => {
+  const s = setup([answerRound('Partial ', 'and the rest.')]);
+  let release!: () => void;
+  s.fake.hold = { event: 3, until: new Promise<void>((r) => { release = r; }) };
   const id = await s.create();
   await s.app.listen({ port: 0, host: '127.0.0.1' });
   try {
@@ -229,16 +243,36 @@ test('client disconnect aborts and saves the partial text as stopped', async () 
       req.once('error', reject);
       req.end(JSON.stringify({ clientId: 'a', text: 'Hi' }));
     });
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(getChat(s.db, id)!.messages[1]!.status, 'streaming');
+    release();
     await until(() => getChat(s.db, id)!.messages[1]!.status !== 'streaming');
     const m = getChat(s.db, id)!.messages[1]!;
-    assert.deepEqual([m.status, m.text], ['stopped', 'Partial ']);
-    // not busy any more: the same clientId replays the stopped answer
+    assert.deepEqual([m.status, m.text], ['done', 'Partial and the rest.']);
     const replayed = events((await s.send(id, 'a')).payload);
     assert.deepEqual(replayed.map((e) => e.type), ['text', 'done']);
-    assert.equal(replayed[1]!.status, 'stopped');
   } finally {
     await s.app.close();
   }
+});
+
+test('POST /v1/chats/:id/stop stops the answer, saves it stopped and frees the chat; idle → 204; unknown → 404', async () => {
+  const s = setup([answerRound('Partial ', 'never sent.'), answerRound('Next.')]);
+  s.fake.hold = { event: 3, until: new Promise(() => {}) };
+  const id = await s.create();
+  const stop = () => s.app.inject({ method: 'POST', url: `/v1/chats/${id}/stop`, headers: AUTH });
+  const first = s.send(id, 'a');
+  await until(() => s.fake.requests.length === 1);
+  await tick();
+  assert.equal((await stop()).statusCode, 204);
+  const m = getChat(s.db, id)!.messages[1]!;
+  assert.deepEqual([m.status, m.text], ['stopped', 'Partial ']);
+  assert.deepEqual(events((await first).payload).map((e) => e.type), ['text']);
+  s.fake.hold = undefined;
+  assert.deepEqual(events((await s.send(id, 'b')).payload).map((e) => e.type), ['text', 'done']);
+  assert.equal((await stop()).statusCode, 204);
+  const missing = await s.app.inject({ method: 'POST', url: '/v1/chats/missing/stop', headers: AUTH });
+  assert.deepEqual([missing.statusCode, missing.json().code], [404, 'NOT_FOUND']);
 });
 
 test('no message text in logs', async () => {

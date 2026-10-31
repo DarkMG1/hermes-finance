@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { ClaudeError, type Claude } from '../src/chat/anthropic.ts';
+import { ClaudeError, costMicros, type Claude, type Usage } from '../src/chat/anthropic.ts';
 
 export type Ev = { type: string; [k: string]: unknown };
 export const start = (): Ev => ({ type: 'message_start', message: { usage: { input_tokens: 1000 } } });
@@ -13,6 +13,12 @@ export const tool = (i: number, id: string, name: string, input: unknown): Ev[] 
   { type: 'content_block_delta', index: i, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } },
   { type: 'content_block_stop', index: i },
 ];
+export const thinking = (i: number, thought: string, signature: string): Ev[] => [
+  { type: 'content_block_start', index: i, content_block: { type: 'thinking', thinking: '' } },
+  { type: 'content_block_delta', index: i, delta: { type: 'thinking_delta', thinking: thought } },
+  { type: 'content_block_delta', index: i, delta: { type: 'signature_delta', signature } },
+  { type: 'content_block_stop', index: i },
+];
 export const end = (stop: string): Ev[] => [{ type: 'message_delta', delta: { stop_reason: stop }, usage: { output_tokens: 50 } }, { type: 'message_stop' }];
 type Message = { role: string; content: string | { type: string; id?: string; tool_use_id?: string }[] };
 
@@ -22,6 +28,7 @@ export function assertValid(messages: Message[]): void {
   const ids = (m: Message | undefined, type: string, key: 'id' | 'tool_use_id') =>
     (Array.isArray(m?.content) ? m.content : []).filter((b) => b.type === type).map((b) => b[key]);
   messages.forEach((m, i) => {
+    if (Array.isArray(m.content)) assert.ok(m.content.length, `message ${i} has content`);
     if (i) assert.notEqual(m.role, messages[i - 1]!.role, `roles alternate at ${i}`);
     if (m.role === 'assistant') assert.deepEqual(ids(messages[i + 1], 'tool_result', 'tool_use_id'), ids(m, 'tool_use', 'id'), `tool results answer message ${i}`);
     else assert.deepEqual(ids(m, 'tool_result', 'tool_use_id'), ids(messages[i - 1], 'tool_use', 'id'), `tool results at ${i} have their tool_use`);
@@ -45,6 +52,8 @@ export class FakeClaude implements Claude {
     assertValid(body.messages as Message[]);
     const fail = this.fail?.round === round ? this.fail : undefined;
     if (fail && fail.event === undefined) throw new ClaudeError(fail.code);
+    // like fetch with an aborted signal
+    if (signal?.aborted) throw new ClaudeError('ABORTED');
     const events = this.rounds[round] ?? [];
     const hold = this.hold;
     async function* gen() {
@@ -57,6 +66,5 @@ export class FakeClaude implements Claude {
     }
     return { events: gen(), key: 'main' as const };
   }
-  record(): void {}
-  usage() { return { month: '2026-03', costCents: 0, backupActive: false }; }
+  record(_feature: string, model: string, _key: string, usage: Usage): number { return costMicros(model, usage); }
 }

@@ -1,19 +1,19 @@
 import type { FastifyInstance } from 'fastify';
 import { SendChatBody } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
-import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { parseBody } from '../validate.ts';
 import { answer, type ChatEvent } from '../chat/agent.ts';
-import { toolLabel } from '../chat/tools.ts';
-import { addUserMessage, createChat, deleteChat, dropFailedTail, findByClientId, getChat, listChats, saveAssistant, startAssistant } from '../chat/store.ts';
+import { usage } from '../chat/anthropic.ts';
+import { addUserMessage, createChat, deleteChat, dropFailedTail, findByClientId, getChat, listChats, startAssistant } from '../chat/store.ts';
 
-const busyChats = new WeakMap<Deps['db'], Set<string>>();
+type Running = { ac: AbortController; done: Promise<unknown> };
+const busyChats = new WeakMap<Deps['db'], Map<string, Running>>();
 
 export function chatRoutes(app: FastifyInstance, deps: Deps): void {
   const { db } = deps;
-  const busy = busyChats.get(db) ?? new Set<string>();
+  const busy = busyChats.get(db) ?? new Map<string, Running>();
   busyChats.set(db, busy);
   // a restart mid-answer leaves rows no one will finish
   db.prepare("UPDATE chat_messages SET status = 'failed', error_code = 'INTERRUPTED' WHERE status = 'streaming'").run();
@@ -37,6 +37,15 @@ export function chatRoutes(app: FastifyInstance, deps: Deps): void {
   app.delete<{ Params: { id: string } }>('/v1/chats/:id', async (req, reply) => {
     if (busy.has(req.params.id)) throw chatBusy();
     if (!deleteChat(db, req.params.id)) throw new ApiError(404, 'NOT_FOUND', 'chat not found');
+    return reply.code(204).send();
+  });
+
+  // the only way to cut an answer short: leaving the screen or losing the connection lets it finish and save
+  app.post<{ Params: { id: string } }>('/v1/chats/:id/stop', async (req, reply) => {
+    find(req.params.id);
+    const running = busy.get(req.params.id);
+    running?.ac.abort();
+    await running?.done;
     return reply.code(204).send();
   });
 
@@ -64,33 +73,35 @@ export function chatRoutes(app: FastifyInstance, deps: Deps): void {
     const raw = reply.raw;
     raw.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'x-accel-buffering': 'no', connection: 'keep-alive' });
     raw.flushHeaders();
-    const write = (e: ChatEvent) => { raw.write(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`); };
+    // the answer goes on after the client leaves, writing nowhere
+    const send = (s: string) => { if (!raw.destroyed) raw.write(s); };
+    const write = (e: ChatEvent) => send(`event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`);
     if (!assistantId) {
-      for (const t of stored!.tools) write({ type: 'tool', name: t.name, label: toolLabel(t.name, t.input), input: t.input });
+      for (const t of stored!.tools) write({ type: 'tool', name: t.name, label: t.label ?? t.name, input: t.input });
       if (stored!.text) write({ type: 'text', text: stored!.text });
       write({ type: 'done', messageId: stored!.id, costCents: 0, status: stored!.status as 'done' | 'stopped' });
       raw.end();
       return;
     }
-    busy.add(chatId);
-    let finished = false;
     const ac = new AbortController();
-    raw.on('close', () => { if (!finished) ac.abort(); });
-    const keepalive = setInterval(() => raw.write(': keepalive\n\n'), 15_000);
+    const done = answer(deps, chatId, assistantId, write, ac.signal);
+    busy.set(chatId, { ac, done: done.catch(() => {}) });
+    const keepalive = setInterval(() => send(': keepalive\n\n'), 15_000);
     try {
-      await answer(deps, chatId, assistantId, write, ac.signal);
+      await done;
     } catch (e) {
       // answer() handles Claude errors itself; anything else must not leave the row streaming or reject after hijack
       console.error(`[hermes] chat route failed ${(e as Error).name}`);
-      try { saveAssistant(db, assistantId, [], 'failed', 'INTERNAL'); } catch { /* the stream still ends with the error */ }
+      try {
+        db.prepare("UPDATE chat_messages SET status = 'failed', error_code = 'INTERNAL' WHERE id = ? AND status = 'streaming'").run(assistantId);
+      } catch { /* the stream still ends with the error */ }
       write({ type: 'error', code: 'INTERNAL' });
     } finally {
-      finished = true;
       clearInterval(keepalive);
       busy.delete(chatId);
       raw.end();
     }
   });
 
-  app.get('/v1/ai/usage', async () => deps.claude?.usage() ?? { month: localDay(deps.now()).slice(0, 7), costCents: 0, backupActive: false });
+  app.get('/v1/ai/usage', async () => usage(db, deps.now()));
 }

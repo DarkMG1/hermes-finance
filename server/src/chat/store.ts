@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type { ChatDetail, ChatList, ChatMessage, ChatSummary } from '@hermes/shared';
 import type { Db } from '../db.ts';
+import { localDay } from '../days.ts';
+import { toolLabel } from './tools.ts';
 
 type Block = Record<string, unknown>;
 export type ApiMessage = { role: 'user' | 'assistant'; content: string | Block[] };
@@ -27,10 +29,15 @@ export function getChat(db: Db, id: string): ChatDetail | null {
   const messages = rows(db, id).map((r): ChatMessage => {
     const base = { id: r.id, role: r.role, status: r.status, errorCode: r.error_code, createdAt: r.created_at };
     if (r.role === 'user') return { ...base, text: JSON.parse(r.content_json) as string, tools: [] };
-    const all = (JSON.parse(r.content_json) as ApiMessage[]).filter((m) => m.role === 'assistant').flatMap(blocks);
-    // joined without separators so a reload shows exactly what the stream showed
-    const text = all.filter((b) => b.type === 'text').map((b) => b.text as string).join('');
-    const tools = all.filter((b) => b.type === 'tool_use').map((b) => ({ name: b.name as string, input: b.input as Record<string, unknown> }));
+    const turn = JSON.parse(r.content_json) as ApiMessage[];
+    const all = turn.filter((m) => m.role === 'assistant').flatMap(blocks);
+    const ran = new Set(turn.filter((m) => m.role === 'user').flatMap(blocks).map((b) => b.tool_use_id));
+    // joined like the stream joins them, so a reload shows exactly what the stream showed
+    const text = all.filter((b) => b.type === 'text' && b.text).map((b) => b.text as string).join('\n\n');
+    const tools = all.filter((b) => b.type === 'tool_use' && ran.has(b.id)).map((b) => {
+      const input = b.input as Record<string, unknown>;
+      return { name: b.name as string, input, label: toolLabel(b.name as string, input) };
+    });
     return { ...base, text, tools };
   });
   return { ...chat, messages };
@@ -78,7 +85,7 @@ export function dropFailedTail(db: Db, chatId: string): void {
   db.prepare('DELETE FROM chat_messages WHERE conversation_id = ? AND (seq = ? OR (seq = ? AND role = \'user\'))').run(chatId, last.seq, last.seq - 1);
 }
 
-/** A turn cut mid-round (stopped, or a done turn that hit max_tokens inside a tool call): drops empty text, then trailing messages until one is an assistant message with text, minus its unanswered tool_use. */
+/** A turn cut mid-round (stopped): drops empty text, then trailing messages until one is an assistant message with text, minus its unanswered tool_use. */
 function trimTurn(turn: ApiMessage[]): ApiMessage[] {
   const out = turn.map((m) => (m.role === 'assistant' ? { ...m, content: blocks(m).filter((b) => b.type !== 'text' || b.text) } : m));
   while (out.length) {
@@ -92,12 +99,15 @@ function trimTurn(turn: ApiMessage[]): ApiMessage[] {
   return out;
 }
 
+// the day a question was asked rides with it (not in the system prompt), so every replay of it is byte-identical
+const asked = (r: Row): Block => ({ type: 'text', text: `(Asked on ${localDay(new Date(r.created_at))}, ${process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone}.)` });
+
 /** The conversation as Anthropic messages. activeAssistantId (the answer being written) is left out but its question stays, so it is last. */
 export function replay(db: Db, chatId: string, activeAssistantId?: string): ApiMessage[] {
   const out: ApiMessage[] = [];
   for (const r of rows(db, chatId)) {
     if (r.id === activeAssistantId) continue;
-    if (r.role === 'user') { out.push({ role: 'user', content: JSON.parse(r.content_json) as string }); continue; }
+    if (r.role === 'user') { out.push({ role: 'user', content: [{ type: 'text', text: JSON.parse(r.content_json) as string }, asked(r)] }); continue; }
     const turn = r.status === 'done' || r.status === 'stopped' ? trimTurn(JSON.parse(r.content_json) as ApiMessage[]) : [];
     if (turn.length) out.push(...turn);
     else if (out.at(-1)?.role === 'user') out.pop();
@@ -105,7 +115,7 @@ export function replay(db: Db, chatId: string, activeAssistantId?: string): ApiM
   // a question left without an answer row sits next to the following one
   return out.reduce<ApiMessage[]>((acc, m) => {
     const prev = acc.at(-1);
-    if (prev?.role === 'user' && m.role === 'user') prev.content = `${prev.content as string}\n\n${m.content as string}`;
+    if (prev?.role === 'user' && m.role === 'user') prev.content = [...blocks(prev), ...blocks(m)];
     else acc.push(m);
     return acc;
   }, []);
