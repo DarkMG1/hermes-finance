@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { AiUsage, ChatDetail, ChatList } from '@hermes/shared';
 import { buildApp } from '../../src/app.ts';
 import { AUTH, makeTestDeps, seedAccount, seedCategory, seedItem, seedPerson, seedSplit, seedTxn } from '../helpers.ts';
 
@@ -139,6 +140,15 @@ export async function buildFixtures(): Promise<Record<string, string>> {
     ('option-buy', 'acct-brokerage', 'sec-option', '2026-03-11', 'buy', 'buy', 1, 6000, 6000, 's'),
     ('option-sell', 'acct-brokerage', 'sec-option', '2026-03-13', 'sell', 'sell', -1, -4000, 4000, 's')`).run();
   out['investments-history-excluded'] = await invGet('/v1/investments/history?range=1m');
+  // chat has no routes yet at this point in v2.0; the shapes come straight from the contract
+  const chat = { id: 'chat-1', title: 'Groceries', createdAt: '2026-03-15T12:00:00.000Z', updatedAt: '2026-03-15T12:00:05.000Z' };
+  out['chat-list'] = ChatList.parse({ chats: [chat] });
+  out['chat-detail'] = ChatDetail.parse({ ...chat, messages: [
+    { id: 'msg-1', role: 'user', text: 'How much did I spend on groceries?', tools: [], status: 'done', errorCode: null, createdAt: '2026-03-15T12:00:00.000Z' },
+    { id: 'msg-2', role: 'assistant', text: 'You spent $120.00 on groceries this month.', tools: [{ name: 'spending', input: { range: 'month' } }],
+      status: 'done', errorCode: null, createdAt: '2026-03-15T12:00:05.000Z' },
+  ] });
+  out['ai-usage'] = AiUsage.parse({ month: '2026-03', costCents: 42, backupActive: false });
   // ids minted at runtime are replaced so the files are stable
   const text = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
   const normalise = (s: string) => s.replace(/"accountId": "[0-9a-f-]{36}"/g, '"accountId": "fixture-applecard"').replace(/"itemId": "[0-9a-f-]{36}"/g, '"itemId": "fixture-item"');

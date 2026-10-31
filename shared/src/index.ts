@@ -393,3 +393,23 @@ export const PatchRecurringBody = z.object({ hidden: z.boolean().optional(), nam
 export type PatchRecurringBody = z.infer<typeof PatchRecurringBody>;
 export const CreateRecurringBody = z.object({ transactionId: Id, frequency: WritableFrequency, name: z.string().trim().min(1).max(100).optional() }).strict();
 export type CreateRecurringBody = z.infer<typeof CreateRecurringBody>;
+
+export const CHAT_TEXT_MAX = 4000;
+export const ChatSummary = z.object({ id: Id, title: z.string(), createdAt: z.string(), updatedAt: z.string() });
+export type ChatSummary = z.infer<typeof ChatSummary>;
+export const ChatList = z.object({ chats: z.array(ChatSummary) });
+export type ChatList = z.infer<typeof ChatList>;
+/** One tool Claude used for an answer; input is the tool's arguments, shown when tapped. */
+export const ChatToolUse = z.object({ name: z.string(), input: z.record(z.string(), z.unknown()) });
+export type ChatToolUse = z.infer<typeof ChatToolUse>;
+export const ChatMessage = z.object({
+  id: Id, role: z.enum(['user', 'assistant']), text: z.string(), tools: z.array(ChatToolUse),
+  status: z.enum(['streaming', 'done', 'failed', 'stopped']), errorCode: z.string().nullable(), createdAt: z.string(),
+});
+export type ChatMessage = z.infer<typeof ChatMessage>;
+export const ChatDetail = ChatSummary.extend({ messages: z.array(ChatMessage) });
+export type ChatDetail = z.infer<typeof ChatDetail>;
+export const SendChatBody = z.object({ clientId: z.string().min(1).max(200), text: z.string().trim().min(1).max(CHAT_TEXT_MAX) }).strict();
+export type SendChatBody = z.infer<typeof SendChatBody>;
+export const AiUsage = z.object({ month: z.string(), costCents: Cents, backupActive: z.boolean() });
+export type AiUsage = z.infer<typeof AiUsage>;

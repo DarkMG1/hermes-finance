@@ -1,0 +1,33 @@
+{
+  "id": "chat-1",
+  "title": "Groceries",
+  "createdAt": "2026-03-15T12:00:00.000Z",
+  "updatedAt": "2026-03-15T12:00:05.000Z",
+  "messages": [
+    {
+      "id": "msg-1",
+      "role": "user",
+      "text": "How much did I spend on groceries?",
+      "tools": [],
+      "status": "done",
+      "errorCode": null,
+      "createdAt": "2026-03-15T12:00:00.000Z"
+    },
+    {
+      "id": "msg-2",
+      "role": "assistant",
+      "text": "You spent $120.00 on groceries this month.",
+      "tools": [
+        {
+          "name": "spending",
+          "input": {
+            "range": "month"
+          }
+        }
+      ],
+      "status": "done",
+      "errorCode": null,
+      "createdAt": "2026-03-15T12:00:05.000Z"
+    }
+  ]
+}
