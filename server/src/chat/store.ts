@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ChatDetail, ChatList, ChatMessage, ChatSummary } from '@hermes/shared';
 import type { Db } from '../db.ts';
 import { addDays, localDay } from '../days.ts';
-import { toolLabel } from './tools.ts';
+import { toolLabel } from './labels.ts';
 
 type Block = Record<string, unknown>;
 export type ApiMessage = { role: 'user' | 'assistant'; content: string | Block[] };
@@ -94,15 +94,15 @@ export function saveAssistant(db: Db, id: string, turn: ApiMessage[], status: 'd
 export type ChatHit = { chatId: string; title: string; date: string; role: 'user' | 'assistant'; snippet: string };
 
 /** Past messages matching every term (each quoted, so FTS5 syntax is never parsed), best bm25 matches, then newest first. */
-export function searchChats(db: Db, q: { query: string; from?: string; to?: string; limit: number }): { results: ChatHit[] } {
+export function searchChats(db: Db, q: { query: string; from?: string; to?: string; limit: number }, excludeChatId?: string): { results: ChatHit[] } {
   // a term with no letter or digit tokenizes to nothing
   const terms = q.query.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t)).map((t) => `"${t.replaceAll('"', '""')}"`);
   // owner-local days as UTC instants (a date-time without Z parses in the process time zone)
   const at = (day: string) => new Date(`${day}T00:00:00`).toISOString();
   const hits = db.prepare(`SELECT c.id AS chatId, c.title, m.created_at AS createdAt, m.role, snippet(chat_search, 0, '[', ']', '…', 24) AS snippet
     FROM chat_search JOIN chat_messages m ON m.id = chat_search.message_id JOIN chat_conversations c ON c.id = m.conversation_id
-    WHERE chat_search MATCH ? AND m.created_at >= ? AND m.created_at < ? ORDER BY rank LIMIT ?`)
-    .all(terms.join(' '), q.from ? at(q.from) : '', q.to ? at(addDays(q.to, 1)) : '9', q.limit) as (Omit<ChatHit, 'date'> & { createdAt: string })[];
+    WHERE chat_search MATCH ? AND m.created_at >= ? AND m.created_at < ? AND c.id IS NOT ? ORDER BY rank LIMIT ?`)
+    .all(terms.join(' '), q.from ? at(q.from) : '', q.to ? at(addDays(q.to, 1)) : '9', excludeChatId ?? null, q.limit) as (Omit<ChatHit, 'date'> & { createdAt: string })[];
   hits.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return { results: hits.map(({ createdAt, ...h }) => ({ ...h, date: localDay(new Date(createdAt)) })) };
 }

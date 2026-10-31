@@ -14,7 +14,9 @@ import { getChat, searchChats } from './store.ts';
 export type ToolDef = { name: string; description: string; input_schema: Record<string, unknown> };
 export const RESULT_MAX = 20_000;
 
-type Entry = { def: ToolDef; schema: z.ZodType; run: (deps: Deps, q: unknown, today: string) => unknown };
+/** What the tools know about the request: the conversation being answered. */
+export type ToolContext = { chatId?: string };
+type Entry = { def: ToolDef; schema: z.ZodType; run: (deps: Deps, q: unknown, today: string, ctx: ToolContext) => unknown };
 
 const jsonSchema = (s: z.ZodType): Record<string, unknown> => {
   const out: Record<string, unknown> = z.toJSONSchema(s, { io: 'input' });
@@ -26,11 +28,11 @@ const Day = ListTransactionsQuery.shape.from;
 const Empty = z.object({}).strict();
 const CENTS = 'All amounts are integer cents.';
 
-const entry = <T extends z.ZodType>(name: string, description: string, schema: T, run: (deps: Deps, q: z.output<T>, today: string) => unknown,
+const entry = <T extends z.ZodType>(name: string, description: string, schema: T, run: (deps: Deps, q: z.output<T>, today: string, ctx: ToolContext) => unknown,
   input_schema = jsonSchema(schema)): [string, Entry] =>
-  [name, { def: { name, description: `${description} ${CENTS}`, input_schema }, schema, run: run as Entry['run'] }];
+  [name, { def: { name, description, input_schema }, schema, run: run as Entry['run'] }];
 
-const ENTRIES = new Map<string, Entry>([
+const MONEY: [string, Entry][] = [
   entry('spending', 'Money in, out and net for a month or year, with spending by category (out is spending, refunds reduce it); same numbers as the Spending tab.', SpendingQuery,
     (d, q) => getSpending(d.db, q), {
       type: 'object', properties: { period: { type: 'string', enum: ['month', 'year'] }, date: { type: 'string', description: 'YYYY-MM for a month, YYYY for a year' } },
@@ -55,14 +57,25 @@ const ENTRIES = new Map<string, Entry>([
     (d, q, today) => (q.holding ? getHoldingHistory(d.db, q.holding, q.range ?? '1y', today) : getInvestments(d.db))),
   entry('accounts', 'Bank, card and investment accounts with current balances.', Empty, (d) => listAccounts(d.db)),
   entry('categories', 'The spending and income categories transactions can have.', Empty, (d) => listCategories(d.db)),
+];
+// a message too long for one result is cut to this many JSON characters, so read_chat drops old messages, never the newest
+const MESSAGE_MAX = 15_000;
+const clip = (text: string): string => {
+  let n = text.length;
+  while (JSON.stringify(text.slice(0, n)).length > MESSAGE_MAX) n = Math.floor(n * 0.8);
+  return n < text.length ? `${text.slice(0, n)}… [message cut]` : text;
+};
+
+const ENTRIES = new Map<string, Entry>([
+  ...MONEY.map(([name, e]): [string, Entry] => [name, { ...e, def: { ...e.def, description: `${e.def.description} ${CENTS}` } }]),
   entry('search_chats', "Searches the owner's own earlier conversations with you (questions and your answers) for messages containing every word of query, optionally between from and to; returns each match's chatId, title, date and a snippet with the words in [brackets].",
     z.object({ query: z.string().max(200).regex(/[\p{L}\p{N}]/u, 'query has no words to search for'), from: Day, to: Day, limit: z.number().int().min(1).max(20).optional() }).strict(),
-    (d, q) => searchChats(d.db, { ...q, limit: q.limit ?? 10 })),
+    (d, q, _today, ctx) => searchChats(d.db, { ...q, limit: q.limit ?? 10 }, ctx.chatId)),
   entry('read_chat', "One of the owner's own earlier conversations with you in full (id is a chatId from search_chats): each message's role, date and text.",
     z.object({ id: z.string().min(1) }).strict(), (d, q) => {
       const chat = getChat(d.db, q.id);
       return chat && { id: chat.id, title: chat.title, createdAt: chat.createdAt,
-        messages: chat.messages.map((m) => ({ role: m.role, date: localDay(new Date(m.createdAt)), text: m.text })) };
+        messages: chat.messages.map((m) => ({ role: m.role, date: localDay(new Date(m.createdAt)), text: clip(m.text) })) };
     }),
 ]);
 
@@ -71,7 +84,6 @@ export const TOOLS: ToolDef[] = [...ENTRIES.values()].map((e) => e.def);
 const ARRAY_KEYS = ['transactions', 'rows', 'items', 'points', 'holdings', 'history', 'messages', 'results'];
 const TEXT_KEYS = new Set(['notes', 'name', 'payee', 'bankDescription', 'merchantName', 'matchText']);
 
-const NOTE = { truncated: true, note: 'Result cut; narrow the dates or filters.' };
 
 const shorten = (v: unknown, cap: number): unknown => (Array.isArray(v) ? v.map((x) => shorten(x, cap))
   : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) =>
@@ -80,14 +92,15 @@ const shorten = (v: unknown, cap: number): unknown => (Array.isArray(v) ? v.map(
 
 /** Fits a result under RESULT_MAX. Paged results are re-run with a smaller limit so nextCursor stays the function's own, then long text is
  * shortened; a page never drops rows (nextCursor points past them). Other arrays are trimmed, largest first; points (oldest first) keep the newest. */
-function fit(e: Entry, deps: Deps, input: Record<string, unknown>, today: string, result: unknown): string {
+function fit(e: Entry, deps: Deps, input: Record<string, unknown>, today: string, ctx: ToolContext, result: unknown): string {
   let s = JSON.stringify(result);
   if (s.length <= RESULT_MAX) return s;
+  const NOTE = { truncated: true, note: e.def.name === 'read_chat' ? 'Oldest messages left out.' : 'Result cut; narrow the dates or filters.' };
   let out = result;
   let limit = typeof input.limit === 'number' ? input.limit : 0;
   while (s.length > RESULT_MAX && limit > 1) {
     limit = Math.floor(limit * 0.8);
-    out = e.run(deps, { ...input, limit }, today);
+    out = e.run(deps, { ...input, limit }, today, ctx);
     s = JSON.stringify({ ...(out as object), ...NOTE });
   }
   if (out && typeof out === 'object' && !Array.isArray(out)) {
@@ -110,7 +123,7 @@ function fit(e: Entry, deps: Deps, input: Record<string, unknown>, today: string
   return s;
 }
 
-export function runTool(deps: Deps, name: string, input: unknown): { content: string; isError: boolean } {
+export function runTool(deps: Deps, name: string, input: unknown, ctx: ToolContext = {}): { content: string; isError: boolean } {
   const fail = (error: string) => ({ content: JSON.stringify({ error }), isError: true });
   const e = ENTRIES.get(name);
   if (!e) return fail(`unknown tool ${name}`);
@@ -118,25 +131,9 @@ export function runTool(deps: Deps, name: string, input: unknown): { content: st
   if (!parsed.success) return fail(z.prettifyError(parsed.error));
   try {
     const today = localDay(deps.now());
-    const result = e.run(deps, parsed.data, today);
-    return result == null ? fail('not found') : { content: fit(e, deps, parsed.data as Record<string, unknown>, today, result), isError: false };
+    const result = e.run(deps, parsed.data, today, ctx);
+    return result == null ? fail('not found') : { content: fit(e, deps, parsed.data as Record<string, unknown>, today, ctx, result), isError: false };
   } catch (err) {
     return fail(err instanceof ApiError ? err.message : 'tool failed');
   }
-}
-
-const LABELS: Record<string, string> = {
-  spending: 'Spending', expenses: 'Expenses', transactions: 'Transactions', transaction: 'Transaction', payee_history: 'Payee history', bills: 'Bills',
-  reimbursements: 'Reimbursements', people: 'People', net_worth: 'Net worth', investments: 'Investments', accounts: 'Accounts', categories: 'Categories',
-  search_chats: 'Past chats', read_chat: 'Past chat',
-};
-
-export function toolLabel(name: string, input: Record<string, unknown>): string {
-  if (name === 'search_chats' && typeof input.query === 'string') return `${LABELS[name]} · ${input.query}`;
-  const { from, to } = input;
-  const span = from && to ? `${String(from)} – ${String(to)}` : from ? `Since ${String(from)}` : to ? `Through ${String(to)}` : undefined;
-  const detail = [span, input.date ?? input.month, input.name, input.range].find((v) => typeof v === 'string');
-  const shown = detail && /^\d{4}-\d{2}$/.test(detail)
-    ? new Date(`${detail}-01T00:00:00Z`).toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }) : detail;
-  return `${LABELS[name] ?? name}${shown ? ` · ${shown}` : ''}`;
 }

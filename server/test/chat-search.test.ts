@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { addUserMessage, createChat, deleteChat, dropFailedTail, getChat, saveAssistant, startAssistant } from '../src/chat/store.ts';
-import { runTool, toolLabel } from '../src/chat/tools.ts';
+import { RESULT_MAX, TOOLS, runTool } from '../src/chat/tools.ts';
+import { toolLabel } from '../src/chat/labels.ts';
 import { localDay } from '../src/days.ts';
 import { makeTestDeps } from './helpers.ts';
 
@@ -102,4 +103,38 @@ test('labels', () => {
   assert.equal(toolLabel('search_chats', { query: 'dining', from: '2026-03-01' }), 'Past chats · dining');
   assert.equal(toolLabel('search_chats', { query: '2026-09' }), 'Past chats · 2026-09');
   assert.equal(toolLabel('read_chat', { id: 'x' }), 'Past chat');
+});
+
+test('search_chats leaves out the conversation being answered', () => {
+  const { deps, ask } = setup();
+  const past = ask('emergency fund question', ['ok']);
+  const current = ask('what did I say about the emergency fund?', null);
+  const ids = (ctx?: { chatId: string }) => JSON.parse(runTool(deps, 'search_chats', { query: 'emergency' }, ctx).content).results.map((r: { chatId: string }) => r.chatId);
+  assert.deepEqual(ids({ chatId: current }), [past]);
+  assert.equal(ids().length, 2);
+});
+
+test('read_chat cuts an oversized message and keeps the newest ones', () => {
+  const { deps, db, ask } = setup();
+  const chatId = ask('First question', ['short answer']);
+  addUserMessage(db, chatId, 'c-long', 'Tell me everything', APRIL);
+  saveAssistant(db, startAssistant(db, chatId, APRIL), say('SYNTHETIC '.repeat(2500)), 'done', null);
+  const c = runTool(deps, 'read_chat', { id: chatId }).content;
+  assert.ok(c.length <= RESULT_MAX);
+  const r = JSON.parse(c);
+  assert.equal(r.messages.at(-1).role, 'assistant');
+  assert.match(r.messages.at(-1).text, /^SYNTHETIC .*… \[message cut\]$/);
+  assert.equal(r.messages.at(-2).text, 'Tell me everything');
+  for (let i = 0; i < 3; i++) {
+    addUserMessage(db, chatId, `c-more${i}`, 'Another', APRIL);
+    saveAssistant(db, startAssistant(db, chatId, APRIL), say('SYNTHETIC '.repeat(2500)), 'done', null);
+  }
+  const cut = JSON.parse(runTool(deps, 'read_chat', { id: chatId }).content);
+  assert.equal(cut.note, 'Oldest messages left out.');
+  assert.ok(cut.messages.length >= 1 && cut.messages.length < 10);
+  assert.equal(cut.messages.at(-1).role, 'assistant');
+});
+
+test('past-chat tool descriptions say nothing about cents', () => {
+  for (const t of TOOLS) assert.equal(/integer cents/.test(t.description), !['search_chats', 'read_chat'].includes(t.name), t.name);
 });

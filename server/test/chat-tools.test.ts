@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RESULT_MAX, TOOLS, runTool, toolLabel } from '../src/chat/tools.ts';
+import { RESULT_MAX, TOOLS, runTool } from '../src/chat/tools.ts';
+import { toolLabel } from '../src/chat/labels.ts';
 import { getExpenses, getSpending } from '../src/cashflow.ts';
 import { getNetWorth, localDay } from '../src/networth.ts';
 import { getInvestments } from '../src/investments.ts';

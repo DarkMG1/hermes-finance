@@ -1,6 +1,7 @@
 import type { Deps } from '../deps.ts';
 import { ClaudeError, toCents, type Usage } from './anthropic.ts';
-import { TOOLS, runTool, toolLabel } from './tools.ts';
+import { TOOLS, runTool } from './tools.ts';
+import { toolLabel } from './labels.ts';
 import { replay, saveAssistant, type ApiMessage } from './store.ts';
 
 export type ChatEvent = { type: 'tool'; name: string; label: string; input: Record<string, unknown> } | { type: 'text'; text: string }
@@ -98,7 +99,7 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
         content: uses.map((b) => {
           const input = b.input as Record<string, unknown>;
           emit({ type: 'tool', name: b.name as string, label: toolLabel(b.name as string, input), input });
-          const res = runTool(deps, b.name as string, input);
+          const res = runTool(deps, b.name as string, input, { chatId });
           return { type: 'tool_result', tool_use_id: b.id, content: res.content, is_error: res.isError };
         }),
       });
