@@ -18,6 +18,9 @@ struct ConversationView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.m) {
                 InlineError(message: loadError)
+                if thread?.messages.isEmpty == true {
+                    Text("Ask about your spending, bills, IOUs or investments").textStyle(.subhead, color: Palette.secondaryText)
+                }
                 ForEach(thread?.messages ?? []) { message in
                     if message.role == "user" {
                         UserBubble(message: message).equatable()
@@ -26,6 +29,7 @@ struct ConversationView: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(Space.l)
         }
         .defaultScrollAnchor(.bottom)
