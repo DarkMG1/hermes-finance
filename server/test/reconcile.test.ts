@@ -75,7 +75,7 @@ test('migration 016 marks every money-out row before 2026-09-01, whatever the ru
   }
   seedAll(db);
   seedTxn(db, { id: 'september', accountId: 'chk', date: '2026-09-01', amountCents: -500, categoryId: 'food' });
-  assert.equal(migrate(db), 24);
+  assert.equal(migrate(db), 25);
   const ids = (sql: string) => (db.prepare(sql).all() as { id: string }[]).map((r) => r.id);
   const moneyOutBefore = ids("SELECT id FROM transactions WHERE date < '2026-09-01' AND amount_cents < 0 ORDER BY id");
   assert.ok(moneyOutBefore.includes('xfer-cat'));

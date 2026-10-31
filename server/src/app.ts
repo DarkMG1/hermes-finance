@@ -14,6 +14,7 @@ import { receiptRoutes } from './routes/receipts.ts';
 import { inboxRoutes } from './routes/inbox.ts';
 import { itemizeRoutes } from './routes/itemize.ts';
 import { recurringRoutes } from './routes/recurring.ts';
+import { chatRoutes } from './routes/chat.ts';
 
 function tokenMatches(header: string | undefined, token: string): boolean {
   if (!header?.startsWith('Bearer ')) return false;
@@ -71,6 +72,7 @@ export function buildApp(deps: Deps): FastifyInstance {
   inboxRoutes(app, deps);
   itemizeRoutes(app, deps);
   recurringRoutes(app, deps);
+  chatRoutes(app, deps);
 
   return app;
 }

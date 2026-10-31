@@ -1,0 +1,35 @@
+{
+  "id": "chat-1",
+  "title": "How much did I spend on food?",
+  "createdAt": "2026-03-15T12:00:00.000Z",
+  "updatedAt": "2026-03-15T12:00:00.000Z",
+  "messages": [
+    {
+      "id": "msg-1",
+      "role": "user",
+      "status": "done",
+      "errorCode": null,
+      "createdAt": "2026-03-15T12:00:00.000Z",
+      "text": "How much did I spend on food?",
+      "tools": []
+    },
+    {
+      "id": "msg-2",
+      "role": "assistant",
+      "status": "done",
+      "errorCode": null,
+      "createdAt": "2026-03-15T12:00:00.000Z",
+      "text": "You spent $12.50 on Synthetic Food.",
+      "tools": [
+        {
+          "name": "spending",
+          "input": {
+            "period": "month",
+            "date": "2026-03"
+          },
+          "label": "Spending · March 2026"
+        }
+      ]
+    }
+  ]
+}

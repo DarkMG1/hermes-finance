@@ -3,7 +3,7 @@ import HermesKit
 
 struct URLSessionTransport: HTTPTransport {
     // ephemeral: no on-disk URL cache, so responses and the bearer request never persist (Reader keeps its own offline copy)
-    private static let session = URLSession(configuration: .ephemeral)
+    static let session = URLSession(configuration: .ephemeral)
 
     func send(_ request: HTTPRequest) async throws -> HTTPResponse {
         var urlRequest = URLRequest(url: request.url, timeoutInterval: request.timeout)

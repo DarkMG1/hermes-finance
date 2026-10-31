@@ -11,6 +11,10 @@ export type Config = {
   anthropicApiKey: string | null;
   /** ANTHROPIC_MODEL: the receipt reader's model. */
   anthropicModel: string;
+  /** ANTHROPIC_API_KEY_BACKUP: used automatically for the rest of a month once the main key's credit runs out. */
+  anthropicBackupKey: string | null;
+  /** HERMES_CHAT_MODEL: the Ask chat's model. */
+  chatModel: string;
   plaid: { clientId: string; secret: string; env: 'sandbox' | 'production' };
 };
 
@@ -46,6 +50,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     tiingoApiKey: env.TIINGO_API_KEY?.trim() || null,
     anthropicApiKey: env.ANTHROPIC_API_KEY?.trim() || null,
     anthropicModel: env.ANTHROPIC_MODEL?.trim() || 'claude-sonnet-5-5',
+    anthropicBackupKey: env.ANTHROPIC_API_KEY_BACKUP?.trim() || null,
+    chatModel: env.HERMES_CHAT_MODEL?.trim() || 'claude-opus-5-5',
     plaid: { clientId: required(env, 'PLAID_CLIENT_ID'), secret: required(env, 'PLAID_SECRET'), env: plaidEnv },
   };
 }

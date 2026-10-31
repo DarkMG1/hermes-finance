@@ -1,5 +1,6 @@
 import { ReceiptReadOutput } from '@hermes/shared';
 import { ReaderError, type ReadResult, type ReceiptReader } from '../receipt-reader.ts';
+import { ClaudeError, type Claude } from '../chat/anthropic.ts';
 
 const INSTRUCTIONS = `Read this receipt and call record_receipt once.
 - items: every purchased line in printed order. name: the item as printed, tidied (no SKU or barcode numbers). amountCents: the line total in integer cents after quantity (2 x $3.50 is 700). A discount, coupon or instant saving for one item (printed under it, often starting with / or \\, or naming it) is subtracted from that item's amountCents, not listed. Only a saving on the whole order is its own item with a negative amountCents.
@@ -22,37 +23,28 @@ const TOOL = {
   },
 };
 
-type MessagesReply = { content?: { type: string; name?: string; input?: unknown }[]; usage?: { input_tokens?: number; output_tokens?: number } };
+type MessagesReply = { content?: { type: string; name?: string; input?: unknown }[] };
 
-export function createAnthropicReader(apiKey: string, model: string, fetchFn: typeof fetch = fetch): ReceiptReader {
+export function createAnthropicReader(claude: Claude, model: string): ReceiptReader {
   return {
     async read(jpeg: Buffer): Promise<ReadResult> {
-      let res: Response;
+      let reply: MessagesReply;
       try {
-        res = await fetchFn('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-          body: JSON.stringify({
-            // Sonnet 5.5 refuses a forced tool_choice ("tool"/"any"), so the instructions ask for the call
-            model, max_tokens: 8192, tools: [TOOL],
-            messages: [{ role: 'user', content: [
-              { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: jpeg.toString('base64') } },
-              { type: 'text', text: INSTRUCTIONS },
-            ] }],
-          }),
-          signal: AbortSignal.timeout(60_000),
-        });
+        reply = (await claude.messages('receipt', {
+          // Sonnet 5.5 refuses a forced tool_choice ("tool"/"any"), so the instructions ask for the call
+          model, max_tokens: 8192, tools: [TOOL],
+          messages: [{ role: 'user', content: [
+            { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: jpeg.toString('base64') } },
+            { type: 'text', text: INSTRUCTIONS },
+          ] }],
+        })).reply as MessagesReply;
       } catch (e) {
-        throw new ReaderError(e instanceof Error && e.name === 'TimeoutError' ? 'TIMEOUT' : 'UNREACHABLE');
+        throw e instanceof ClaudeError ? new ReaderError(e.code) : e;
       }
-      if (!res.ok) throw new ReaderError(`HTTP_${res.status}`);
-      const reply = await res.json().catch(() => null) as MessagesReply | null;
-      const content = reply?.content;
+      const content = reply.content;
       const call = Array.isArray(content) ? content.find((c) => c.type === 'tool_use' && c.name === 'record_receipt') : undefined;
       const parsed = ReceiptReadOutput.safeParse(call?.input);
       if (!parsed.success) throw new ReaderError('INVALID_OUTPUT');
-      // counts only: never the key, the image or the item text
-      console.log(`[hermes] receipt read model=${model} in=${reply?.usage?.input_tokens ?? '?'} out=${reply?.usage?.output_tokens ?? '?'} items=${parsed.data.items.length}`);
       return { ...parsed.data, model };
     },
   };
