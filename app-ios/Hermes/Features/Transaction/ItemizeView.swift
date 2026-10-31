@@ -295,6 +295,8 @@ struct ItemizeView: View {
             // the list stays as it was (empty on a first read): items can be added by hand
             if case .api(503, let body) = error as? ClientError, body.code == "READER_NOT_CONFIGURED" {
                 self.error = "Receipt reading isn't set up on the server. You can add the items by hand."
+            } else if case .api(402, let body) = error as? ClientError, body.code == "AI_CREDITS_EXHAUSTED" {
+                self.error = "AI credits used up for this month. You can add the items by hand."
             } else {
                 self.error = "Couldn't read the receipt. You can add the items by hand."
             }

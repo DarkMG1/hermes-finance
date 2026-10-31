@@ -16,6 +16,7 @@ struct SettingsView: View {
     @State private var importing = false
     @State private var confirmDisconnect = false
     @State private var serverSha: String?
+    @State private var aiUsage: AiUsage?
 
     private var versionText: String {
         let info = Bundle.main.infoDictionary
@@ -113,6 +114,14 @@ struct SettingsView: View {
             }
             Section {
                 LabeledContent("Address", value: model.serverURL)
+                if let aiUsage {
+                    LabeledContent("AI this month") {
+                        HStack(spacing: Space.xs) {
+                            MoneyText(cents: aiUsage.costCents, colored: false)
+                            if aiUsage.backupActive { Text("· backup key").textStyle(.body, color: Palette.secondaryText) }
+                        }
+                    }
+                }
                 Button("Disconnect", role: .destructive) { confirmDisconnect = true }
                     .confirmationDialog("Disconnect from this server?", isPresented: $confirmDisconnect, titleVisibility: .visible) {
                         Button("Disconnect", role: .destructive) { model.disconnect() }
@@ -130,6 +139,8 @@ struct SettingsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { serverSha = try? await model.reader?.read("/v1/health", as: Health.self).value.gitSha }
         .task { await loadBanks() }
+        // an older server has no usage route: the row stays hidden
+        .task { aiUsage = try? await model.client?.aiUsage() }
         .refreshable { await loadBanks() }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.commaSeparatedText]) { result in
             model.queueCSV(result)

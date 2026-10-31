@@ -136,6 +136,7 @@ public struct SSEParser: Sendable {
 public struct ChatThread: Sendable, Equatable {
     public var messages: [ChatMessage]
     public init(_ detail: ChatDetail) { messages = detail.messages }
+    public init() { messages = [] }
 
     public var isStreaming: Bool { messages.last?.status == "streaming" }
 
@@ -180,4 +181,9 @@ extension APIClient {
     }
 
     public func aiUsage() async throws -> AiUsage { try decode(try await getData("/v1/ai/usage")) }
+
+    /// The app streams with URLSession itself (Linux Foundation has no byte streams); this keeps the token inside the client.
+    public func streamRequest(path: String) -> (url: URL, headers: [String: String]) {
+        (baseURL.appending(path: path), ["Authorization": "Bearer \(token)", "Accept": "text/event-stream", "Content-Type": "application/json"])
+    }
 }

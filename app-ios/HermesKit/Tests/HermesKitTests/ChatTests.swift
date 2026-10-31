@@ -101,3 +101,12 @@ private func streaming() -> ChatThread {
     #expect(create.method == "POST" && create.url.path() == "/v1/chats" && create.headers["Idempotency-Key"] == "k1")
     #expect(delete.method == "DELETE" && delete.url.path() == "/v1/chats/c2" && delete.headers["Idempotency-Key"] == nil)
 }
+
+@Test func streamRequestCarriesTokenAndAcceptsEventStream() {
+    let (url, headers) = APIClient(baseURL: testBase, token: "t", transport: FakeTransport([])).streamRequest(path: "/v1/chats/c1/messages")
+    #expect(url.path() == "/v1/chats/c1/messages" && headers["Authorization"] == "Bearer t" && headers["Accept"] == "text/event-stream")
+}
+
+@Test func creditsExhaustedReadsPlainly() {
+    #expect(ClientError.api(status: 402, body: APIErrorBody(code: "AI_CREDITS_EXHAUSTED", message: "x")).message == "AI credits used up for this month")
+}

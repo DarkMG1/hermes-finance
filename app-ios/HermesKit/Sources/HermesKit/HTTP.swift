@@ -39,6 +39,7 @@ public enum ClientError: Error, Equatable, Sendable {
     public var message: String {
         switch self {
         case .api(401, _): "The server rejected the token."
+        case .api(_, let body) where body.code == "AI_CREDITS_EXHAUSTED": "AI credits used up for this month"
         case .api(_, let body): body.message
         case .transport: "Can't reach the server."
         case .decoding: "The server sent something this app version doesn't understand."

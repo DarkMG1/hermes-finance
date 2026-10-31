@@ -2,7 +2,7 @@ import Foundation
 
 public final class APIClient: Sendable {
     public let baseURL: URL
-    private let token: String
+    let token: String
     private let transport: any HTTPTransport
 
     public init(baseURL: URL, token: String, transport: any HTTPTransport) {
