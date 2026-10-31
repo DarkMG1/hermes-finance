@@ -3,14 +3,21 @@ import assert from 'node:assert/strict';
 import { createAnthropicReader } from '../src/receipt-reader/anthropic.ts';
 import { ReaderError } from '../src/receipt-reader.ts';
 import { loadConfig } from '../src/config.ts';
+import { createClaude } from '../src/chat/anthropic.ts';
+import { makeTestDeps } from './helpers.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+const makeReader = (key: string, model: string, fetchFn: typeof fetch) => {
+  const { deps } = makeTestDeps();
+  deps.config.anthropicApiKey = key;
+  return createAnthropicReader(createClaude(deps, fetchFn)!, model);
+};
 const toolReply = (input: unknown, status = 200) => async () =>
   new Response(JSON.stringify({ content: [{ type: 'tool_use', name: 'record_receipt', input }], usage: { input_tokens: 1, output_tokens: 2 } }), { status });
 
 test('sends the photo with the tool, without forcing it, and returns the validated result', async () => {
   let sent: { url: string; init: RequestInit } | undefined;
-  const reader = createAnthropicReader('synthetic-key', 'claude-sonnet-5-5', async (url, init) => {
+  const reader = makeReader('synthetic-key', 'claude-sonnet-5-5', async (url, init) => {
     sent = { url: String(url), init: init! };
     return toolReply({ items: [{ name: ' Synthetic Bread ', amountCents: 350 }, { name: 'Free Bag', amountCents: 0 }], taxCents: 20, tipCents: 0, feesCents: 0, totalCents: 370,
       merchant: ' Synthetic Grocer ', purchaseDate: '2026-03-14' })();
@@ -33,7 +40,7 @@ test('sends the photo with the tool, without forcing it, and returns the validat
 });
 
 test('merchant and purchase date are optional and a bad date becomes null', async () => {
-  const read = (extra: object) => createAnthropicReader('k', 'm', toolReply({ items: [{ name: 'X', amountCents: 100 }], taxCents: 0, tipCents: 0, feesCents: 0, totalCents: 100, ...extra })).read(JPEG);
+  const read = (extra: object) => makeReader('k', 'm', toolReply({ items: [{ name: 'X', amountCents: 100 }], taxCents: 0, tipCents: 0, feesCents: 0, totalCents: 100, ...extra })).read(JPEG);
   const none = await read({});
   assert.deepEqual([none.merchant, none.purchaseDate], [null, null]);
   const bad = await read({ merchant: '  ', purchaseDate: 'March 14' });
@@ -50,17 +57,20 @@ test('a non-2xx answer, a missing tool call, invalid input or a network failure 
     async () => { throw new TypeError('fetch failed'); },
     async () => new Response('null', { status: 200 }),
     async () => new Response(JSON.stringify({ content: 'no' }), { status: 200 }),
+    async () => new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API.' } }), { status: 400 }),
   ];
-  for (const f of bad) await assert.rejects(createAnthropicReader('k', 'm', f).read(JPEG), ReaderError);
+  for (const f of bad) await assert.rejects(makeReader('k', 'm', f).read(JPEG), ReaderError);
 });
 
 test('a timeout is TIMEOUT; other fetch failures are UNREACHABLE; a null body is INVALID_OUTPUT', async () => {
   const code = async (f: () => Promise<Response>) => {
-    try { await createAnthropicReader('k', 'm', f).read(JPEG); } catch (e) { return (e as ReaderError).code; }
+    try { await makeReader('k', 'm', f).read(JPEG); } catch (e) { return (e as ReaderError).code; }
   };
   assert.equal(await code(async () => { throw new DOMException('timed out', 'TimeoutError'); }), 'TIMEOUT');
   assert.equal(await code(async () => { throw new TypeError('fetch failed'); }), 'UNREACHABLE');
   assert.equal(await code(async () => new Response('null', { status: 200 })), 'INVALID_OUTPUT');
+  assert.equal(await code(async () => new Response('{}', { status: 529 })), 'HTTP_529');
+  assert.equal(await code(async () => new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API.' } }), { status: 400 })), 'AI_CREDITS_EXHAUSTED');
 });
 
 const base = { HERMES_API_TOKEN: 'x'.repeat(32), HERMES_TOKEN_KEY: Buffer.alloc(32).toString('base64'), HERMES_DB_PATH: '/tmp/x.db', PLAID_CLIENT_ID: 'a', PLAID_SECRET: 'b' };

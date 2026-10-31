@@ -38,7 +38,7 @@ export function inboxRoutes(app: FastifyInstance, deps: Deps): void {
       if (getInboxRow(db, id)?.tagged) return;
       if (storeRead(db, id, r, deps.now().toISOString())) rematch(id);
     } catch (e) {
-      console.error(`[hermes] inbox read failed code=${e instanceof ReaderError ? e.code : 'UNKNOWN'}`);
+      console.error(`[hermes] inbox read failed code=${e instanceof ReaderError || e instanceof ApiError ? e.code : 'UNKNOWN'}`);
       db.prepare('UPDATE inbox_receipts SET read_failed = 1 WHERE id = ? AND read_at IS NULL AND linked_at IS NULL').run(id);
     }
   }

@@ -94,6 +94,11 @@ test('read errors: no receipt, removed, reader off, reader failure; nothing stor
   const failed = await s.read('own');
   assert.equal(failed.statusCode, 502);
   assert.equal(failed.json().code, 'READ_FAILED');
+  const out = setup();
+  out.reader.next = new ReaderError('AI_CREDITS_EXHAUSTED');
+  const broke = await out.read('own');
+  assert.equal(broke.statusCode, 402);
+  assert.equal(broke.json().code, 'AI_CREDITS_EXHAUSTED');
   assert.equal((s.deps.db.prepare('SELECT COUNT(*) AS n FROM receipt_items').get() as { n: number }).n, 0);
   const off = setup({ reader: false });
   const r = await off.read('own');

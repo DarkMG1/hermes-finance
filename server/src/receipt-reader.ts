@@ -22,6 +22,9 @@ export async function readReceipt(deps: Deps, key: string, jpeg: Buffer, automat
   state.active.add(key);
   try {
     return await deps.receiptReader.read(jpeg);
+  } catch (e) {
+    if (e instanceof ReaderError && e.code === 'AI_CREDITS_EXHAUSTED') throw new ApiError(402, 'AI_CREDITS_EXHAUSTED', 'the Anthropic API keys are out of credit');
+    throw e;
   } finally {
     state.active.delete(key);
     if (!automatic) state.cooldown.set(key, deps.now().getTime() + 30_000);

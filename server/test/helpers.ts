@@ -24,6 +24,7 @@ export function makeTestDeps(): { deps: Deps; plaid: FakePlaid; prices: FakePric
     plaid,
     prices,
     receiptReader: reader,
+    claude: null,
     now: () => new Date('2026-03-15T12:00:00Z'),
     config: {
       dbPath: join(dir, 'hermes.db'), apiToken: API_TOKEN, tokenKey: randomBytes(32), host: '127.0.0.1', port: 0,
