@@ -61,6 +61,8 @@ struct AskView: View {
         do {
             try await model.client?.deleteChat(id: chat.id)
             await load()
+        } catch ClientError.api(409, let body) where body.code == "CHAT_BUSY" {
+            self.error = "Wait for the answer to finish"
         } catch {
             self.error = errorMessage(error)
         }

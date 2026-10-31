@@ -140,8 +140,8 @@ struct SettingsView: View {
         .task { serverSha = try? await model.reader?.read("/v1/health", as: Health.self).value.gitSha }
         .task { await loadBanks() }
         // an older server has no usage route: the row stays hidden
-        .task { aiUsage = try? await model.client?.aiUsage() }
-        .refreshable { await loadBanks() }
+        .task { await loadAiUsage() }
+        .refreshable { await loadBanks(); await loadAiUsage() }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.commaSeparatedText]) { result in
             model.queueCSV(result)
         }
@@ -161,6 +161,8 @@ struct SettingsView: View {
             return "Synced \(date.formatted(.relative(presentation: .named)))"
         }
     }
+
+    private func loadAiUsage() async { aiUsage = try? await model.client?.aiUsage() }
 
     private func loadBanks() async {
         guard let reader = model.reader else { return }

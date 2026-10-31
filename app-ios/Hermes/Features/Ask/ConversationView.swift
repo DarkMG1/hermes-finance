@@ -55,7 +55,7 @@ struct ConversationView: View {
     private func userBubble(_ message: ChatMessage) -> some View {
         HStack {
             Spacer(minLength: Space.xxl)
-            Text(message.text).textStyle(.body).foregroundStyle(.white)
+            Text(message.text).textStyle(.body, color: .white)
                 .padding(Space.m)
                 .background(Palette.accent, in: RoundedRectangle(cornerRadius: Radius.medium))
         }
@@ -104,14 +104,15 @@ struct ConversationView: View {
             .labelStyle(.iconOnly)
             .font(TextStyle.title.font)
             // a stream left over from an earlier visit can't be stopped from here
-            .disabled(thread == nil || (streaming ? stream == nil : text.isEmpty || text.count > 4000))
+            .disabled(thread == nil || (streaming ? stream == nil : stream != nil || text.isEmpty || text.count > 4000))
         }
         .padding(Space.m)
         .background(Palette.surface, in: RoundedRectangle(cornerRadius: Radius.medium))
         .padding(Space.s)
     }
 
-    private func load() async {
+    /// `resync`: after a local failure, take the server's version only if it kept the question, so an unsent one stays retryable.
+    private func load(resync: Bool = false) async {
         guard let chatId else {
             thread = thread ?? ChatThread()
             return
@@ -119,7 +120,7 @@ struct ConversationView: View {
         guard let client = model.client else { return }
         do {
             let detail = try await client.chat(id: chatId)
-            guard stream == nil else { return }
+            guard stream == nil, !resync || detail.messages.count >= thread?.messages.count ?? 0 else { return }
             thread = ChatThread(detail)
             title = detail.title
             loadError = nil
@@ -162,6 +163,8 @@ struct ConversationView: View {
             // ended without done or error; a no-op once the answer has an outcome
             thread?.fail(code: "INTERRUPTED")
             stream = nil
+            // the server may have saved a different outcome (done, stopped) than the connection showed
+            if ["NETWORK", "INTERRUPTED"].contains(thread?.messages.last?.errorCode) { await load(resync: true) }
         }
     }
 
