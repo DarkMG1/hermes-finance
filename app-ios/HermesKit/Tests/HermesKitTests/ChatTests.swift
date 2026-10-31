@@ -75,6 +75,17 @@ private func streaming() -> ChatThread {
 
 @Test func jsonValueDisplay() {
     #expect(JSONValue.object(["n": .number(2), "p": .number(1.5), "s": .string("x")]).display == "n: 2, p: 1.5, s: x")
+    #expect(JSONValue.number(1234567).display == "1234567" && JSONValue.number(-0.25).display == "-0.25")
+}
+
+@Test func dataLineStripsExactlyOneLeadingSpace() {
+    #expect(SSEParser.dataValue("data:  x") == " x" && SSEParser.dataValue("data: x") == "x" && SSEParser.dataValue("data:x") == "x")
+}
+
+@Test func sendIsIgnoredWhileStreaming() {
+    var t = streaming()
+    t.send(text: "again", clientId: "u2", now: "n")
+    #expect(t.messages.count == 2 && t.isStreaming)
 }
 
 @Test func chatEndpoints() async throws {
@@ -86,6 +97,7 @@ private func streaming() -> ChatThread {
     #expect(try await client.createChat(idempotencyKey: "k1").id == "c2")
     try await client.deleteChat(id: "c2")
     let (create, delete) = (transport.requests[0], transport.requests[1])
+    #expect(create.body == Data("{}".utf8))
     #expect(create.method == "POST" && create.url.path() == "/v1/chats" && create.headers["Idempotency-Key"] == "k1")
     #expect(delete.method == "DELETE" && delete.url.path() == "/v1/chats/c2" && delete.headers["Idempotency-Key"] == nil)
 }

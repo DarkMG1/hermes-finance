@@ -35,7 +35,7 @@ public enum JSONValue: Codable, Sendable, Equatable {
     public var display: String {
         switch self {
         case .string(let v): v
-        case .number(let v): String(format: "%g", v)
+        case .number(let v): v == v.rounded() && abs(v) < 1e15 ? String(Int(v)) : "\(v)"
         case .bool(let v): String(v)
         case .null: "null"
         case .array(let v): v.map(\.display).joined(separator: ", ")
@@ -106,13 +106,19 @@ public struct SSEParser: Sendable {
         var input: [String: JSONValue]?
     }
 
+    /// The SSE spec strips one leading space after the colon, no more.
+    static func dataValue(_ line: some StringProtocol) -> String {
+        let value = line.dropFirst(5)
+        return String(value.hasPrefix(" ") ? value.dropFirst() : value)
+    }
+
     private static func event(_ block: String) -> ChatEvent? {
         var name = "", data: [String] = []
         for line in block.split(separator: "\n", omittingEmptySubsequences: false) {
             if line.hasPrefix("event:") {
                 name = line.dropFirst(6).trimmingCharacters(in: .whitespaces)
             } else if line.hasPrefix("data:") {
-                data.append(String(line.dropFirst(5).drop { $0 == " " }))
+                data.append(dataValue(line))
             }
         }
         guard let d = try? JSONDecoder().decode(Data.self, from: Foundation.Data(data.joined(separator: "\n").utf8)) else { return nil }
@@ -134,6 +140,7 @@ public struct ChatThread: Sendable, Equatable {
     public var isStreaming: Bool { messages.last?.status == "streaming" }
 
     public mutating func send(text: String, clientId: String, now: String) {
+        guard !isStreaming else { return }
         messages.append(ChatMessage(id: clientId, role: "user", text: text, tools: [], status: "done", errorCode: nil, createdAt: now))
         messages.append(ChatMessage(id: clientId + "-answer", role: "assistant", text: "", tools: [], status: "streaming", errorCode: nil, createdAt: now))
     }
