@@ -1,6 +1,20 @@
+import assert from 'node:assert/strict';
 import { ClaudeError, type Claude } from '../src/chat/anthropic.ts';
 
 type Event = { type: string; [k: string]: unknown };
+type Message = { role: string; content: string | { type: string; id?: string; tool_use_id?: string }[] };
+
+/** The request rules the Messages API enforces on history: starts with user, roles alternate, tool_use and tool_result pair up. */
+export function assertValid(messages: Message[]): void {
+  assert.equal(messages[0]?.role, 'user');
+  const ids = (m: Message | undefined, type: string, key: 'id' | 'tool_use_id') =>
+    (Array.isArray(m?.content) ? m.content : []).filter((b) => b.type === type).map((b) => b[key]);
+  messages.forEach((m, i) => {
+    if (i) assert.notEqual(m.role, messages[i - 1]!.role, `roles alternate at ${i}`);
+    if (m.role === 'assistant') assert.deepEqual(ids(messages[i + 1], 'tool_result', 'tool_use_id'), ids(m, 'tool_use', 'id'), `tool results answer message ${i}`);
+    else assert.deepEqual(ids(m, 'tool_result', 'tool_use_id'), ids(messages[i - 1], 'tool_use', 'id'), `tool results at ${i} have their tool_use`);
+  });
+}
 
 /** Replays one scripted round of SSE events per stream() call and records each request body. */
 export class FakeClaude implements Claude {
@@ -14,6 +28,7 @@ export class FakeClaude implements Claude {
   async stream(_feature: string, body: Record<string, unknown>, signal?: AbortSignal) {
     const round = this.requests.length;
     this.requests.push(structuredClone(body));
+    assertValid(body.messages as Message[]);
     const fail = this.fail?.round === round ? this.fail : undefined;
     if (fail && fail.event === undefined) throw new ClaudeError(fail.code);
     const events = this.rounds[round] ?? [];

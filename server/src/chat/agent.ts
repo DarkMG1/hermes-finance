@@ -25,19 +25,21 @@ export function systemPrompt(today: string, tz: string): string {
 
 /** Streams one answer: up to MAX_ROUNDS model calls, running tools between them, and saves the turn as done, stopped or failed. */
 export async function answer(deps: Deps, chatId: string, assistantId: string, emit: (e: ChatEvent) => void, signal: AbortSignal): Promise<void> {
-  const claude = deps.claude!;
   const model = deps.config.chatModel;
   const system = [{ type: 'text', text: systemPrompt(localDay(deps.now()), process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone), cache_control: EPHEMERAL }];
-  const history = replay(deps.db, chatId);
+  const history = replay(deps.db, chatId, assistantId);
   const turn: ApiMessage[] = [];
   let content: Block[] = [];
   let cost = 0;
   try {
+    const claude = deps.claude;
+    if (!claude) throw new ClaudeError('AI_NOT_CONFIGURED');
     for (let r = 0; r < MAX_ROUNDS; r++) {
       const last = r === MAX_ROUNDS - 1;
       const messages: ApiMessage[] = [...history, ...turn];
       // tools stay on the last call (history holds tool_use blocks and the cache prefix starts with tools); tool_choice none forbids new calls
-      if (last) messages.push({ role: 'user', content: LAST_CALL });
+      // appended to the tool results so roles keep alternating
+      if (last) messages.push({ role: 'user', content: [...(messages.pop()!.content as Record<string, unknown>[]), { type: 'text', text: LAST_CALL }] });
       const { events, key } = await claude.stream('chat', {
         model, max_tokens: 4096, stream: true, system, tools: CACHED_TOOLS, ...(last ? { tool_choice: { type: 'none' } } : {}), messages,
       }, signal);
@@ -71,7 +73,7 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
       turn.push({ role: 'assistant', content: content.filter(Boolean) });
       const uses = content.filter((b) => b?.type === 'tool_use');
       content = [];
-      if (stop !== 'tool_use' || last) break;
+      if (stop !== 'tool_use' || last || !uses.length) break;
       turn.push({
         role: 'user',
         content: uses.map((b) => {

@@ -38,6 +38,7 @@ const lastMessage = (body: Record<string, unknown>) => (body.messages as { role:
 test('plain answer streams text and saves done', async () => {
   const s = setup([[start(), ...text(0, 'You spent ', '$12.34.'), ...end('end_turn')]]);
   await s.run();
+  assert.deepEqual(s.fake.requests[0]!.messages, [{ role: 'user', content: 'How much did I spend?' }]);
   const cost = costCents('fake-chat-model', { input_tokens: 1000, output_tokens: 50 });
   assert.deepEqual(s.events, [{ type: 'text', text: 'You spent ' }, { type: 'text', text: '$12.34.' }, { type: 'done', messageId: s.assistantId, costCents: cost }]);
   const msg = getChat(s.db, s.chatId)!.messages[1]!;
@@ -58,6 +59,7 @@ test('tool round then answer', async () => {
   assert.deepEqual(s.events.map((e) => e.type), ['text', 'tool', 'text', 'done']);
   assert.deepEqual(s.events[1], { type: 'tool', name: 'spending', label: 'Spending · 2026-03', input });
   assert.equal(s.fake.requests.length, 2);
+  assert.deepEqual((s.fake.requests[1]!.messages as unknown[])[0], { role: 'user', content: 'How much did I spend?' });
   const last = lastMessage(s.fake.requests[1]!);
   assert.equal(last.role, 'user');
   assert.deepEqual(last.content, [{ type: 'tool_result', tool_use_id: 'tu1', content: runTool(s.deps, 'spending', input).content, is_error: false }]);
@@ -79,7 +81,9 @@ test('round cap', async () => {
   // tools stay so the history's tool_use blocks are valid and the cache prefix holds; tool_choice none forbids new calls
   assert.ok(Array.isArray(tenth.tools));
   assert.deepEqual(tenth.tool_choice, { type: 'none' });
-  assert.deepEqual(lastMessage(tenth), { role: 'user', content: 'Answer now with what you have; no more tools.' });
+  const lastContent = lastMessage(tenth).content as { type: string; text?: string }[];
+  assert.equal(lastContent[0]!.type, 'tool_result');
+  assert.deepEqual(lastContent.at(-1), { type: 'text', text: 'Answer now with what you have; no more tools.' });
   assert.equal(s.events.at(-1)!.type, 'done');
 });
 
@@ -145,6 +149,38 @@ test('stopped turn keeps completed tool rounds', () => {
   const msgs = replay(db, chatId);
   assert.equal(msgs.length, 4);
   assert.deepEqual(msgs[3], { role: 'assistant', content: [{ type: 'text', text: 'Partial' }] });
+});
+
+test('a done turn whose last message has no text keeps its earlier text; a turn with no text at all skips the pair', () => {
+  const { db, chatId, assistantId } = setup([]);
+  const use = { type: 'tool_use', id: 'tu1', name: 'accounts', input: {} };
+  saveAssistant(db, assistantId, [
+    { role: 'assistant', content: [{ type: 'text', text: 'Checking' }, use] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: '[]', is_error: false }] },
+    { role: 'assistant', content: [{ type: 'thinking', thinking: '', signature: 'sig' }] },
+  ], 'done', null);
+  assert.deepEqual(replay(db, chatId), [
+    { role: 'user', content: 'How much did I spend?' },
+    { role: 'assistant', content: [{ type: 'text', text: 'Checking' }] },
+  ]);
+  saveAssistant(db, assistantId, [{ role: 'assistant', content: [use] }, { role: 'user', content: [] }, { role: 'assistant', content: [] }], 'done', null);
+  assert.deepEqual(replay(db, chatId), []);
+});
+
+test('tool_use stop with no tool_use blocks ends the answer', async () => {
+  const s = setup([[start(), ...text(0, 'Hmm.'), ...end('tool_use')], [start(), ...text(0, 'never'), ...end('end_turn')]]);
+  await s.run();
+  assert.equal(s.fake.requests.length, 1);
+  assert.equal(s.events.at(-1)!.type, 'done');
+  assert.equal(getChat(s.db, s.chatId)!.messages[1]!.text, 'Hmm.');
+});
+
+test('no Claude client saves the answer failed', async () => {
+  const s = setup([]);
+  s.deps.claude = null;
+  await s.run();
+  assert.deepEqual(s.events, [{ type: 'error', code: 'AI_NOT_CONFIGURED' }]);
+  assert.equal(getChat(s.db, s.chatId)!.messages[1]!.status, 'failed');
 });
 
 test('dropFailedTail removes the failed answer and its question', () => {

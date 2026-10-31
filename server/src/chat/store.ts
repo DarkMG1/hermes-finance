@@ -92,9 +92,11 @@ function trimTurn(turn: ApiMessage[]): ApiMessage[] {
   return out;
 }
 
-export function replay(db: Db, chatId: string): ApiMessage[] {
+/** The conversation as Anthropic messages. activeAssistantId (the answer being written) is left out but its question stays, so it is last. */
+export function replay(db: Db, chatId: string, activeAssistantId?: string): ApiMessage[] {
   const out: ApiMessage[] = [];
   for (const r of rows(db, chatId)) {
+    if (r.id === activeAssistantId) continue;
     if (r.role === 'user') { out.push({ role: 'user', content: JSON.parse(r.content_json) as string }); continue; }
     const turn = r.status === 'done' || r.status === 'stopped' ? trimTurn(JSON.parse(r.content_json) as ApiMessage[]) : [];
     if (turn.length) out.push(...turn);
