@@ -9,6 +9,7 @@ import { getPerson, listPeople } from '../people.ts';
 import { getNetWorth } from '../networth.ts';
 import { localDay } from '../days.ts';
 import { getHoldingHistory, getInvestments } from '../investments.ts';
+import { getChat, searchChats } from './store.ts';
 
 export type ToolDef = { name: string; description: string; input_schema: Record<string, unknown> };
 export const RESULT_MAX = 20_000;
@@ -21,6 +22,7 @@ const jsonSchema = (s: z.ZodType): Record<string, unknown> => {
   return out;
 };
 const Range = NetWorthQuery.shape.range;
+const Day = ListTransactionsQuery.shape.from;
 const Empty = z.object({}).strict();
 const CENTS = 'All amounts are integer cents.';
 
@@ -53,11 +55,20 @@ const ENTRIES = new Map<string, Entry>([
     (d, q, today) => (q.holding ? getHoldingHistory(d.db, q.holding, q.range ?? '1y', today) : getInvestments(d.db))),
   entry('accounts', 'Bank, card and investment accounts with current balances.', Empty, (d) => listAccounts(d.db)),
   entry('categories', 'The spending and income categories transactions can have.', Empty, (d) => listCategories(d.db)),
+  entry('search_chats', "Searches the owner's own earlier conversations with you (questions and your answers) for messages containing every word of query, optionally between from and to; returns each match's chatId, title, date and a snippet with the words in [brackets].",
+    z.object({ query: z.string().max(200).regex(/[\p{L}\p{N}]/u, 'query has no words to search for'), from: Day, to: Day, limit: z.number().int().min(1).max(20).optional() }).strict(),
+    (d, q) => searchChats(d.db, { ...q, limit: q.limit ?? 10 })),
+  entry('read_chat', "One of the owner's own earlier conversations with you in full (id is a chatId from search_chats): each message's role, date and text.",
+    z.object({ id: z.string().min(1) }).strict(), (d, q) => {
+      const chat = getChat(d.db, q.id);
+      return chat && { id: chat.id, title: chat.title, createdAt: chat.createdAt,
+        messages: chat.messages.map((m) => ({ role: m.role, date: localDay(new Date(m.createdAt)), text: m.text })) };
+    }),
 ]);
 
 export const TOOLS: ToolDef[] = [...ENTRIES.values()].map((e) => e.def);
 
-const ARRAY_KEYS = ['transactions', 'rows', 'items', 'points', 'holdings', 'history'];
+const ARRAY_KEYS = ['transactions', 'rows', 'items', 'points', 'holdings', 'history', 'messages', 'results'];
 const TEXT_KEYS = new Set(['notes', 'name', 'payee', 'bankDescription', 'merchantName', 'matchText']);
 
 const NOTE = { truncated: true, note: 'Result cut; narrow the dates or filters.' };
@@ -88,7 +99,7 @@ function fit(e: Entry, deps: Deps, input: Record<string, unknown>, today: string
       const k = arrays().sort((x, y) => (obj[y] as unknown[]).length - (obj[x] as unknown[]).length)[0]!;
       const a = obj[k] as unknown[];
       const n = Math.floor(a.length * 0.8);
-      obj[k] = k === 'points' ? a.slice(a.length - n) : a.slice(0, n);
+      obj[k] = k === 'points' || k === 'messages' ? a.slice(a.length - n) : a.slice(0, n);
       s = JSON.stringify(obj);
     }
     if (s.length <= RESULT_MAX) return s;
@@ -117,9 +128,11 @@ export function runTool(deps: Deps, name: string, input: unknown): { content: st
 const LABELS: Record<string, string> = {
   spending: 'Spending', expenses: 'Expenses', transactions: 'Transactions', transaction: 'Transaction', payee_history: 'Payee history', bills: 'Bills',
   reimbursements: 'Reimbursements', people: 'People', net_worth: 'Net worth', investments: 'Investments', accounts: 'Accounts', categories: 'Categories',
+  search_chats: 'Past chats', read_chat: 'Past chat',
 };
 
 export function toolLabel(name: string, input: Record<string, unknown>): string {
+  if (name === 'search_chats' && typeof input.query === 'string') return `${LABELS[name]} · ${input.query}`;
   const { from, to } = input;
   const span = from && to ? `${String(from)} – ${String(to)}` : from ? `Since ${String(from)}` : to ? `Through ${String(to)}` : undefined;
   const detail = [span, input.date ?? input.month, input.name, input.range].find((v) => typeof v === 'string');

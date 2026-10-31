@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ChatDetail, ChatList, ChatMessage, ChatSummary } from '@hermes/shared';
 import type { Db } from '../db.ts';
-import { localDay } from '../days.ts';
+import { addDays, localDay } from '../days.ts';
 import { toolLabel } from './tools.ts';
 
 type Block = Record<string, unknown>;
@@ -12,6 +12,14 @@ const SUMMARY = 'SELECT id, title, created_at AS createdAt, updated_at AS update
 const rows = (db: Db, chatId: string) =>
   db.prepare('SELECT id, seq, role, content_json, status, error_code, created_at FROM chat_messages WHERE conversation_id = ? ORDER BY seq').all(chatId) as Row[];
 const blocks = (m: ApiMessage): Block[] => (Array.isArray(m.content) ? m.content : []);
+// joined like the stream joins them, so a reload shows exactly what the stream showed
+const answerText = (turn: ApiMessage[]): string =>
+  turn.filter((m) => m.role === 'assistant').flatMap(blocks).filter((b) => b.type === 'text' && b.text).map((b) => b.text as string).join('\n\n');
+/** Replaces a message's search entry; no text leaves it out. Row deletes drop entries by trigger. */
+function index(db: Db, id: string, text: string | null): void {
+  db.prepare('DELETE FROM chat_search WHERE message_id = ?').run(id);
+  if (text) db.prepare('INSERT INTO chat_search (text, message_id, conversation_id) SELECT ?, id, conversation_id FROM chat_messages WHERE id = ?').run(text, id);
+}
 
 export function createChat(db: Db, nowIso: string): ChatSummary {
   const id = randomUUID();
@@ -32,8 +40,7 @@ export function getChat(db: Db, id: string): ChatDetail | null {
     const turn = JSON.parse(r.content_json) as ApiMessage[];
     const all = turn.filter((m) => m.role === 'assistant').flatMap(blocks);
     const ran = new Set(turn.filter((m) => m.role === 'user').flatMap(blocks).map((b) => b.tool_use_id));
-    // joined like the stream joins them, so a reload shows exactly what the stream showed
-    const text = all.filter((b) => b.type === 'text' && b.text).map((b) => b.text as string).join('\n\n');
+    const text = answerText(turn);
     const tools = all.filter((b) => b.type === 'tool_use' && ran.has(b.id)).map((b) => {
       const input = b.input as Record<string, unknown>;
       return { name: b.name as string, input, label: toolLabel(b.name as string, input) };
@@ -67,7 +74,9 @@ export function addUserMessage(db: Db, chatId: string, clientId: string, text: s
   return db.transaction(() => {
     db.prepare('UPDATE chat_conversations SET updated_at = ?, title = CASE WHEN title = \'\' THEN ? ELSE title END WHERE id = ?')
       .run(nowIso, text.trim().slice(0, 60), chatId);
-    return insert(db, chatId, 'user', clientId, text, 'done', nowIso);
+    const id = insert(db, chatId, 'user', clientId, text, 'done', nowIso);
+    index(db, id, text);
+    return id;
   })();
 }
 
@@ -76,7 +85,26 @@ export function startAssistant(db: Db, chatId: string, nowIso: string): string {
 }
 
 export function saveAssistant(db: Db, id: string, turn: ApiMessage[], status: 'done' | 'failed' | 'stopped', errorCode: string | null): void {
-  db.prepare('UPDATE chat_messages SET content_json = ?, status = ?, error_code = ? WHERE id = ?').run(JSON.stringify(turn), status, errorCode, id);
+  db.transaction(() => {
+    db.prepare('UPDATE chat_messages SET content_json = ?, status = ?, error_code = ? WHERE id = ?').run(JSON.stringify(turn), status, errorCode, id);
+    index(db, id, status === 'failed' ? null : answerText(turn));
+  })();
+}
+
+export type ChatHit = { chatId: string; title: string; date: string; role: 'user' | 'assistant'; snippet: string };
+
+/** Past messages matching every term (each quoted, so FTS5 syntax is never parsed), best bm25 matches, then newest first. */
+export function searchChats(db: Db, q: { query: string; from?: string; to?: string; limit: number }): { results: ChatHit[] } {
+  // a term with no letter or digit tokenizes to nothing
+  const terms = q.query.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t)).map((t) => `"${t.replaceAll('"', '""')}"`);
+  // owner-local days as UTC instants (a date-time without Z parses in the process time zone)
+  const at = (day: string) => new Date(`${day}T00:00:00`).toISOString();
+  const hits = db.prepare(`SELECT c.id AS chatId, c.title, m.created_at AS createdAt, m.role, snippet(chat_search, 0, '[', ']', '…', 24) AS snippet
+    FROM chat_search JOIN chat_messages m ON m.id = chat_search.message_id JOIN chat_conversations c ON c.id = m.conversation_id
+    WHERE chat_search MATCH ? AND m.created_at >= ? AND m.created_at < ? ORDER BY rank LIMIT ?`)
+    .all(terms.join(' '), q.from ? at(q.from) : '', q.to ? at(addDays(q.to, 1)) : '9', q.limit) as (Omit<ChatHit, 'date'> & { createdAt: string })[];
+  hits.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return { results: hits.map(({ createdAt, ...h }) => ({ ...h, date: localDay(new Date(createdAt)) })) };
 }
 
 export function dropFailedTail(db: Db, chatId: string): void {

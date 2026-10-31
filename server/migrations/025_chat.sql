@@ -18,6 +18,11 @@ CREATE TABLE chat_messages (
   created_at TEXT NOT NULL,
   UNIQUE (conversation_id, seq)
 );
+-- past chats Claude can search: user questions and done/stopped answers' display text, kept in step by store.ts
+CREATE VIRTUAL TABLE chat_search USING fts5(text, message_id UNINDEXED, conversation_id UNINDEXED, tokenize = 'porter unicode61');
+CREATE TRIGGER chat_messages_unindex AFTER DELETE ON chat_messages BEGIN
+  DELETE FROM chat_search WHERE message_id = old.id;
+END;
 CREATE TABLE ai_usage (
   id INTEGER PRIMARY KEY,
   at TEXT NOT NULL,
