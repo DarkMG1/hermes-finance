@@ -28,7 +28,7 @@ test('spending tool returns exactly getSpending', () => {
 test('transactions, people, net_worth, bills, accounts match the functions the routes use', () => {
   const { deps, db, today } = setup();
   assert.deepEqual(call(deps, 'transactions', { limit: 1 }), JSON.parse(JSON.stringify(listTransactions(db, { limit: 1 }, today))));
-  assert.deepEqual(call(deps, 'people', {}), listPeople(db, false));
+  assert.deepEqual(call(deps, 'people', {}), listPeople(db, true));
   assert.deepEqual(call(deps, 'net_worth', { range: '1m' }), getNetWorth(db, '1m', today));
   assert.deepEqual(call(deps, 'bills', {}), JSON.parse(JSON.stringify(getRecurring(db, today, false))));
   assert.deepEqual(call(deps, 'accounts', {}), listAccounts(db));
@@ -67,7 +67,8 @@ test('every TOOLS entry has an object input_schema and a runTool branch', () => 
 });
 
 test('toolLabel', () => {
-  assert.equal(toolLabel('spending', { period: 'month', date: '2026-09' }), 'Spending · 2026-09');
+  assert.equal(toolLabel('spending', { period: 'month', date: '2026-09' }), 'Spending · September 2026');
+  assert.equal(toolLabel('spending', { period: 'year', date: '2026' }), 'Spending · 2026');
   assert.equal(toolLabel('accounts', {}), 'Accounts');
 });
 
@@ -98,6 +99,8 @@ test('results always fit the cap, even quote-heavy ones', () => {
 
 test('toolLabel shows a date range', () => {
   assert.equal(toolLabel('transactions', { from: '2026-09-01', to: '2026-09-30' }), 'Transactions · 2026-09-01 – 2026-09-30');
+  assert.equal(toolLabel('transactions', { from: '2026-03-01' }), 'Transactions · Since 2026-03-01');
+  assert.equal(toolLabel('transactions', { to: '2026-03-31' }), 'Transactions · Through 2026-03-31');
 });
 
 test('investments and expenses match their functions', () => {
@@ -105,4 +108,36 @@ test('investments and expenses match their functions', () => {
   assert.deepEqual(call(deps, 'investments', {}), JSON.parse(JSON.stringify(getInvestments(db))));
   const q = { period: 'month' as const, date: '2026-03', kind: 'out' as const, limit: 50 };
   assert.deepEqual(call(deps, 'expenses', { period: 'month', date: '2026-03' }), getExpenses(db, q));
+});
+
+test('people lists archived people too (the app always asks with all=1)', () => {
+  const { deps, db } = setup();
+  seedPerson(db, { id: 'p2', name: 'Synthetic Wren', archived: true });
+  assert.deepEqual(call(deps, 'people', {}).map((p: { id: string }) => p.id).sort(), ['p1', 'p2']);
+});
+
+test('a cut net worth history keeps the newest points', () => {
+  const { deps, db, today } = setup();
+  db.prepare("INSERT INTO balance_snapshots VALUES ('a1', '2024-01-01', 1000)").run();
+  const full = getNetWorth(db, 'all', today);
+  assert.ok(JSON.stringify(full).length > RESULT_MAX);
+  const r = runTool(deps, 'net_worth', { range: 'all' });
+  assert.ok(r.content.length <= RESULT_MAX);
+  const got = JSON.parse(r.content);
+  assert.equal(got.truncated, true);
+  assert.equal(got.points.at(-1).date, full.points.at(-1)!.date);
+  assert.ok(got.points.length < full.points.length);
+});
+
+test('a single transaction over the cap is delivered with its amounts and shortened text, and the cursor goes on from it', () => {
+  const { deps, db } = setup();
+  seedTxn(db, { id: 'huge', accountId: 'a1', date: '2026-02-02', amountCents: -4321, payee: 'SYNTHETIC GROCER', bankDescription: 'SYNTHETIC '.repeat(3000) });
+  seedTxn(db, { id: 'older', accountId: 'a1', date: '2026-02-01', amountCents: -100, payee: 'SYNTHETIC GROCER' });
+  const first = JSON.parse(runTool(deps, 'transactions', { to: '2026-02-28', limit: 200 }).content);
+  assert.equal(first.truncated, true);
+  assert.deepEqual(first.transactions.map((t: { id: string }) => t.id), ['huge']);
+  assert.equal(first.transactions[0].amountCents, -4321);
+  assert.ok(first.transactions[0].bankDescription.length < 600);
+  const next = JSON.parse(runTool(deps, 'transactions', { to: '2026-02-28', limit: 200, cursor: first.nextCursor }).content);
+  assert.deepEqual(next.transactions.map((t: { id: string }) => t.id), ['older']);
 });

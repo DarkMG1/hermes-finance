@@ -6,7 +6,8 @@ import { getExpenses, getPayeeHistory, getReimbursements, getSpending } from '..
 import { getTransaction, listAccounts, listCategories, listTransactions } from '../ledger.ts';
 import { getRecurring } from '../recurring.ts';
 import { getPerson, listPeople } from '../people.ts';
-import { getNetWorth, localDay } from '../networth.ts';
+import { getNetWorth } from '../networth.ts';
+import { localDay } from '../days.ts';
 import { getHoldingHistory, getInvestments } from '../investments.ts';
 
 export type ToolDef = { name: string; description: string; input_schema: Record<string, unknown> };
@@ -45,7 +46,7 @@ const ENTRIES = new Map<string, Entry>([
     (d, q, today) => getRecurring(d.db, today, q.includeHidden === true)),
   entry('reimbursements', 'Reimbursement money out and back in per month, with the unpaid amount and the rows.', Empty, (d, _q, today) => getReimbursements(d.db, today)),
   entry('people', 'People the owner shares money with and each running balance (positive: they owe the owner); give id for one person with their history.', z.object({ id: z.string().min(1).optional() }).strict(),
-    (d, q) => (q.id ? getPerson(d.db, q.id) : listPeople(d.db, false))),
+    (d, q) => (q.id ? getPerson(d.db, q.id) : listPeople(d.db, true))),
   entry('net_worth', 'Daily net worth history over a range with the current value and the change.', NetWorthQuery, (d, q, today) => getNetWorth(d.db, q.range, today)),
   entry('investments', 'Investment holdings with value, cost basis and gain; give holding (a holding key) for that holding\'s value history over range (default 1y).',
     z.object({ holding: z.string().min(1).optional(), range: Range.optional() }).strict(),
@@ -56,11 +57,18 @@ const ENTRIES = new Map<string, Entry>([
 
 export const TOOLS: ToolDef[] = [...ENTRIES.values()].map((e) => e.def);
 
-const ARRAY_KEYS = ['transactions', 'rows', 'items', 'points', 'holdings'];
+const ARRAY_KEYS = ['transactions', 'rows', 'items', 'points', 'holdings', 'history'];
+const TEXT_KEYS = new Set(['notes', 'name', 'payee', 'bankDescription', 'merchantName', 'matchText']);
 
 const NOTE = { truncated: true, note: 'Result cut; narrow the dates or filters.' };
 
-/** Fits a result under RESULT_MAX. Paged results are re-run with a smaller limit so nextCursor stays the function's own; other arrays are trimmed, largest first. */
+const shorten = (v: unknown, cap: number): unknown => (Array.isArray(v) ? v.map((x) => shorten(x, cap))
+  : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) =>
+    [k, TEXT_KEYS.has(k) && typeof x === 'string' && x.length > cap ? `${x.slice(0, cap)}…` : shorten(x, cap)]))
+    : v);
+
+/** Fits a result under RESULT_MAX. Paged results are re-run with a smaller limit so nextCursor stays the function's own, then long text is
+ * shortened; a page never drops rows (nextCursor points past them). Other arrays are trimmed, largest first; points (oldest first) keep the newest. */
 function fit(e: Entry, deps: Deps, input: Record<string, unknown>, today: string, result: unknown): string {
   let s = JSON.stringify(result);
   if (s.length <= RESULT_MAX) return s;
@@ -72,12 +80,15 @@ function fit(e: Entry, deps: Deps, input: Record<string, unknown>, today: string
     s = JSON.stringify({ ...(out as object), ...NOTE });
   }
   if (out && typeof out === 'object' && !Array.isArray(out)) {
-    const obj: Record<string, unknown> = { ...(out as Record<string, unknown>), ...NOTE };
-    const arrays = () => ARRAY_KEYS.filter((k) => Array.isArray(obj[k]) && (obj[k] as unknown[]).length);
+    let obj: Record<string, unknown> = { ...(out as Record<string, unknown>), ...NOTE };
     s = JSON.stringify(obj);
+    for (const cap of [500, 100]) if (s.length > RESULT_MAX) { obj = shorten(obj, cap) as typeof obj; s = JSON.stringify(obj); }
+    const arrays = () => ('nextCursor' in obj ? [] : ARRAY_KEYS.filter((k) => Array.isArray(obj[k]) && (obj[k] as unknown[]).length));
     while (s.length > RESULT_MAX && arrays().length) {
       const k = arrays().sort((x, y) => (obj[y] as unknown[]).length - (obj[x] as unknown[]).length)[0]!;
-      obj[k] = (obj[k] as unknown[]).slice(0, Math.floor((obj[k] as unknown[]).length * 0.8));
+      const a = obj[k] as unknown[];
+      const n = Math.floor(a.length * 0.8);
+      obj[k] = k === 'points' ? a.slice(a.length - n) : a.slice(0, n);
       s = JSON.stringify(obj);
     }
     if (s.length <= RESULT_MAX) return s;
@@ -109,7 +120,10 @@ const LABELS: Record<string, string> = {
 };
 
 export function toolLabel(name: string, input: Record<string, unknown>): string {
-  const span = input.from || input.to ? `${input.from ?? ''} – ${input.to ?? ''}` : undefined;
+  const { from, to } = input;
+  const span = from && to ? `${String(from)} – ${String(to)}` : from ? `Since ${String(from)}` : to ? `Through ${String(to)}` : undefined;
   const detail = [span, input.date ?? input.month, input.name, input.range].find((v) => typeof v === 'string');
-  return `${LABELS[name] ?? name}${detail ? ` · ${detail}` : ''}`;
+  const shown = detail && /^\d{4}-\d{2}$/.test(detail)
+    ? new Date(`${detail}-01T00:00:00Z`).toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }) : detail;
+  return `${LABELS[name] ?? name}${shown ? ` · ${shown}` : ''}`;
 }
