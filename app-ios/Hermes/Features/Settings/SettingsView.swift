@@ -162,7 +162,14 @@ struct SettingsView: View {
         }
     }
 
-    private func loadAiUsage() async { aiUsage = try? await model.client?.aiUsage() }
+    /// A failed refresh keeps the last value; only an older server (404) hides the row.
+    private func loadAiUsage() async {
+        do {
+            aiUsage = try await model.client?.aiUsage()
+        } catch ClientError.api(404, _) {
+            aiUsage = nil
+        } catch {}
+    }
 
     private func loadBanks() async {
         guard let reader = model.reader else { return }

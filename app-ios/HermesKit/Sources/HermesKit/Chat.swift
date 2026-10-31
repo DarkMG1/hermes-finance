@@ -53,7 +53,7 @@ public struct ChatSummary: Codable, Sendable, Identifiable, Equatable {
 
 public struct ChatList: Codable, Sendable { public let chats: [ChatSummary] }
 
-/// `label` is known only for tools seen live; saved history has just the name and input.
+/// `label` is absent from older servers; show the name then.
 public struct ChatToolUse: Codable, Sendable, Equatable {
     public let name: String
     public let input: [String: JSONValue]
@@ -178,6 +178,11 @@ extension APIClient {
 
     public func deleteChat(id: String) async throws {
         try await send("DELETE", "/v1/chats/\(id)", body: nil, idempotencyKey: nil, timeout: 20)
+    }
+
+    /// Returns once the server has saved the running answer as stopped, or at once when nothing is running.
+    public func stopChat(id: String) async throws {
+        try await send("POST", "/v1/chats/\(id)/stop", body: nil, idempotencyKey: nil, timeout: 30)
     }
 
     public func aiUsage() async throws -> AiUsage { try decode(try await getData("/v1/ai/usage")) }

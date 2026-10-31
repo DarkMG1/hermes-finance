@@ -7,6 +7,7 @@ enum Palette {
     static let text = dynamic(light: 0x1B2430, dark: 0xEFE9E1)
     static let secondaryText = dynamic(light: 0x1B2430, dark: 0xEFE9E1, alpha: 0.68)
     static let accent = dynamic(light: 0x9A5426, dark: 0xC97B4A)
+    static let onAccent = dynamic(light: 0xFFFFFF, dark: 0xFFFFFF)
     static let gain = dynamic(light: 0x2F7D4F, dark: 0x9CC28A)
     static let loss = dynamic(light: 0xB03A2E, dark: 0xE07B6A)
     static let separator = dynamic(light: 0x1B2430, dark: 0xEFE9E1, alpha: 0.12)

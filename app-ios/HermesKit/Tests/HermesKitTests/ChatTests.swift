@@ -59,7 +59,7 @@ private func streaming() -> ChatThread {
 @Test func chatFixturesDecode() throws {
     #expect(try decode(ChatList.self, "chat-list").chats.map(\.id) == ["chat-1"])
     let d = try decode(ChatDetail.self, "chat-detail")
-    #expect(d.messages.count == 2 && d.messages[1].tools[0].name == "spending" && d.messages[1].tools[0].label == nil)
+    #expect(d.messages.count == 2 && d.messages[1].tools[0].name == "spending" && d.messages[1].tools[0].label == "Spending · March 2026")
     #expect(d.messages[1].tools[0].input["period"] == .string("month"))
     #expect(try decode(AiUsage.self, "ai-usage") == AiUsage(month: "2026-03", costCents: 42, backupActive: false))
 }
@@ -67,10 +67,13 @@ private func streaming() -> ChatThread {
 @Test func olderServerMessageWithoutErrorCodeDecodes() throws {
     var obj = try #require(JSONSerialization.jsonObject(with: fixture("chat-detail")) as? [String: Any])
     var msgs = try #require(obj["messages"] as? [[String: Any]])
-    for i in msgs.indices { msgs[i].removeValue(forKey: "errorCode") }
+    for i in msgs.indices {
+        msgs[i].removeValue(forKey: "errorCode")
+        msgs[i]["tools"] = (msgs[i]["tools"] as? [[String: Any]])?.map { $0.filter { $0.key != "label" } }
+    }
     obj["messages"] = msgs
     let d = try JSONDecoder().decode(ChatDetail.self, from: JSONSerialization.data(withJSONObject: obj))
-    #expect(d.messages.allSatisfy { $0.errorCode == nil })
+    #expect(d.messages.allSatisfy { $0.errorCode == nil } && d.messages[1].tools[0].label == nil)
 }
 
 @Test func jsonValueDisplay() {
@@ -92,14 +95,17 @@ private func streaming() -> ChatThread {
     let transport = FakeTransport([
         .success(HTTPResponse(status: 201, body: Data(#"{"id":"c2","title":"New chat","createdAt":"a","updatedAt":"b"}"#.utf8))),
         .success(HTTPResponse(status: 204, body: Data())),
+        .success(HTTPResponse(status: 204, body: Data())),
     ])
     let client = APIClient(baseURL: testBase, token: "t", transport: transport)
     #expect(try await client.createChat(idempotencyKey: "k1").id == "c2")
     try await client.deleteChat(id: "c2")
-    let (create, delete) = (transport.requests[0], transport.requests[1])
+    try await client.stopChat(id: "c2")
+    let (create, delete, stop) = (transport.requests[0], transport.requests[1], transport.requests[2])
     #expect(create.body == Data("{}".utf8))
     #expect(create.method == "POST" && create.url.path() == "/v1/chats" && create.headers["Idempotency-Key"] == "k1")
     #expect(delete.method == "DELETE" && delete.url.path() == "/v1/chats/c2" && delete.headers["Idempotency-Key"] == nil)
+    #expect(stop.method == "POST" && stop.url.path() == "/v1/chats/c2/stop" && stop.body == nil && stop.headers["Idempotency-Key"] == nil)
 }
 
 @Test func streamRequestCarriesTokenAndAcceptsEventStream() {

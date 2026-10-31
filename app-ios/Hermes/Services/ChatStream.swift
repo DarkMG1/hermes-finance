@@ -1,7 +1,7 @@
 import Foundation
 import HermesKit
 
-/// Streams one answer. Cancelling the calling task drops the connection, and the server saves the answer as stopped.
+/// Streams one answer. Cancelling the calling task only drops the connection: the server still finishes and saves the answer.
 @MainActor
 enum ChatStream {
     static func send(client: APIClient, chatId: String, clientId: String, text: String, onEvent: (ChatEvent) -> Void) async throws {

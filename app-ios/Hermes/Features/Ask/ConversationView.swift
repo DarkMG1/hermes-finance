@@ -19,7 +19,11 @@ struct ConversationView: View {
             VStack(alignment: .leading, spacing: Space.m) {
                 InlineError(message: loadError)
                 ForEach(thread?.messages ?? []) { message in
-                    if message.role == "user" { userBubble(message) } else { answer(message) }
+                    if message.role == "user" {
+                        UserBubble(message: message).equatable()
+                    } else {
+                        AnswerRow(message: message, canRetry: stream == nil, onTool: { shownTool = $0 }, onRetry: retry).equatable()
+                    }
                 }
             }
             .padding(Space.l)
@@ -31,65 +35,25 @@ struct ConversationView: View {
             if backupActive { Text("Using backup key").textStyle(.caption, color: Palette.secondaryText) }
         }
         .safeAreaInset(edge: .bottom) { input }
+        .refreshable { await load() }
         .navigationTitle(title.isEmpty ? "New chat" : title)
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: Binding(get: { shownTool != nil }, set: { if !$0 { shownTool = nil } })) {
             if let tool = shownTool {
                 // swiftlint:disable:next multiple_closures_with_trailing_closure
-                Sheet(title: tool.name, dirty: false, onCancel: { shownTool = nil }, onSave: nil) {
+                Sheet(title: tool.label ?? tool.name, dirty: false, onCancel: { shownTool = nil }, onSave: nil) {
                     ForEach(tool.input.keys.sorted(), id: \.self) { LabeledContent($0, value: tool.input[$0]?.display ?? "") }
                 }
             }
         }
         .task { await load() }
-        .task { backupActive = (try? await model.client?.aiUsage())?.backupActive ?? false }
+        .task { await loadUsage() }
         // an answer still being written by an earlier visit: look again until it ends
         .task(id: thread?.isStreaming == true && stream == nil) {
             while thread?.isStreaming == true, stream == nil, !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(2))
                 await load()
             }
-        }
-    }
-
-    private func userBubble(_ message: ChatMessage) -> some View {
-        HStack {
-            Spacer(minLength: Space.xxl)
-            Text(message.text).textStyle(.body, color: .white)
-                .padding(Space.m)
-                .background(Palette.accent, in: RoundedRectangle(cornerRadius: Radius.medium))
-        }
-    }
-
-    private func answer(_ message: ChatMessage) -> some View {
-        VStack(alignment: .leading, spacing: Space.xs) {
-            ForEach(Array(message.tools.enumerated()), id: \.offset) { _, tool in
-                Button { shownTool = tool } label: { Text(tool.label ?? tool.name).textStyle(.caption, color: Palette.secondaryText) }
-                    .buttonStyle(.plain)
-            }
-            if !message.text.isEmpty {
-                Text((try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-                     ?? AttributedString(message.text))
-                    .textStyle(.body)
-                    .textSelection(.enabled)
-            }
-            switch message.status {
-            case "streaming" where message.text.isEmpty: ProgressView()
-            case "stopped": Text("Stopped").textStyle(.caption, color: Palette.secondaryText)
-            case "failed": failure(message)
-            default: EmptyView()
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    @ViewBuilder
-    private func failure(_ message: ChatMessage) -> some View {
-        switch message.errorCode {
-        case "AI_CREDITS_EXHAUSTED": Text("AI credits used up for this month").textStyle(.caption, color: Palette.loss)
-        case "AI_NOT_CONFIGURED": Text("AI isn't set up on the server").textStyle(.caption, color: Palette.loss)
-        default:
-            Button("Couldn't answer · Retry") { retry() }.textStyle(.caption, color: Palette.loss).disabled(stream != nil)
         }
     }
 
@@ -103,8 +67,7 @@ struct ConversationView: View {
             }
             .labelStyle(.iconOnly)
             .font(TextStyle.title.font)
-            // a stream left over from an earlier visit can't be stopped from here
-            .disabled(thread == nil || (streaming ? stream == nil : stream != nil || text.isEmpty || text.count > 4000))
+            .disabled(thread == nil || (!streaming && (stream != nil || text.isEmpty || text.utf16.count > 4000)))
         }
         .padding(Space.m)
         .background(Palette.surface, in: RoundedRectangle(cornerRadius: Radius.medium))
@@ -120,7 +83,9 @@ struct ConversationView: View {
         guard let client = model.client else { return }
         do {
             let detail = try await client.chat(id: chatId)
-            guard stream == nil, !resync || detail.messages.count >= thread?.messages.count ?? 0 else { return }
+            let lastQuestion = { (messages: [ChatMessage]) in messages.last { $0.role == "user" }?.text }
+            guard stream == nil, !resync || detail.messages.count > thread?.messages.count ?? 0
+                    || lastQuestion(detail.messages) == lastQuestion(thread?.messages ?? []) else { return }
             thread = ChatThread(detail)
             title = detail.title
             loadError = nil
@@ -152,11 +117,28 @@ struct ConversationView: View {
         }
         thread?.send(text: text, clientId: clientId, now: Date().ISO8601Format())
         stream = Task {
+            var created: String?
             do {
-                if chatId == nil { chatId = try await client.createChat(idempotencyKey: createKey).id }
-                try await ChatStream.send(client: client, chatId: chatId ?? "", clientId: clientId, text: text) { thread?.apply($0) }
+                if chatId == nil {
+                    created = try await client.createChat(idempotencyKey: createKey).id
+                    chatId = created
+                }
+                // the chat can still be busy for a moment after a Stop
+                for attempt in 1...2 {
+                    do {
+                        try await ChatStream.send(client: client, chatId: chatId ?? "", clientId: clientId, text: text) { thread?.apply($0) }
+                        break
+                    } catch ClientError.api(_, let body) where body.code == "CHAT_BUSY" && attempt == 1 {
+                        try await Task.sleep(for: .seconds(1))
+                    }
+                }
             } catch ClientError.api(_, let body) {
                 thread?.fail(code: body.code)
+                // a chat whose first question was turned away would sit empty in the list
+                if let created, (try? await client.deleteChat(id: created)) != nil {
+                    chatId = nil
+                    createKey = UUID().uuidString
+                }
             } catch {
                 thread?.fail(code: "NETWORK")
             }
@@ -165,11 +147,84 @@ struct ConversationView: View {
             stream = nil
             // the server may have saved a different outcome (done, stopped) than the connection showed
             if ["NETWORK", "INTERRUPTED"].contains(thread?.messages.last?.errorCode) { await load(resync: true) }
+            await loadUsage()
         }
     }
 
+    /// Leaving the screen doesn't stop an answer; only this does. It also stops one left running by an earlier visit.
     private func stop() {
         thread?.stop()
-        stream?.cancel()
+        Task {
+            if let chatId { try? await model.client?.stopChat(id: chatId) }
+            stream?.cancel()
+            await stream?.value
+            // the server's copy: the saved stopped answer, or one still running if the stop didn't get through
+            await load()
+        }
+    }
+
+    private func loadUsage() async { backupActive = (try? await model.client?.aiUsage())?.backupActive ?? backupActive }
+}
+
+private struct UserBubble: View, Equatable {
+    let message: ChatMessage
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: Space.xxl)
+            Text(message.text).textStyle(.body, color: Palette.onAccent)
+                .padding(Space.m)
+                .background(Palette.accent, in: RoundedRectangle(cornerRadius: Radius.medium))
+        }
+    }
+}
+
+/// Equatable so a streaming answer doesn't re-parse every earlier row's Markdown.
+private struct AnswerRow: View, Equatable {
+    let message: ChatMessage
+    let canRetry: Bool
+    let onTool: (ChatToolUse) -> Void
+    let onRetry: () -> Void
+
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.message == b.message && a.canRetry == b.canRetry }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            ForEach(Array(message.tools.enumerated()), id: \.offset) { _, tool in
+                Button { onTool(tool) } label: { Text("Looked at " + (tool.label ?? tool.name)).textStyle(.caption, color: Palette.secondaryText) }
+                    .buttonStyle(.plain)
+            }
+            if !message.text.isEmpty {
+                Text(markdown).textStyle(.body).textSelection(.enabled)
+            }
+            switch message.status {
+            case "streaming" where message.text.isEmpty: ProgressView()
+            case "stopped": Text("Stopped").textStyle(.caption, color: Palette.secondaryText)
+            case "failed": failure
+            default: EmptyView()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Links are dropped: the text comes from a model that read bank data, so a link in it can't be trusted.
+    private var markdown: AttributedString {
+        var text = (try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+            ?? AttributedString(message.text)
+        text.link = nil
+        return text
+    }
+
+    @ViewBuilder
+    private var failure: some View {
+        let final = ["AI_CREDITS_EXHAUSTED": "AI credits used up for this month", "AI_NOT_CONFIGURED": "AI isn't set up on the server",
+                     "CHAT_TOO_LONG": "This chat is too long. Start a new one."]
+        let retryable = ["MAX_TOKENS": "The answer got too long. Ask for less.", "REFUSED": "Claude couldn't answer that."]
+        if let text = final[message.errorCode ?? ""] {
+            Text(text).textStyle(.caption, color: Palette.loss)
+        } else {
+            Button("\(retryable[message.errorCode ?? ""] ?? "Couldn't answer") · Retry", action: onRetry)
+                .textStyle(.caption, color: Palette.loss).disabled(!canRetry)
+        }
     }
 }
