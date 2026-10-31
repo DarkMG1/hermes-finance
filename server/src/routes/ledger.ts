@@ -11,7 +11,7 @@ import { excludedBy, getExpenses, getPayeeHistory, getReimbursements, getSpendin
 import { linkInbox, restoreToInbox } from '../inbox.ts';
 import { normalizeName } from '../recurring.ts';
 import { getNetWorth, localDay } from '../networth.ts';
-import { oldestOpenBefore } from '../reconcile.ts';
+import { oldestOpenBefore, reconcileIfMovedIntoClosedMonth } from '../reconcile.ts';
 import { assertCategoryExists, getHome, getTransaction, learnCategory, listAccounts, listCategories, listTransactions } from '../ledger.ts';
 
 export { writeSplit } from '../splits.ts';
@@ -113,6 +113,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       const now = deps.now().toISOString();
       db.prepare(`UPDATE transactions SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...args, now, req.params.id);
       if (body.categoryId) learnCategory(db, req.params.id, body.categoryId, now);
+      if (body.date !== undefined) reconcileIfMovedIntoClosedMonth(db, req.params.id, current.date, body.date, now);
       return { status: 200, body: getTransaction(db, req.params.id, localDay(deps.now())) };
     });
     return reply.code(r.status).send(r.body);

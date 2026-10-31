@@ -180,3 +180,27 @@ test('a row someone else paid shows in its month and marks with the share shown'
   assert.equal((await mark('theirs', true, 'k-theirs', -250)).statusCode, 200);
   assert.equal((await get('/v1/reconcile?month=2026-02')).open, 2);
 });
+
+test('moving a charge into a fully reconciled month marks it reconciled; open, empty and same months leave it', async () => {
+  const { deps, get, mark } = api();
+  const move = async (id: string, date: string) =>
+    (await buildApp(deps).inject({ method: 'PATCH', url: `/v1/transactions/${id}`, headers: { ...AUTH, 'idempotency-key': `mv-${id}-${date}` }, payload: { date } })).json();
+  await mark('jan', true);
+  await mark('feb-a', true);
+  await mark('feb-b', false);
+  // open month: Jan has no open rows, so moving mar into Jan closes it
+  assert.equal((await move('mar', '2026-01-15')).reconciled, true);
+  assert.deepEqual((await get('/v1/reconcile/months')).months, [{ month: '2026-02', open: 1 }]);
+  // Feb has an open row: unchanged
+  seedTxn(deps.db, { id: 'x', accountId: 'chk', date: '2026-03-02', amountCents: -50, categoryId: 'food' });
+  assert.equal((await move('x', '2026-02-10')).reconciled, false);
+  // empty month and same month: unchanged
+  assert.equal((await move('x', '2026-04-10')).reconciled, false);
+  assert.equal((await move('x', '2026-04-20')).reconciled, false);
+  // same-month move in a closed month does not mark either
+  await mark('feb-b', true);
+  seedTxn(deps.db, { id: 'y', accountId: 'chk', date: '2026-02-05', amountCents: -60, categoryId: 'food' });
+  assert.equal((await move('y', '2026-02-06')).reconciled, false);
+  assert.equal((await move('y', '2026-01-20')).reconciled, true);
+  assert.deepEqual((await get('/v1/reconcile/months')).months, [{ month: '2026-04', open: 1 }]);
+});

@@ -45,6 +45,19 @@ export function oldestOpenBefore(db: Db, month: string): { month: string; open: 
   return reconcileMonths(db).months.find((m) => m.month < month) ?? null;
 }
 
+/** The owner moved a row into another month by hand: if every other counted row there is already reconciled, so is this one. */
+export function reconcileIfMovedIntoClosedMonth(db: Db, id: string, oldDate: string, newDate: string, nowIso: string): void {
+  const month = newDate.slice(0, 7);
+  if (oldDate.slice(0, 7) === month) return;
+  const { from, toExclusive } = periodRange({ period: 'month', date: month });
+  const others = db.prepare(`SELECT COUNT(*) AS n, COALESCE(SUM(${OPEN}), 0) AS open FROM transactions t
+    WHERE t.date >= ? AND t.date < ? AND t.id != ? AND ${NEEDS_RECONCILE}`)
+    .get(from, toExclusive, id) as { n: number; open: number };
+  if (others.n === 0 || others.open > 0) return;
+  db.prepare(`UPDATE transactions SET reconciled_at = ?, reconciled_cents = amount_cents WHERE id = ? AND id IN (SELECT t.id FROM transactions t WHERE ${NEEDS_RECONCILE})`)
+    .run(nowIso, id);
+}
+
 export function setReconciled(db: Db, id: string, reconciled: boolean, nowIso: string, amountCents?: number): Transaction {
   // the amount check sits in the UPDATE so check and write are one step
   const changes = !reconciled
