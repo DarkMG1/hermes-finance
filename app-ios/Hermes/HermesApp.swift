@@ -118,7 +118,7 @@ struct MainTabs: View {
             Tab("Home", systemImage: "house", value: 0) { NavigationStack { HomeView() } }
             Tab("Spending", systemImage: "chart.bar", value: 1) { NavigationStack { SpendingView() } }
             Tab("Activity", systemImage: "list.bullet", value: 2) { NavigationStack { ActivityView() } }
-            Tab("Ask", systemImage: "sparkles", value: 4) { AskLock { NavigationStack { AskView() } } }
+            Tab("Ask", systemImage: "sparkles", value: 4) { AskLock(tab: 4) { NavigationStack { AskView() } } }
             Tab("Settings", systemImage: "gearshape", value: 3) { NavigationStack { SettingsView() } }
         }
         .environment(\.selectedTab, tab)

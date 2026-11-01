@@ -13,6 +13,8 @@ struct AskLock<Content: View>: View {
     @State private var error: String?
     /// Bumped by every relock, so a Face ID success that lands after one doesn't unlock.
     @State private var generation = 0
+    /// This tab's value: opening it asks for Face ID straight away.
+    let tab: Int
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -34,7 +36,10 @@ struct AskLock<Content: View>: View {
                 }
             }
             .onChange(of: scenePhase) { _, phase in if phase == .background { relock() } }
-            .onChange(of: selectedTab) { relock() }
+            .onChange(of: selectedTab) { _, selected in
+                relock()
+                if selected == tab, hideBalances { Task { await unlock() } }
+            }
             .onChange(of: hideBalances) { _, hidden in if hidden { relock() } }
     }
 
