@@ -247,6 +247,8 @@ extension APIClient {
 public enum TypingPace {
     /// Characters per second when the text keeps up.
     static let base = 90.0
+    /// A longer run without spaces (a link, CJK) types through instead of waiting for its end.
+    static let longestWord = 24
 
     public static func next(text: String, shown: Int, elapsed: TimeInterval, ended: Bool) -> Int {
         let chars = Array(text)
@@ -275,8 +277,14 @@ public enum TypingPace {
 
     private static func step(_ c: [Character], _ n: Int, complete: Bool) -> Int {
         guard n > 0 else { return n }
-        if n < c.count, !c[n].isWhitespace, !c[n - 1].isWhitespace { return c[n...].firstIndex(where: \.isWhitespace) ?? c.count }
-        if n == c.count, !complete, !c[n - 1].isWhitespace { return (c[..<n].lastIndex(where: \.isWhitespace) ?? -1) + 1 }
+        if n < c.count, !c[n].isWhitespace, !c[n - 1].isWhitespace {
+            let end = c[n...].firstIndex(where: \.isWhitespace) ?? c.count
+            if end - n <= longestWord { return end }
+        }
+        if n == c.count, !complete, !c[n - 1].isWhitespace {
+            let start = (c[..<n].lastIndex(where: \.isWhitespace) ?? -1) + 1
+            if n - start < longestWord { return start }
+        }
         let start = lineStart(c, n - 1), end = c[start...].firstIndex(of: "\n")
         if c[start] == "|" { return tableRow(c, n, start: start, end: end, complete: complete) }
         guard end == nil, !complete else { return n }

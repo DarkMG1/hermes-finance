@@ -209,6 +209,10 @@ private let points: JSONValue = .array([.object(["label": .string("2026-09"), "v
     #expect(TypingPace.next(text: "Hello world again", shown: 0, elapsed: frame, ended: false) == 5)
     #expect(TypingPace.next(text: "Hello wor", shown: 5, elapsed: 1, ended: false) == 6)
     #expect(TypingPace.next(text: "Hello wor", shown: 6, elapsed: frame, ended: true) == 9)
+    // a run without spaces longer than a word (a link) types through instead of waiting for its end
+    let link = "See https://example.com/" + String(repeating: "a", count: 40)
+    #expect(TypingPace.next(text: link, shown: 4, elapsed: frame, ended: false) == 11)
+    #expect(TypingPace.next(text: link, shown: 4, elapsed: 1, ended: false) == link.count)
 }
 
 @Test func typingNeverShowsHalfAnEmphasisOrCodeSpan() {

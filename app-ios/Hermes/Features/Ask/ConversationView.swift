@@ -50,12 +50,10 @@ struct ConversationView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(Space.l)
-                // once the question just sent is laid out: its top to the top
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { _ in
-                    guard scrollPending else { return }
-                    scrollPending = false
-                    withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo("pinned", anchor: .top) }
-                }
+                // the question just sent, top to the top: on the next pass after the send, or once its rows are laid out if
+                // that comes first; whichever runs clears it
+                .onChange(of: scrollPending) { _, pending in if pending { Task { scrollToQuestion(proxy) } } }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { _ in scrollToQuestion(proxy) }
             }
         }
         .scrollPosition($position)
@@ -175,6 +173,12 @@ struct ConversationView: View {
             guard !Task.isCancelled else { return }
             loadError = errorMessage(error)
         }
+    }
+
+    private func scrollToQuestion(_ proxy: ScrollViewProxy) {
+        guard scrollPending else { return }
+        scrollPending = false
+        withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo("pinned", anchor: .top) }
     }
 
     @ViewBuilder
