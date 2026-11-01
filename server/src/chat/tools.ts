@@ -79,6 +79,10 @@ const ENTRIES = new Map<string, Entry>([
       return chat && { id: chat.id, title: chat.title, createdAt: chat.createdAt,
         messages: chat.messages.map((m) => ({ role: m.role, date: localDay(new Date(m.createdAt)), text: clip(m.text) })) };
     }),
+  entry('show_chart', 'Shows the owner a bar or line chart above your answer. Every value must come from a tool result in this conversation; for unit usd_cents values are integer cents.',
+    z.object({ kind: z.enum(['bar', 'line']), title: z.string().min(1).max(60), unit: z.enum(['usd_cents', 'count', 'percent']),
+      points: z.array(z.object({ label: z.string().min(1).max(24), value: z.number() }).strict()).min(2).max(31) }).strict(),
+    () => ({ shown: true })),
 ]);
 
 export const TOOLS: ToolDef[] = [...ENTRIES.values()].map((e) => e.def);

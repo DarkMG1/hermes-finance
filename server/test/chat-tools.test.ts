@@ -153,3 +153,17 @@ test('a single transaction over the cap is delivered with its amounts and shorte
   const next = JSON.parse(runTool(deps, 'transactions', { to: '2026-02-28', limit: 200, cursor: first.nextCursor }).content);
   assert.deepEqual(next.transactions.map((t: { id: string }) => t.id), ['older']);
 });
+
+test('show_chart validates its input and returns only shown; its label names the title', () => {
+  const { deps } = setup();
+  const points = [{ label: 'Food', value: 4000 }, { label: 'Rent', value: 150000 }, { label: 'Fun', value: 2500 }];
+  const chart = { kind: 'bar', title: 'March spending by category', unit: 'usd_cents', points };
+  assert.deepEqual(runTool(deps, 'show_chart', chart), { content: '{"shown":true}', isError: false });
+  assert.equal(runTool(deps, 'show_chart', { ...chart, kind: 'line', unit: 'percent', points: points.slice(0, 2) }).isError, false);
+  for (const bad of [{ ...chart, kind: 'pie' }, { ...chart, unit: 'eur' }, { ...chart, title: 'x'.repeat(61) }, { ...chart, title: '' },
+    { ...chart, points: points.slice(0, 1) }, { ...chart, points: Array.from({ length: 32 }, (_, i) => ({ label: `d${i}`, value: i })) },
+    { ...chart, points: [{ label: 'x'.repeat(25), value: 1 }, ...points] }, { ...chart, points: [{ label: 'Food', value: '4000' }, ...points] }, { ...chart, extra: 1 }]) {
+    assert.equal(runTool(deps, 'show_chart', bad).isError, true, JSON.stringify(bad).slice(0, 80));
+  }
+  assert.equal(toolLabel('show_chart', chart), 'Chart · March spending by category');
+});
