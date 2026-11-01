@@ -68,8 +68,8 @@ const clip = (text: string): string => {
 
 const ENTRIES = new Map<string, Entry>([
   ...MONEY.map(([name, e]): [string, Entry] => [name, { ...e, def: { ...e.def, description: `${e.def.description} ${CENTS}` } }]),
-  entry('search_chats', "Searches the owner's own earlier conversations with you (questions and your answers) for messages containing every word of query, optionally between from and to; returns each match's chatId, title, date and a snippet with the words in [brackets].",
-    z.object({ query: z.string().max(200).regex(/[\p{L}\p{N}]/u, 'query has no words to search for'), from: Day, to: Day, limit: z.number().int().min(1).max(20).optional() }).strict(),
+  entry('search_chats', "Searches the owner's own earlier conversations with you (questions and your answers) for messages containing every word of query, optionally between from and to; returns each match's chatId, title, date and a snippet with the words in [brackets]. Without query (e.g. for \"our last chat\"), lists the most recent chats newest first, each with its first question as the snippet.",
+    z.object({ query: z.string().max(200).regex(/[\p{L}\p{N}]/u, 'query has no words to search for').optional(), from: Day, to: Day, limit: z.number().int().min(1).max(20).optional() }).strict(),
     (d, q, _today, ctx) => searchChats(d.db, { ...q, limit: q.limit ?? 10 }, ctx.chatId)),
   entry('read_chat', "One of the owner's own earlier conversations with you in full (id is a chatId from search_chats): each message's role, date and text.",
     z.object({ id: z.string().min(1) }).strict(), (d, q) => {

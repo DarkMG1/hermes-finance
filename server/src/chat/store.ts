@@ -91,18 +91,31 @@ export function saveAssistant(db: Db, id: string, turn: ApiMessage[], status: 'd
   })();
 }
 
-export type ChatHit = { chatId: string; title: string; date: string; role: 'user' | 'assistant'; snippet: string };
+/** role is left out when listing recent chats (the snippet is then the first question). */
+export type ChatHit = { chatId: string; title: string; date: string; role?: 'user' | 'assistant'; snippet: string };
 
-/** Past messages matching every term (each quoted, so FTS5 syntax is never parsed), best bm25 matches, then newest first. */
-export function searchChats(db: Db, q: { query: string; from?: string; to?: string; limit: number }, excludeChatId?: string): { results: ChatHit[] } {
-  // a term with no letter or digit tokenizes to nothing
-  const terms = q.query.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t)).map((t) => `"${t.replaceAll('"', '""')}"`);
+/** Past messages matching every term (each quoted, so FTS5 syntax is never parsed), best bm25 matches, then newest first.
+ * Without a query: the most recently active chats with their first question, newest first. */
+export function searchChats(db: Db, q: { query?: string; from?: string; to?: string; limit: number }, excludeChatId?: string): { results: ChatHit[] } {
   // owner-local days as UTC instants (a date-time without Z parses in the process time zone)
   const at = (day: string) => new Date(`${day}T00:00:00`).toISOString();
+  const range = [q.from ? at(q.from) : '', q.to ? at(addDays(q.to, 1)) : '9', excludeChatId ?? null, q.limit];
+  if (!q.query) {
+    const chats = db.prepare(`SELECT c.id AS chatId, c.title, c.updated_at AS createdAt,
+      (SELECT content_json FROM chat_messages WHERE conversation_id = c.id AND role = 'user' ORDER BY seq LIMIT 1) AS first
+      FROM chat_conversations c WHERE first IS NOT NULL AND c.updated_at >= ? AND c.updated_at < ? AND c.id IS NOT ?
+      ORDER BY c.updated_at DESC, c.created_at DESC LIMIT ?`).all(...range) as { chatId: string; title: string; createdAt: string; first: string }[];
+    return { results: chats.map(({ createdAt, first, ...c }) => {
+      const text = JSON.parse(first) as string;
+      return { ...c, date: localDay(new Date(createdAt)), snippet: text.length > 200 ? `${text.slice(0, 200)}…` : text };
+    }) };
+  }
+  // a term with no letter or digit tokenizes to nothing
+  const terms = q.query.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t)).map((t) => `"${t.replaceAll('"', '""')}"`);
   const hits = db.prepare(`SELECT c.id AS chatId, c.title, m.created_at AS createdAt, m.role, snippet(chat_search, 0, '[', ']', '…', 24) AS snippet
     FROM chat_search JOIN chat_messages m ON m.id = chat_search.message_id JOIN chat_conversations c ON c.id = m.conversation_id
     WHERE chat_search MATCH ? AND m.created_at >= ? AND m.created_at < ? AND c.id IS NOT ? ORDER BY rank LIMIT ?`)
-    .all(terms.join(' '), q.from ? at(q.from) : '', q.to ? at(addDays(q.to, 1)) : '9', excludeChatId ?? null, q.limit) as (Omit<ChatHit, 'date'> & { createdAt: string })[];
+    .all(terms.join(' '), ...range) as (Omit<ChatHit, 'date'> & { createdAt: string })[];
   hits.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return { results: hits.map(({ createdAt, ...h }) => ({ ...h, date: localDay(new Date(createdAt)) })) };
 }

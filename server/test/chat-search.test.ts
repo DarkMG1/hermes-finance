@@ -138,3 +138,20 @@ test('read_chat cuts an oversized message and keeps the newest ones', () => {
 test('past-chat tool descriptions say nothing about cents', () => {
   for (const t of TOOLS) assert.equal(/integer cents/.test(t.description), !['search_chats', 'read_chat'].includes(t.name), t.name);
 });
+
+test('search_chats without query lists recent chats newest first with their first question, leaving out the current one and empty chats', () => {
+  const { deps, db, ask } = setup();
+  const march = ask('What did I spend on SYNTHETIC GROCER?', ['A lot.'], 'done', MARCH);
+  const april = ask(`Plan my savings ${'x'.repeat(300)}`, ['Save more.'], 'done', APRIL);
+  addUserMessage(db, april, 'c-later', 'A follow-up', APRIL);
+  createChat(db, APRIL);
+  const current = ask('summarize our previous chat', null, 'done', APRIL);
+  const recent = (input: Record<string, unknown>, ctx?: { chatId: string }) => JSON.parse(runTool(deps, 'search_chats', input, ctx).content).results;
+  const all = recent({}, { chatId: current });
+  assert.deepEqual(all.map((r: { chatId: string }) => r.chatId), [april, march]);
+  assert.deepEqual(all[1], { chatId: march, title: 'What did I spend on SYNTHETIC GROCER?', date: localDay(new Date(MARCH)), snippet: 'What did I spend on SYNTHETIC GROCER?' });
+  assert.equal(all[0].snippet, `Plan my savings ${'x'.repeat(184)}…`);
+  assert.deepEqual(recent({ limit: 1 }, { chatId: current }).map((r: { chatId: string }) => r.chatId), [april]);
+  assert.deepEqual(recent({ to: localDay(new Date(MARCH)) }).map((r: { chatId: string }) => r.chatId), [march]);
+  assert.equal(toolLabel('search_chats', {}), 'Past chats');
+});
