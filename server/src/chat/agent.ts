@@ -30,11 +30,16 @@ const SYSTEM_PROMPT = `You are the owner's personal finance assistant inside Her
 const SYSTEM = [{ type: 'text', text: SYSTEM_PROMPT, cache_control: EPHEMERAL }];
 const STOP_CODES: Record<string, string> = { max_tokens: 'MAX_TOKENS', refusal: 'REFUSED' };
 
-/** The request's messages with a cache breakpoint on the last block, copied so the stored turn never carries it. */
-function cached(messages: ApiMessage[]): ApiMessage[] {
-  const last = messages.at(-1)!;
-  const blocks = last.content as Block[];
-  return [...messages.slice(0, -1), { ...last, content: [...blocks.slice(0, -1), { ...blocks.at(-1), cache_control: EPHEMERAL }] }];
+const mark = (m: ApiMessage): ApiMessage => {
+  const blocks = m.content as Block[];
+  return { ...m, content: [...blocks.slice(0, -1), { ...blocks.at(-1), cache_control: EPHEMERAL }] };
+};
+/** The request's messages with breakpoints on the newest block and on the question before the last stored answer, copied so stored turns
+ * never carry them. That answer's first round cached up to that question; a long answer pushes it past the cache's 20-block lookback. */
+function cached(history: ApiMessage[], turn: ApiMessage[]): ApiMessage[] {
+  const all = [...history, ...turn];
+  const prev = history.findLastIndex((m, i) => i < history.length - 1 && m.role === 'user' && !(m.content as Block[]).some((b) => b.type === 'tool_result'));
+  return all.map((m, i) => (i === all.length - 1 || i === prev ? mark(m) : m));
 }
 
 const TITLE_PROMPT = 'Write a title of 3 to 6 words for this conversation about the owner\'s finances. Reply with the title only, no quotes and no punctuation at the end.';
@@ -73,7 +78,7 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
       // max_tokens covers thinking too
       const { events, key } = await claude.stream('chat', {
         model, max_tokens: 16_000, stream: true, system: SYSTEM, tools: CACHED_TOOLS, ...(last ? { tool_choice: { type: 'none' } } : {}),
-        messages: cached([...history, ...turn]),
+        messages: cached(history, turn),
       }, signal);
       const usage: Usage = {};
       const json = new Map<number, string>();

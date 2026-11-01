@@ -344,6 +344,27 @@ test('a failed title call, an empty title or a stopped first answer keeps the fi
   assert.equal(stopped.fake.messageRequests.length, 0);
 });
 
+test('a later question also marks the question before the last answer, in every round; four breakpoints at most, none stored', async () => {
+  const s = setup([
+    [start(), ...tool(0, 'tu1', 'categories', {}), ...end('tool_use')],
+    [start(), ...text(0, 'First.'), ...end('end_turn')],
+    [start(), ...tool(0, 'tu2', 'categories', {}), ...end('tool_use')],
+    [start(), ...text(0, 'Second.'), ...end('end_turn')],
+  ]);
+  await s.run();
+  addUserMessage(s.db, s.chatId, 'c2', 'And now?', NOW);
+  await answer(s.deps, s.chatId, startAssistant(s.db, s.chatId, NOW), () => {}, new AbortController().signal);
+  const marked = (body: Record<string, unknown>) => (body.messages as { content: { cache_control?: unknown }[] }[])
+    .flatMap((m, i) => m.content.map((b, j) => (b.cache_control ? `${i}.${j}` : ''))).filter(Boolean);
+  // round 1 of the first answer: only the newest block (the question is not before a stored answer)
+  assert.deepEqual(marked(s.fake.requests[1]!), ['2.0']);
+  // the second answer: question 1 (where the first answer's round 0 cached) and the newest block
+  assert.deepEqual(marked(s.fake.requests[2]!), ['0.1', '4.1']);
+  assert.deepEqual(marked(s.fake.requests[3]!), ['0.1', '6.0']);
+  for (const body of s.fake.requests) assert.ok(JSON.stringify(body).match(/"cache_control"/g)!.length <= 4);
+  assert.ok(!JSON.stringify(replay(s.db, s.chatId)).includes('cache_control'));
+});
+
 test('system prompt, last tool and the newest message block carry cache_control; the system prompt has no date', async () => {
   const s = setup([[start(), ...text(0, 'Hi'), ...end('end_turn')]]);
   await s.run();
