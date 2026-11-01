@@ -32,16 +32,6 @@ public enum JSONValue: Codable, Sendable, Equatable {
         }
     }
 
-    public var display: String {
-        switch self {
-        case .string(let v): v
-        case .number(let v): v == v.rounded() && abs(v) < 1e15 ? String(Int(v)) : "\(v)"
-        case .bool(let v): String(v)
-        case .null: "null"
-        case .array(let v): v.map(\.display).joined(separator: ", ")
-        case .object(let v): v.keys.sorted().map { "\($0): \(v[$0]!.display)" }.joined(separator: ", ")
-        }
-    }
 }
 
 public struct ChatSummary: Codable, Sendable, Identifiable, Equatable {
@@ -58,6 +48,54 @@ public struct ChatToolUse: Codable, Sendable, Equatable {
     public let name: String
     public let input: [String: JSONValue]
     public var label: String?
+}
+
+/// A `show_chart` tool use the app can draw; nil for any other tool or input it can't, which then shows as a plain tool line.
+public struct ChatChart: Equatable, Sendable {
+    public enum Kind: String, Sendable { case bar, line }
+    public enum Unit: String, Sendable { case usdCents = "usd_cents", count, percent }
+    public struct Point: Equatable, Sendable {
+        public let label: String
+        public let value: Double
+    }
+
+    public let kind: Kind
+    public let title: String
+    public let unit: Unit
+    public let points: [Point]
+
+    public init?(_ tool: ChatToolUse) {
+        guard tool.name == "show_chart", case .string(let kind)? = tool.input["kind"], let kind = Kind(rawValue: kind),
+              case .string(let title)? = tool.input["title"], (1...60).contains(title.count),
+              case .string(let unit)? = tool.input["unit"], let unit = Unit(rawValue: unit),
+              case .array(let raw)? = tool.input["points"], (2...31).contains(raw.count) else { return nil }
+        var points: [Point] = []
+        for item in raw {
+            // the bound keeps Money.format's Int conversion from trapping
+            guard case .object(let point) = item, case .string(let label)? = point["label"], (1...24).contains(label.count),
+                  case .number(let value)? = point["value"], abs(value) < 1e15 else { return nil }
+            points.append(Point(label: label, value: value))
+        }
+        (self.kind, self.title, self.unit, self.points) = (kind, title, unit, points)
+    }
+
+    /// `percent` values are percentage points (12.5 is 12.5%).
+    public func format(_ value: Double) -> String {
+        switch unit {
+        case .usdCents: Money.format(Int(value.rounded()))
+        case .count: value.formatted(.number.precision(.fractionLength(0...1)))
+        case .percent: (value / 100).formatted(.percent.precision(.fractionLength(0...1)))
+        }
+    }
+
+    /// Local dates when every label is YYYY-MM or YYYY-MM-DD, so a line can use a time axis.
+    public var dates: [Date]? {
+        let style = Date.ISO8601FormatStyle(timeZone: .current).year().month().day()
+        let dates = points.compactMap { point in
+            [7, 10].contains(point.label.count) ? try? Date(point.label.count == 7 ? point.label + "-01" : point.label, strategy: style) : nil
+        }
+        return dates.count == points.count ? dates : nil
+    }
 }
 
 public struct ChatMessage: Codable, Sendable, Identifiable, Equatable {
@@ -139,6 +177,13 @@ public struct ChatThread: Sendable, Equatable {
     public init() { messages = [] }
 
     public var isStreaming: Bool { messages.last?.status == "streaming" }
+
+    /// Send turns into Stop where it stands, so a second tap meant for Send would stop the answer it just sent.
+    /// Stop counts once 1.5 s have passed or the answer has started; with no `sentAt` (an answer from an earlier visit) it always counts.
+    public func acceptsStop(sentAt: Date?, now: Date) -> Bool {
+        guard let sentAt, let last = messages.last else { return true }
+        return now.timeIntervalSince(sentAt) >= 1.5 || !last.text.isEmpty || !last.tools.isEmpty
+    }
 
     public mutating func send(text: String, clientId: String, now: String) {
         guard !isStreaming else { return }
