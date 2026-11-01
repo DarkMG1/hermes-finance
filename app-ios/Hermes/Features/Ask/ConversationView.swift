@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ConversationView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.askCovered) private var covered
     /// nil until the first question creates the chat.
     @State var chatId: String?
     @State private var title = ""
@@ -44,6 +45,7 @@ struct ConversationView: View {
         .refreshable { await load() }
         .navigationTitle(title.isEmpty ? "New chat" : title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarVisibility(covered ? .hidden : .automatic, for: .navigationBar)
         .task { await load() }
         .task { await loadUsage() }
         // an answer still being written by an earlier visit: look again until it ends
@@ -118,7 +120,8 @@ struct ConversationView: View {
             thread?.messages.removeLast()
             if thread?.messages.last?.role == "user" { thread?.messages.removeLast() }
         }
-        let firstAnswer = thread?.messages.isEmpty ?? true
+        // a stopped first answer leaves the chat to be named after the next done one
+        let firstAnswer = !(thread?.messages.contains { $0.role == "assistant" && $0.status == "done" } ?? false)
         thread?.send(text: text, clientId: clientId, now: Date().ISO8601Format())
         sentAt = .now
         stream = Task {
@@ -157,12 +160,17 @@ struct ConversationView: View {
         }
     }
 
-    /// The server names a chat a moment after its first answer.
+    /// The server names a chat a moment after its first done answer; Haiku can take longer than the first look.
     private func refreshTitle(client: APIClient, firstAnswer: Bool) {
         guard firstAnswer, thread?.messages.last?.status == "done", let chatId else { return }
+        let before = title
         Task {
-            try? await Task.sleep(for: .seconds(3))
-            if let detail = try? await client.chat(id: chatId) { title = detail.title }
+            for wait in [3, 5] {
+                try? await Task.sleep(for: .seconds(wait))
+                guard let detail = try? await client.chat(id: chatId) else { continue }
+                title = detail.title
+                if detail.title != before { return }
+            }
         }
     }
 
@@ -225,6 +233,9 @@ private struct AnswerRow: View, Equatable {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .contextMenu {
+            if !message.text.isEmpty { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text } }
+        }
     }
 
     @ViewBuilder
@@ -248,12 +259,14 @@ private struct Block: View {
         switch block {
         case .paragraph(let text): Text(text).textStyle(.body)
         case .heading(let text): Text(text).textStyle(.headline)
-        case .listItem(let marker, let depth, let text):
+        case .listItem(let marker, let depth, let text, let continued):
             HStack(alignment: .firstTextBaseline, spacing: Space.s) {
-                Text(marker).textStyle(.body).monospacedDigit()
+                // hidden, not left out, so a later paragraph lines up with the item's first
+                Text(marker).textStyle(.body).monospacedDigit().opacity(continued ? 0 : 1).accessibilityHidden(continued)
                 Text(text).textStyle(.body)
             }
             .padding(.leading, CGFloat(depth) * Space.l)
+        case .code(let code): Text(code).font(TextStyle.subhead.font.monospaced()).foregroundStyle(Palette.text)
         case .table(let rows):
             Grid(alignment: .leading, horizontalSpacing: Space.m, verticalSpacing: Space.xs) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { index, row in

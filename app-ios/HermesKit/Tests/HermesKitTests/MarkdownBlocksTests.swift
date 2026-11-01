@@ -10,8 +10,8 @@ private func plain(_ text: AttributedString) -> String { String(text.characters)
         + "| Category | Amount |\n|---|--:|\n| Food | $3 |\n| Gas | $4 |\n\nSee [the bank](https://example.com)."
     let blocks = MarkdownBlock.parse(source)
     guard blocks.count == 7, case .paragraph(let first) = blocks[0], case .heading(let heading) = blocks[1],
-          case .listItem(let m1, let d1, let one) = blocks[2], case .listItem(let m2, let d2, _) = blocks[3],
-          case .listItem(let m3, let d3, let nested) = blocks[4], case .table(let rows) = blocks[5], case .paragraph(let last) = blocks[6]
+          case .listItem(let m1, let d1, let one, false) = blocks[2], case .listItem(let m2, let d2, _, false) = blocks[3],
+          case .listItem(let m3, let d3, let nested, false) = blocks[4], case .table(let rows) = blocks[5], case .paragraph(let last) = blocks[6]
     else { Issue.record("\(blocks)"); return }
     #expect(plain(first) == "Short answer: $5 at SYNTHETIC GROCER.\nSecond line.")
     #expect(first.runs.contains { $0.inlinePresentationIntent == .stronglyEmphasized })
@@ -26,5 +26,29 @@ private func plain(_ text: AttributedString) -> String { String(text.characters)
     let blocks = MarkdownBlock.parse("| A |\n|---|\n| 1 |\n\ntext\n\n| B |\n|---|\n| 2 |")
     guard blocks.count == 3, case .table(let a) = blocks[0], case .table(let b) = blocks[2] else { Issue.record("\(blocks)"); return }
     #expect(a.map { $0.map(plain) } == [["A"], ["1"]] && b.map { $0.map(plain) } == [["B"], ["2"]])
+}
+@Test func emptyTableCellsKeepTheirColumns() {
+    let blocks = MarkdownBlock.parse("| A | B | C |\n|---|---|---|\n|  | m | z |\n| x |  |  |\n| p | | w |")
+    guard blocks.count == 1, case .table(let rows) = blocks[0] else { Issue.record("\(blocks)"); return }
+    #expect(rows.map { $0.map(plain) } == [["A", "B", "C"], ["", "m", "z"], ["x", "", ""], ["p", "", "w"]])
+}
+
+@Test func aRowStartingEmptyStaysItsOwnRow() {
+    let blocks = MarkdownBlock.parse("| A | B |\n|---|---|\n| 1 | 2 |\n|  | 3 |")
+    guard blocks.count == 1, case .table(let rows) = blocks[0] else { Issue.record("\(blocks)"); return }
+    #expect(rows.map { $0.map(plain) } == [["A", "B"], ["1", "2"], ["", "3"]])
+}
+
+@Test func aListItemsLaterParagraphsHaveNoMarker() {
+    let blocks = MarkdownBlock.parse("1. first\n\n   more of first\n2. second")
+    guard blocks.count == 3, case .listItem("1.", 0, let first, false) = blocks[0], case .listItem(_, 0, let more, true) = blocks[1],
+          case .listItem("2.", 0, _, false) = blocks[2] else { Issue.record("\(blocks)"); return }
+    #expect(plain(first) == "first" && plain(more) == "more of first")
+}
+
+@Test func codeKeepsItsLinesWithoutTheTrailingNewline() {
+    let blocks = MarkdownBlock.parse("Run:\n\n```\nlet a = 1\nlet b = 2\n```\nDone.")
+    guard blocks.count == 3, case .code(let code) = blocks[1] else { Issue.record("\(blocks)"); return }
+    #expect(code == "let a = 1\nlet b = 2")
 }
 #endif

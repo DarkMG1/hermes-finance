@@ -17,8 +17,11 @@ struct AskLock<Content: View>: View {
 
     var body: some View {
         let covered = hideBalances && !unlocked
+        // disabled: PrivacyCover's return of the keyboard to the field it took it from can't bring it up under this cover
         content
+            .disabled(covered)
             .accessibilityHidden(covered)
+            .environment(\.askCovered, covered)
             .overlay {
                 if covered {
                     VStack(spacing: Space.l) {
@@ -36,6 +39,7 @@ struct AskLock<Content: View>: View {
     }
 
     private func relock() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         unlocked = false
         error = nil
         generation += 1
@@ -51,4 +55,9 @@ struct AskLock<Content: View>: View {
         unlocked = check.shown
         error = check.error
     }
+}
+
+extension EnvironmentValues {
+    /// The navigation bar is UIKit's and VoiceOver reads it past `accessibilityHidden`, so a covered screen hides it.
+    @Entry var askCovered = false
 }
