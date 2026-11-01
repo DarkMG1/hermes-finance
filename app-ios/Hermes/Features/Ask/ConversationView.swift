@@ -24,33 +24,47 @@ struct ConversationView: View {
     @State private var atBottom = true
     /// Off after a send, so the answer types below its question; scrolling or jumping to the bottom turns it back on.
     @State private var following = true
+    /// The question just sent, scrolled to once its rows are laid out.
+    @State private var scrollPending = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: Space.m) {
-                InlineError(message: loadError)
-                if thread?.messages.isEmpty == true {
-                    Text("Ask about your spending, bills, IOUs or investments").textStyle(.subhead, color: Palette.secondaryText)
+            // a reader, not `position`, for this scroll: ScrollPosition's scrollTo(id:anchor: .top) lined up the bottom of a
+            // pinned exchange taller than the screen
+            ScrollViewReader { proxy in
+                VStack(alignment: .leading, spacing: Space.m) {
+                    InlineError(message: loadError)
+                    if thread?.messages.isEmpty == true {
+                        Text("Ask about your spending, bills, IOUs or investments").textStyle(.subhead, color: Palette.secondaryText)
+                    }
+                    let messages = thread?.messages ?? []
+                    let tail = pinned ? min(2, messages.count) : 0
+                    ForEach(messages.dropLast(tail)) { row($0) }
+                    if tail > 0 {
+                        VStack(alignment: .leading, spacing: Space.m) { ForEach(messages.suffix(tail)) { row($0) } }
+                            .frame(minHeight: max(0, visibleHeight - Space.l), alignment: .top)
+                            .id("pinned")
+                    }
                 }
-                let messages = thread?.messages ?? []
-                let tail = pinned ? min(2, messages.count) : 0
-                ForEach(messages.dropLast(tail)) { row($0) }
-                if tail > 0 {
-                    VStack(alignment: .leading, spacing: Space.m) { ForEach(messages.suffix(tail)) { row($0) } }
-                        .frame(minHeight: max(0, visibleHeight - Space.l), alignment: .top)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(Space.l)
+                // once the question just sent is laid out: its top to the top
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { _ in
+                    guard scrollPending else { return }
+                    scrollPending = false
+                    withAnimation(reduceMotion ? nil : .default) { proxy.scrollTo("pinned", anchor: .top) }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(Space.l)
         }
         .scrollPosition($position)
         .defaultScrollAnchor(.bottom, for: .initialOffset)
-        // a reader following along stays at the bottom as the answer grows or the keyboard comes and goes; so does the
-        // question just sent, at the top, until its answer's text starts
-        .defaultScrollAnchor(following || pinned && thread?.messages.last?.text.isEmpty == true ? .bottom : nil, for: .sizeChanges)
+        // a reader following along stays at the bottom as the answer grows or the keyboard comes and goes
+        .defaultScrollAnchor(following ? .bottom : nil, for: .sizeChanges)
+        // the tallest seen, so the keyboard leaving as a question is sent can't cut the room it scrolls into
         .onScrollGeometryChange(for: CGFloat.self) { $0.visibleRect.height - $0.contentInsets.top - $0.contentInsets.bottom } action: { _, height in
-            visibleHeight = height
+            visibleHeight = max(visibleHeight, height)
         }
         .onScrollGeometryChange(for: Bool.self) { $0.atBottom } action: { atBottom = $1 }
         // only the reader's own scrolling decides, not the scroll to a question just sent
@@ -71,8 +85,11 @@ struct ConversationView: View {
                         withAnimation(reduceMotion ? nil : .default) { position.scrollTo(edge: .bottom) }
                     }
                     .labelStyle(.iconOnly)
-                    .buttonStyle(.glass)
+                    .buttonStyle(.glassProminent)
                     .buttonBorderShape(.circle)
+                    .controlSize(.large)
+                    .tint(Palette.surface)
+                    .foregroundStyle(Palette.text)
                     .padding(.bottom, Space.s)
                 }
             }
@@ -82,15 +99,25 @@ struct ConversationView: View {
         .safeAreaBar(edge: .bottom) { input }
         .task(id: typed == nil) {
             var last = ContinuousClock.now
-            while let shown = typed, !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(16))
+            while typed != nil {
+                try? await Task.sleep(for: .milliseconds(33))
+                // a cancelled pass (Reduce Motion or VoiceOver turned on) mustn't start typing again
+                guard !Task.isCancelled, let shown = typed else { return }
                 let now = ContinuousClock.now
-                let ended = thread?.isStreaming != true, received = thread?.messages.last?.text.count ?? 0
-                let next = TypingPace.next(shown: shown, received: received, elapsed: (now - last) / .seconds(1), ended: ended)
+                let ended = thread?.isStreaming != true, text = thread?.messages.last?.text ?? ""
+                let next = TypingPace.next(text: text, shown: shown, elapsed: (now - last) / .seconds(1), ended: ended)
                 last = now
-                typed = ended && next == received ? nil : next
+                if ended && next == text.count {
+                    typed = nil
+                } else if next != shown {
+                    typed = next
+                } else {
+                    // nothing new to show (thinking, a tool, or caught up): look again in about 100 ms
+                    try? await Task.sleep(for: .milliseconds(67))
+                }
             }
         }
+        .onChange(of: reduceMotion || voiceOver) { _, plain in if plain { typed = nil } }
         .refreshable { await load() }
         .navigationTitle(title.isEmpty ? "New chat" : title)
         .navigationBarTitleDisplayMode(.inline)
@@ -123,7 +150,7 @@ struct ConversationView: View {
             .disabled(thread == nil || (!streaming && (stream != nil || text.isEmpty || text.utf16.count > 4000)))
         }
         .padding(Space.m)
-        .glassEffect(.regular, in: .rect(cornerRadius: Radius.medium))
+        .glassEffect(.regular.tint(Palette.surface), in: .rect(cornerRadius: Radius.medium))
         // floats like the tab bar below it, with even space above and below; sides line up with the answers
         .padding(.horizontal, Space.l)
         .padding(.vertical, Space.m)
@@ -155,17 +182,9 @@ struct ConversationView: View {
         if message.role == "user" {
             UserBubble(message: message).equatable()
         } else {
-            AnswerRow(message: typedOut(message), canRetry: stream == nil, onRetry: retry).equatable()
+            AnswerRow(message: message, typed: message.id == thread?.messages.last?.id ? typed : nil, canRetry: stream == nil, onRetry: retry)
+                .equatable()
         }
-    }
-
-    /// The last answer cut to what has typed out, still streaming until it all shows, so Stopped or an error waits for the text above it.
-    private func typedOut(_ message: ChatMessage) -> ChatMessage {
-        guard let typed, message.id == thread?.messages.last?.id else { return message }
-        var cut = message
-        cut.text = String(message.text.prefix(typed))
-        cut.status = "streaming"
-        return cut
     }
 
     private func send(_ text: String) {
@@ -194,12 +213,10 @@ struct ConversationView: View {
         let firstAnswer = !(thread?.messages.contains { $0.role == "assistant" && $0.status == "done" } ?? false)
         thread?.send(text: text, clientId: clientId, now: Date().ISO8601Format())
         sentAt = .now
-        typed = reduceMotion ? nil : 0
+        typed = reduceMotion || voiceOver ? nil : 0
         pinned = true
         following = false
-        // the pinned exchange fills the screen, so its bottom puts the question at the top; not animated, since the keyboard
-        // leaving resizes it mid-flight and an animation would stop short
-        position.scrollTo(edge: .bottom)
+        scrollPending = true
         stream = Task {
             var created: String?
             do {
@@ -288,29 +305,36 @@ private struct UserBubble: View, Equatable {
 /// Equatable so a streaming answer doesn't re-parse every earlier row's Markdown.
 private struct AnswerRow: View, Equatable {
     let message: ChatMessage
+    /// Characters typed out so far; the answer counts as streaming until it all shows, so Stopped or an error waits for the text.
+    let typed: Int?
     let canRetry: Bool
     let onRetry: () -> Void
 
-    nonisolated static func == (a: Self, b: Self) -> Bool { a.message == b.message && a.canRetry == b.canRetry }
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.message == b.message && a.typed == b.typed && a.canRetry == b.canRetry }
 
     var body: some View {
-        let waiting = message.status == "streaming" && message.text.isEmpty
+        let text = typed.map { String(message.text.prefix($0)) } ?? message.text
+        let status = typed == nil ? message.status : "streaming"
+        let waiting = status == "streaming" && text.isEmpty
+        // a chart draws itself, so the status names the last tool that isn't one
+        let looking = message.tools.lastIndex { ChatChart($0) == nil }
         VStack(alignment: .leading, spacing: Space.xs) {
             ForEach(Array(message.tools.enumerated()), id: \.offset) { index, tool in
                 if let chart = ChatChart(tool) {
                     ChatChartCard(chart: chart)
-                } else if !waiting || index < message.tools.count - 1 {
+                } else if !waiting || index != looking {
                     Text("Looked at " + (tool.label ?? tool.name)).textStyle(.caption, color: Palette.secondaryText)
                 }
             }
-            if !message.text.isEmpty {
+            if !text.isEmpty {
                 VStack(alignment: .leading, spacing: Space.s) {
-                    ForEach(Array(MarkdownBlock.parse(message.text).enumerated()), id: \.offset) { _, block in Block(block: block) }
+                    ForEach(Array(MarkdownBlock.parse(text).enumerated()), id: \.offset) { _, block in Block(block: block) }
                 }
                 .textSelection(.enabled)
             }
-            switch message.status {
-            case "streaming" where message.text.isEmpty: Shimmer(text: message.tools.last.map { "Looking at " + ($0.label ?? $0.name) } ?? "Thinking…")
+            switch status {
+            case "streaming" where text.isEmpty:
+                Shimmer(text: looking.map { "Looking at " + (message.tools[$0].label ?? message.tools[$0].name) } ?? "Thinking…")
             case "stopped": Text("Stopped").textStyle(.caption, color: Palette.secondaryText)
             case "failed": failure
             default: EmptyView()
@@ -337,25 +361,29 @@ private struct AnswerRow: View, Equatable {
 }
 
 /// What the answer is doing before its text starts, with a light sweeping across it (static under Reduce Motion).
+/// Caption, like the "Looked at" lines it turns into, so nothing jumps; VoiceOver hears each change.
 private struct Shimmer: View {
     let text: String
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let label = Text(text).textStyle(.subhead, color: Palette.secondaryText)
-        if reduceMotion {
-            label
-        } else {
-            label.overlay {
-                TimelineView(.animation) { context in
-                    let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) - 0.3
-                    LinearGradient(stops: [.init(color: .clear, location: phase - 0.3), .init(color: Palette.text, location: phase),
-                                           .init(color: .clear, location: phase + 0.3)], startPoint: .leading, endPoint: .trailing)
+        let label = Text(text).textStyle(.caption, color: Palette.secondaryText)
+        Group {
+            if reduceMotion {
+                label
+            } else {
+                label.overlay {
+                    TimelineView(.animation) { context in
+                        let x = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.6) - 0.3
+                        LinearGradient(colors: [.clear, Palette.text, .clear],
+                                       startPoint: UnitPoint(x: x - 0.3, y: 0.5), endPoint: UnitPoint(x: x + 0.3, y: 0.5))
+                    }
+                    .mask(label)
+                    .accessibilityHidden(true)
                 }
-                .mask(label)
-                .accessibilityHidden(true)
             }
         }
+        .onChange(of: text) { _, now in AccessibilityNotification.Announcement(now).post() }
     }
 }
 
