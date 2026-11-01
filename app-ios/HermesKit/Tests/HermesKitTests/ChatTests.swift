@@ -184,3 +184,22 @@ private let points: JSONValue = .array([.object(["label": .string("2026-09"), "v
 @Test func creditsExhaustedReadsPlainly() {
     #expect(ClientError.api(status: 402, body: APIErrorBody(code: "AI_CREDITS_EXHAUSTED", message: "x")).message == "AI credits used up for this month")
 }
+
+@Test func typingPaceKeepsUpAndFlushesWhenEnded() {
+    let frame = 1.0 / 60
+    // a small backlog types at the base pace, at least one character a frame
+    #expect(TypingPace.next(shown: 0, received: 10, elapsed: frame, ended: false) == 2)
+    #expect(TypingPace.next(shown: 9, received: 10, elapsed: frame, ended: false) == 10)
+    // a large backlog speeds up to clear in about a third of a second, and ended in a tenth
+    #expect(TypingPace.next(shown: 0, received: 1200, elapsed: frame, ended: false) == 61)
+    #expect(TypingPace.next(shown: 0, received: 1200, elapsed: frame, ended: true) == 200)
+    // caught up, or text that shrank (a reload), shows what there is
+    #expect(TypingPace.next(shown: 10, received: 10, elapsed: frame, ended: false) == 10)
+    #expect(TypingPace.next(shown: 50, received: 10, elapsed: frame, ended: true) == 10)
+    // a long stall never overshoots
+    #expect(TypingPace.next(shown: 0, received: 10, elapsed: 5, ended: false) == 10)
+    // a 1,000-character burst is fully shown within about 1.5 s of frames
+    var shown = 0, frames = 0
+    while shown < 1000 { shown = TypingPace.next(shown: shown, received: 1000, elapsed: frame, ended: false); frames += 1 }
+    #expect(frames <= 90)
+}

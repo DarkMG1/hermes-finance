@@ -240,3 +240,16 @@ extension APIClient {
         (baseURL.appending(path: path), ["Authorization": "Bearer \(token)", "Accept": "text/event-stream", "Content-Type": "application/json"])
     }
 }
+
+/// How a streamed answer types out: a steady pace that speeds up to stay within about a second of what arrived, and flushes fast once the answer has ended.
+public enum TypingPace {
+    /// Characters per second when the text keeps up.
+    static let base = 90.0
+
+    public static func next(shown: Int, received: Int, elapsed: TimeInterval, ended: Bool) -> Int {
+        let backlog = received - shown
+        guard backlog > 0 else { return received }
+        let rate = max(base, Double(backlog) / (ended ? 0.1 : 0.33))
+        return min(received, shown + max(1, Int((rate * elapsed).rounded(.up))))
+    }
+}
