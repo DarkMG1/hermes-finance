@@ -64,16 +64,19 @@ public struct ChatChart: Equatable, Sendable {
     public let unit: Unit
     public let points: [Point]
 
+    /// The server's show_chart schema (strict keys, lengths in UTF-16 units like JavaScript), so a chart it rejected shows as a plain line.
     public init?(_ tool: ChatToolUse) {
-        guard tool.name == "show_chart", case .string(let kind)? = tool.input["kind"], let kind = Kind(rawValue: kind),
-              case .string(let title)? = tool.input["title"], (1...60).contains(title.count),
+        guard tool.name == "show_chart", Set(tool.input.keys) == ["kind", "title", "unit", "points"],
+              case .string(let kind)? = tool.input["kind"], let kind = Kind(rawValue: kind),
+              case .string(let title)? = tool.input["title"], (1...60).contains(title.utf16.count),
               case .string(let unit)? = tool.input["unit"], let unit = Unit(rawValue: unit),
               case .array(let raw)? = tool.input["points"], (2...31).contains(raw.count) else { return nil }
         var points: [Point] = []
         for item in raw {
             // the bound keeps Money.format's Int conversion from trapping
-            guard case .object(let point) = item, case .string(let label)? = point["label"], (1...24).contains(label.count),
-                  case .number(let value)? = point["value"], abs(value) < 1e15 else { return nil }
+            guard case .object(let point) = item, Set(point.keys) == ["label", "value"],
+                  case .string(let label)? = point["label"], (1...24).contains(label.utf16.count),
+                  case .number(let value)? = point["value"], abs(value) < 1e15, unit != .usdCents || value == value.rounded() else { return nil }
             points.append(Point(label: label, value: value))
         }
         (self.kind, self.title, self.unit, self.points) = (kind, title, unit, points)

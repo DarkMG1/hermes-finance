@@ -122,6 +122,18 @@ private let points: JSONValue = .array([.object(["label": .string("2026-09"), "v
         input[key] = value
         #expect(chart(input) == nil, "\(key)")
     }
+    // the server's strict schema: unknown keys at either level, lengths in UTF-16 units, whole cents
+    let extraPoint: JSONValue = .array([.object(["label": .string("a"), "value": .number(1), "color": .string("red")]),
+                                        .object(["label": .string("b"), "value": .number(1)])])
+    let wideLabel: JSONValue = .array([.object(["label": .string(String(repeating: "💵", count: 13)), "value": .number(1)]),
+                                       .object(["label": .string("b"), "value": .number(1)])])
+    let halfCent: JSONValue = .array([.object(["label": .string("a"), "value": .number(1.5)]), .object(["label": .string("b"), "value": .number(1)])])
+    for input in [ok.merging(["extra": .bool(true)]) { $1 }, ok.merging(["points": extraPoint]) { $1 }, ok.merging(["points": wideLabel]) { $1 },
+                  ok.merging(["title": .string(String(repeating: "💵", count: 31))]) { $1 },
+                  ok.merging(["unit": .string("usd_cents"), "points": halfCent]) { $1 }] {
+        #expect(chart(input) == nil, "\(input)")
+    }
+    #expect(chart(ok.merging(["points": halfCent]) { $1 }) != nil)
 }
 
 @Test func chartFormatsUnitsAndDatesOnlyWhenEveryLabelIsOne() throws {

@@ -36,19 +36,25 @@ struct ChatChartCard: View {
     }
 
     private var line: some View {
-        let dates = chart.dates
-        // category labels thinned to about six, so they don't run together
-        let step = max(1, (chart.points.count + 5) / 6)
-        let shown = chart.points.enumerated().filter { $0.offset % step == 0 }.map(\.element.label)
-        return Chart(Array(chart.points.enumerated()), id: \.offset) { index, point in
-            if let dates {
-                LineMark(x: .value("Date", dates[index]), y: .value("Value", point.value)).foregroundStyle(Palette.accent)
+        let points = Array(chart.points.enumerated())
+        // categories sit at their index, so a repeated label keeps its own point; labels thinned to about six so they don't run together
+        let shown = Array(stride(from: 0, to: points.count, by: max(1, (points.count + 5) / 6)))
+        return Group {
+            if let dates = chart.dates {
+                Chart(points, id: \.offset) { index, point in
+                    LineMark(x: .value("Date", dates[index]), y: .value("Value", point.value)).foregroundStyle(Palette.accent)
+                }
             } else {
-                LineMark(x: .value("Label", point.label), y: .value("Value", point.value)).foregroundStyle(Palette.accent)
+                Chart(points, id: \.offset) { index, point in
+                    LineMark(x: .value("Point", index), y: .value("Value", point.value)).foregroundStyle(Palette.accent)
+                }
+                .chartXScale(domain: 0...(points.count - 1))
+                .chartXAxis {
+                    AxisMarks(values: shown) { value in
+                        AxisValueLabel { if let index = value.as(Int.self), points.indices.contains(index) { Text(points[index].element.label) } }
+                    }
+                }
             }
-        }
-        .chartXAxis {
-            if dates == nil { AxisMarks(values: shown) } else { AxisMarks() }
         }
         .chartYAxis {
             AxisMarks { value in
