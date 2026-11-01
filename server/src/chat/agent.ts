@@ -1,5 +1,5 @@
 import type { Deps } from '../deps.ts';
-import { ClaudeError, toCents, type Usage } from './anthropic.ts';
+import { ClaudeError, toCents, type Claude, type Usage } from './anthropic.ts';
 import { TOOLS, runTool } from './tools.ts';
 import { toolLabel } from './labels.ts';
 import { replay, saveAssistant, type ApiMessage } from './store.ts';
@@ -35,6 +35,23 @@ function cached(messages: ApiMessage[]): ApiMessage[] {
   const last = messages.at(-1)!;
   const blocks = last.content as Block[];
   return [...messages.slice(0, -1), { ...last, content: [...blocks.slice(0, -1), { ...blocks.at(-1), cache_control: EPHEMERAL }] }];
+}
+
+const TITLE_PROMPT = 'Write a title of 3 to 6 words for this conversation about the owner\'s finances. Reply with the title only, no quotes and no punctuation at the end.';
+
+/** Names a chat after its first answer, unless its title changed since it was set from the first question. Failures keep that title. */
+async function autoTitle(deps: Deps, claude: Claude, chatId: string, question: string, answerText: string): Promise<void> {
+  try {
+    const { reply } = await claude.messages('chat', {
+      model: deps.config.titleModel, max_tokens: 1000, output_config: { effort: 'low' }, system: TITLE_PROMPT,
+      messages: [{ role: 'user', content: `Question: ${question.slice(0, 1000)}\n\nStart of the answer: ${answerText.slice(0, 500)}` }],
+    });
+    const text = ((reply as { content?: Block[] }).content ?? []).filter((b) => b.type === 'text').map((b) => b.text as string).join('').trim();
+    const title = (text.split('\n')[0] ?? '').replace(/^["'“‘\s]+|["'”’.!?,:;\s]+$/g, '').slice(0, 60);
+    if (title) deps.db.prepare('UPDATE chat_conversations SET title = ? WHERE id = ? AND title = ?').run(title, chatId, question.trim().slice(0, 60));
+  } catch (e) {
+    console.error(`[hermes] chat title failed code=${e instanceof ClaudeError ? e.code : 'INTERNAL'}`);
+  }
 }
 
 /** Streams one answer: up to MAX_ROUNDS model calls, running tools between them, and saves the turn as done, stopped or failed. */
@@ -122,4 +139,8 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
   }
   saveAssistant(deps.db, assistantId, turn, 'done', null);
   emit({ type: 'done', messageId: assistantId, costCents: toCents(cost), status: 'done' });
+  if (!history.some((m) => m.role === 'assistant')) {
+    const shown = turn.filter((m) => m.role === 'assistant').flatMap((m) => m.content as Block[]).filter((b) => b.type === 'text').map((b) => b.text as string).join('\n\n');
+    void autoTitle(deps, deps.claude!, chatId, (history[0]!.content as Block[])[0]!.text as string, shown);
+  }
 }

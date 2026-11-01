@@ -28,7 +28,7 @@ export function makeTestDeps(): { deps: Deps; plaid: FakePlaid; prices: FakePric
     now: () => new Date('2026-03-15T12:00:00Z'),
     config: {
       dbPath: join(dir, 'hermes.db'), apiToken: API_TOKEN, tokenKey: randomBytes(32), host: '127.0.0.1', port: 0,
-      syncIntervalMs: 60_000, gitSha: 'test-sha', tiingoApiKey: 'test-key', anthropicApiKey: 'test-key', anthropicModel: 'fake-model', anthropicBackupKey: null, chatModel: 'fake-chat-model', plaid: { clientId: 'x', secret: 'y', env: 'sandbox' },
+      syncIntervalMs: 60_000, gitSha: 'test-sha', tiingoApiKey: 'test-key', anthropicApiKey: 'test-key', anthropicModel: 'fake-model', anthropicBackupKey: null, chatModel: 'fake-chat-model', titleModel: 'fake-title-model', plaid: { clientId: 'x', secret: 'y', env: 'sandbox' },
     },
   };
   return { deps, plaid, prices, reader };

@@ -134,6 +134,9 @@ test('costMicros: Opus $4 in / $20 out per MTok, Sonnet $2 / $10, cache reads 0.
   assert.equal(costMicros('claude-opus-5-5', {}), 0);
   // sub-cent calls add up: one 1000-token Sonnet input is 2000 microdollars (0.2 cent)
   assert.equal(costMicros('claude-sonnet-5-5', { input_tokens: 1000 }), 2000);
+  // Haiku 5.5 (prompts up to 100k tokens): $0.10 in / $0.50 out, cache reads 0.1x
+  assert.equal(costMicros('claude-haiku-5-5', { input_tokens: 1_000_000, output_tokens: 1_000_000, cache_read_input_tokens: 1_000_000, cache_creation_input_tokens: 1_000_000 }),
+    100_000 + 500_000 + 10_000 + 125_000);
 });
 
 test('usage() sums microdollars and rounds once; it reads the rows without a configured key', () => {

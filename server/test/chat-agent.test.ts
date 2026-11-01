@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { answer, MAX_ROUNDS, type ChatEvent } from '../src/chat/agent.ts';
 import { addUserMessage, createChat, dropFailedTail, getChat, replay, saveAssistant, startAssistant } from '../src/chat/store.ts';
 import { runTool } from '../src/chat/tools.ts';
-import { costMicros, toCents } from '../src/chat/anthropic.ts';
+import { ClaudeError, costMicros, toCents } from '../src/chat/anthropic.ts';
 import { FakeClaude, end, start, text, thinking, tool, type Ev } from './fake-claude.ts';
 import { makeTestDeps, seedAccount, seedTxn } from './helpers.ts';
 
@@ -291,6 +291,54 @@ test('title is the first message cut to 60 characters', () => {
   const { db, chatId } = setup([], long);
   addUserMessage(db, chatId, 'c2', 'Second question', NOW);
   assert.equal(getChat(db, chatId)!.title, 'x'.repeat(60));
+});
+
+const settle = () => new Promise((r) => setImmediate(r));
+const titled = (title: string) => ({ content: [{ type: 'thinking', thinking: '', signature: 's' }, { type: 'text', text: title }], usage: { input_tokens: 80, output_tokens: 6 } });
+
+test('the first answer names the chat with the title model after done; later answers and a changed title are left alone', async () => {
+  const s = setup([[start(), ...text(0, 'You spent $12.34 at SYNTHETIC GROCER.'), ...end('end_turn')], [start(), ...text(0, 'Ok.'), ...end('end_turn')]],
+    'How much did I spend at SYNTHETIC GROCER?');
+  s.fake.reply = titled(' "Grocery spending in March." \n');
+  let doneTitle: string | undefined;
+  await answer(s.deps, s.chatId, s.assistantId, (e) => { if (e.type === 'done') doneTitle = getChat(s.db, s.chatId)!.title; }, new AbortController().signal);
+  // done goes out before the title call finishes
+  assert.equal(doneTitle, 'How much did I spend at SYNTHETIC GROCER?');
+  await settle();
+  assert.equal(getChat(s.db, s.chatId)!.title, 'Grocery spending in March');
+  const [call] = s.fake.messageRequests;
+  assert.equal(call!.feature, 'chat');
+  assert.equal(call!.body.model, 'fake-title-model');
+  assert.match(JSON.stringify(call!.body.messages), /How much did I spend at SYNTHETIC GROCER\?.*You spent \$12\.34/);
+  addUserMessage(s.db, s.chatId, 'c2', 'And then?', NOW);
+  await answer(s.deps, s.chatId, startAssistant(s.db, s.chatId, NOW), () => {}, new AbortController().signal);
+  await settle();
+  assert.equal(s.fake.messageRequests.length, 1);
+
+  const renamed = setup([[start(), ...text(0, 'Hi.'), ...end('end_turn')]]);
+  renamed.fake.reply = titled('Some title');
+  await renamed.run();
+  renamed.db.prepare('UPDATE chat_conversations SET title = ? WHERE id = ?').run('Owner title', renamed.chatId);
+  await settle();
+  assert.equal(getChat(renamed.db, renamed.chatId)!.title, 'Owner title');
+});
+
+test('a failed title call, an empty title or a stopped first answer keeps the first-question title', async () => {
+  for (const reply of [new Error('boom'), new ClaudeError('HTTP_500'), { content: [] }, titled('  "." ')]) {
+    const s = setup([[start(), ...text(0, 'Hi.'), ...end('end_turn')]]);
+    s.fake.reply = reply;
+    await s.run();
+    await settle();
+    assert.equal(s.fake.messageRequests.length, 1);
+    assert.equal(getChat(s.db, s.chatId)!.title, 'How much did I spend?');
+    assert.equal(s.events.at(-1)!.type, 'done');
+  }
+  const stopped = setup([[start(), ...text(0, 'You spent ', 'more'), ...end('end_turn')]]);
+  stopped.fake.reply = titled('Never');
+  const ctl = new AbortController();
+  await answer(stopped.deps, stopped.chatId, stopped.assistantId, () => ctl.abort(), ctl.signal);
+  await settle();
+  assert.equal(stopped.fake.messageRequests.length, 0);
 });
 
 test('system prompt, last tool and the newest message block carry cache_control; the system prompt has no date', async () => {
