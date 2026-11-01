@@ -35,6 +35,17 @@ test('transactions, people, net_worth, bills, accounts match the functions the r
   assert.deepEqual(call(deps, 'accounts', {}), listAccounts(db));
 });
 
+test('net_worth filtered by account ids or type matches getNetWorth with that filter', () => {
+  const { deps, db, today } = setup();
+  seedAccount(db, { id: 'cc', type: 'credit', balanceCents: 30000 });
+  db.prepare('INSERT INTO balance_snapshots (account_id, date, balance_cents) VALUES (\'a1\', ?, 100000), (\'cc\', ?, 30000)').run(today, today);
+  const one = call(deps, 'net_worth', { range: '1m', accountIds: ['cc'] });
+  assert.deepEqual(one, getNetWorth(db, '1m', today, { accountIds: ['cc'] }));
+  assert.equal(one.currentCents, -30000);
+  assert.deepEqual(call(deps, 'net_worth', { range: '3m', type: 'depository' }), getNetWorth(db, '3m', today, { type: 'depository' }));
+  assert.equal(runTool(deps, 'net_worth', { range: '1m', accountIds: [] }).isError, true);
+});
+
 test('bad input is an error result, not a throw', () => {
   const { deps } = setup();
   const r = runTool(deps, 'spending', { period: 'month', date: 'September' });
