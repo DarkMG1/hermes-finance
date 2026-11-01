@@ -50,5 +50,8 @@ private func plain(_ text: AttributedString) -> String { String(text.characters)
     let blocks = MarkdownBlock.parse("Run:\n\n```\nlet a = 1\nlet b = 2\n```\nDone.")
     guard blocks.count == 3, case .code(let code) = blocks[1] else { Issue.record("\(blocks)"); return }
     #expect(code == "let a = 1\nlet b = 2")
+    let indented = MarkdownBlock.parse("Run:\n\n    let a = 1\n    let b = 2\n\nDone.")
+    guard indented.count == 3, case .code(let four) = indented[1] else { Issue.record("\(indented)"); return }
+    #expect(four == "let a = 1\nlet b = 2")
 }
 #endif

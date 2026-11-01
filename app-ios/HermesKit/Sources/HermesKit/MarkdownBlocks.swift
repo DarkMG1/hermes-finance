@@ -15,16 +15,8 @@ public enum MarkdownBlock: Equatable, Sendable {
     case code(String)
 
     public static func parse(_ markdown: String) -> [MarkdownBlock] {
-        // a single line break stays one, as the model means it (CommonMark would join the lines); code keeps its lines as they are
-        let lines = markdown.split(separator: "\n", omittingEmptySubsequences: false)
-        var source = "", fenced = false
-        for (index, line) in lines.enumerated() {
-            let trimmed = line.drop { $0 == " " }
-            let fence = trimmed.hasPrefix("```") || trimmed.hasPrefix("~~~")
-            if fence { fenced.toggle() }
-            source += line
-            if index < lines.count - 1 { source += fenced || fence ? "\n" : "  \n" }
-        }
+        // a single line break stays one, as the model means it (CommonMark would join the lines); code blocks drop the added spaces again
+        let source = markdown.replacingOccurrences(of: "\n", with: "  \n")
         guard var text = try? AttributedString(markdown: source, options: .init(interpretedSyntax: .full, failurePolicy: .returnPartiallyParsedIfPossible))
         else { return [.paragraph(AttributedString(markdown))] }
         text.link = nil
@@ -54,7 +46,7 @@ public enum MarkdownBlock: Equatable, Sendable {
     /// `parts` run innermost first: a nested item reads paragraph, listItem, orderedList, listItem, unorderedList.
     private static func block(_ parts: [PresentationIntent.IntentType], _ run: AttributedString, continued: Bool) -> MarkdownBlock {
         if parts.contains(where: \.kind.isCode) {
-            let code = String(run.characters)
+            let code = String(run.characters).replacingOccurrences(of: "  \n", with: "\n")
             return .code(code.hasSuffix("\n") ? String(code.dropLast()) : code)
         }
         let lists = parts.indices.filter { parts[$0].kind.isList }

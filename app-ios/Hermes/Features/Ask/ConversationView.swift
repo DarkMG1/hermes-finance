@@ -162,14 +162,16 @@ struct ConversationView: View {
 
     /// The server names a chat a moment after its first done answer; Haiku can take longer than the first look.
     private func refreshTitle(client: APIClient, firstAnswer: Bool) {
-        guard firstAnswer, thread?.messages.last?.status == "done", let chatId else { return }
-        let before = title
+        guard firstAnswer, thread?.messages.last?.status == "done", let chatId,
+              let question = thread?.messages.first(where: { $0.role == "user" })?.text else { return }
+        // the server's title from the first question: trimmed, first 60 UTF-16 units (JavaScript's slice)
+        let auto = String(decoding: question.trimmingCharacters(in: .whitespacesAndNewlines).utf16.prefix(60), as: UTF16.self)
         Task {
             for wait in [3, 5] {
                 try? await Task.sleep(for: .seconds(wait))
                 guard let detail = try? await client.chat(id: chatId) else { continue }
                 title = detail.title
-                if detail.title != before { return }
+                if detail.title != auto { return }
             }
         }
     }

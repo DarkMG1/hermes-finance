@@ -43,6 +43,7 @@ function cached(history: ApiMessage[], turn: ApiMessage[]): ApiMessage[] {
   return all.map((m, i) => (i === all.length - 1 || i === prev ? mark(m) : m));
 }
 
+const TITLE_TRIES = 3;
 const TITLE_PROMPT = 'Write a title of 3 to 6 words for this conversation about the owner\'s finances. Reply with the title only, no quotes and no punctuation at the end.';
 
 /** Names a chat after an answer while its title is still the one set from its first question (a stopped or failed first answer leaves it
@@ -51,6 +52,8 @@ async function autoTitle(deps: Deps, claude: Claude, chatId: string, question: s
   const first = deps.db.prepare('SELECT content_json FROM chat_messages WHERE conversation_id = ? AND role = \'user\' ORDER BY seq LIMIT 1').pluck().get(chatId) as string;
   const auto = (JSON.parse(first) as string).trim().slice(0, 60);
   if (deps.db.prepare('SELECT title FROM chat_conversations WHERE id = ?').pluck().get(chatId) !== auto) return;
+  // a title model that keeps failing gets a few answers' worth of tries, not one per answer forever
+  if ((deps.db.prepare('SELECT COUNT(*) FROM chat_messages WHERE conversation_id = ? AND role = \'assistant\' AND status = \'done\'').pluck().get(chatId) as number) > TITLE_TRIES) return;
   try {
     const { reply } = await claude.messages('chat', {
       model: deps.config.titleModel, max_tokens: 1000, output_config: { effort: 'low' }, system: TITLE_PROMPT,

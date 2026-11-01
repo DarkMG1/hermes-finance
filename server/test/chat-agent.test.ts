@@ -446,3 +446,16 @@ test('a third chart in one answer is refused; refused charts emit no tool event 
   assert.deepEqual(shown, ['Chart · One', 'Chart · Two']);
   assert.deepEqual(getChat(s.db, s.chatId)!.messages[1]!.tools.map((t) => t.label), shown);
 });
+
+test('a title call that keeps failing is tried for the first 3 done answers only', async () => {
+  const s = setup([1, 2, 3, 4].map((n) => [start(), ...text(0, `Answer ${n}.`), ...end('end_turn')]));
+  s.fake.reply = new ClaudeError('HTTP_500');
+  await s.run();
+  for (const n of [2, 3, 4]) {
+    addUserMessage(s.db, s.chatId, `c${n}`, `Question ${n}`, NOW);
+    await answer(s.deps, s.chatId, startAssistant(s.db, s.chatId, NOW), () => {}, new AbortController().signal);
+    await settle();
+  }
+  assert.equal(s.fake.messageRequests.length, 3);
+  assert.equal(getChat(s.db, s.chatId)!.title, 'How much did I spend?');
+});
