@@ -7,6 +7,7 @@ import { replay, saveAssistant, type ApiMessage } from './store.ts';
 export type ChatEvent = { type: 'tool'; name: string; label: string; input: Record<string, unknown> } | { type: 'text'; text: string }
   | { type: 'done'; messageId: string; costCents: number; status: 'done' | 'stopped' } | { type: 'error'; code: string };
 export const MAX_ROUNDS = 10;
+const MAX_CHARTS = 2;
 
 type Block = Record<string, unknown>;
 const EPHEMERAL = { type: 'ephemeral' };
@@ -44,16 +45,22 @@ function cached(history: ApiMessage[], turn: ApiMessage[]): ApiMessage[] {
 
 const TITLE_PROMPT = 'Write a title of 3 to 6 words for this conversation about the owner\'s finances. Reply with the title only, no quotes and no punctuation at the end.';
 
-/** Names a chat after its first answer, unless its title changed since it was set from the first question. Failures keep that title. */
+/** Names a chat after an answer while its title is still the one set from its first question (a stopped or failed first answer leaves it
+ * so). Failures keep that title. */
 async function autoTitle(deps: Deps, claude: Claude, chatId: string, question: string, answerText: string): Promise<void> {
+  const first = deps.db.prepare('SELECT content_json FROM chat_messages WHERE conversation_id = ? AND role = \'user\' ORDER BY seq LIMIT 1').pluck().get(chatId) as string;
+  const auto = (JSON.parse(first) as string).trim().slice(0, 60);
+  if (deps.db.prepare('SELECT title FROM chat_conversations WHERE id = ?').pluck().get(chatId) !== auto) return;
   try {
     const { reply } = await claude.messages('chat', {
       model: deps.config.titleModel, max_tokens: 1000, output_config: { effort: 'low' }, system: TITLE_PROMPT,
       messages: [{ role: 'user', content: `Question: ${question.slice(0, 1000)}\n\nStart of the answer: ${answerText.slice(0, 500)}` }],
     });
-    const text = ((reply as { content?: Block[] }).content ?? []).filter((b) => b.type === 'text').map((b) => b.text as string).join('').trim();
+    const r = reply as { content?: Block[]; stop_reason?: string };
+    if (r.stop_reason !== 'end_turn') return;
+    const text = (r.content ?? []).filter((b) => b.type === 'text').map((b) => b.text as string).join('').trim();
     const title = (text.split('\n')[0] ?? '').replace(/^["'“‘\s]+|["'”’.!?,:;\s]+$/g, '').slice(0, 60);
-    if (title) deps.db.prepare('UPDATE chat_conversations SET title = ? WHERE id = ? AND title = ?').run(title, chatId, question.trim().slice(0, 60));
+    if (title) deps.db.prepare('UPDATE chat_conversations SET title = ? WHERE id = ? AND title = ?').run(title, chatId, auto);
   } catch (e) {
     console.error(`[hermes] chat title failed code=${e instanceof ClaudeError ? e.code : 'INTERNAL'}`);
   }
@@ -67,6 +74,7 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
   let content: Block[] = [];
   let cost = 0;
   let said = false;
+  let charts = 0;
   try {
     const claude = deps.claude;
     if (!claude) throw new ClaudeError('AI_NOT_CONFIGURED');
@@ -123,9 +131,13 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
       turn.push({
         role: 'user',
         content: uses.map((b) => {
+          const name = b.name as string;
           const input = b.input as Record<string, unknown>;
-          emit({ type: 'tool', name: b.name as string, label: toolLabel(b.name as string, input), input });
-          const res = runTool(deps, b.name as string, input, { chatId });
+          const res = name === 'show_chart' && charts >= MAX_CHARTS
+            ? { content: JSON.stringify({ error: `at most ${MAX_CHARTS} charts per answer` }), isError: true } : runTool(deps, name, input, { chatId });
+          if (name === 'show_chart' && !res.isError) charts++;
+          // a rejected chart showed nothing, so there's no line for it
+          if (!(name === 'show_chart' && res.isError)) emit({ type: 'tool', name, label: toolLabel(name, input), input });
           return { type: 'tool_result', tool_use_id: b.id, content: res.content, is_error: res.isError };
         }),
       });
@@ -144,8 +156,7 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
   }
   saveAssistant(deps.db, assistantId, turn, 'done', null);
   emit({ type: 'done', messageId: assistantId, costCents: toCents(cost), status: 'done' });
-  if (!history.some((m) => m.role === 'assistant')) {
-    const shown = turn.filter((m) => m.role === 'assistant').flatMap((m) => m.content as Block[]).filter((b) => b.type === 'text').map((b) => b.text as string).join('\n\n');
-    void autoTitle(deps, deps.claude!, chatId, (history[0]!.content as Block[])[0]!.text as string, shown);
-  }
+  const shown = turn.filter((m) => m.role === 'assistant').flatMap((m) => m.content as Block[]).filter((b) => b.type === 'text').map((b) => b.text as string).join('\n\n');
+  // the question just answered: every question is its text then its date block
+  void autoTitle(deps, deps.claude!, chatId, (history.at(-1)!.content as Block[]).at(-2)!.text as string, shown);
 }

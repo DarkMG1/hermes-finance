@@ -153,5 +153,10 @@ test('search_chats without query lists recent chats newest first with their firs
   assert.equal(all[0].snippet, `Plan my savings ${'x'.repeat(184)}…`);
   assert.deepEqual(recent({ limit: 1 }, { chatId: current }).map((r: { chatId: string }) => r.chatId), [april]);
   assert.deepEqual(recent({ to: localDay(new Date(MARCH)) }).map((r: { chatId: string }) => r.chatId), [march]);
+  // a March chat followed up in April is dated and filtered by its first question
+  addUserMessage(db, march, 'c-april', 'And in April?', APRIL);
+  assert.equal(recent({}, { chatId: current }).find((r: { chatId: string }) => r.chatId === march).date, localDay(new Date(MARCH)));
+  assert.deepEqual(recent({ to: localDay(new Date(MARCH)) }).map((r: { chatId: string }) => r.chatId), [march]);
+  assert.deepEqual(recent({ from: localDay(new Date(APRIL)) }, { chatId: current }).map((r: { chatId: string }) => r.chatId), [april]);
   assert.equal(toolLabel('search_chats', {}), 'Past chats');
 });

@@ -39,9 +39,10 @@ export function getChat(db: Db, id: string): ChatDetail | null {
     if (r.role === 'user') return { ...base, text: JSON.parse(r.content_json) as string, tools: [] };
     const turn = JSON.parse(r.content_json) as ApiMessage[];
     const all = turn.filter((m) => m.role === 'assistant').flatMap(blocks);
-    const ran = new Set(turn.filter((m) => m.role === 'user').flatMap(blocks).map((b) => b.tool_use_id));
+    const results = new Map(turn.filter((m) => m.role === 'user').flatMap(blocks).map((b) => [b.tool_use_id, b.is_error === true]));
     const text = answerText(turn);
-    const tools = all.filter((b) => b.type === 'tool_use' && ran.has(b.id)).map((b) => {
+    // a rejected chart showed nothing
+    const tools = all.filter((b) => b.type === 'tool_use' && results.has(b.id) && !(b.name === 'show_chart' && results.get(b.id))).map((b) => {
       const input = b.input as Record<string, unknown>;
       return { name: b.name as string, input, label: toolLabel(b.name as string, input) };
     });
@@ -95,15 +96,15 @@ export function saveAssistant(db: Db, id: string, turn: ApiMessage[], status: 'd
 export type ChatHit = { chatId: string; title: string; date: string; role?: 'user' | 'assistant'; snippet: string };
 
 /** Past messages matching every term (each quoted, so FTS5 syntax is never parsed), best bm25 matches, then newest first.
- * Without a query: the most recently active chats with their first question, newest first. */
+ * Without a query: the most recently active chats with their first question and its date (from/to apply to that date), newest first. */
 export function searchChats(db: Db, q: { query?: string; from?: string; to?: string; limit: number }, excludeChatId?: string): { results: ChatHit[] } {
   // owner-local days as UTC instants (a date-time without Z parses in the process time zone)
   const at = (day: string) => new Date(`${day}T00:00:00`).toISOString();
   const range = [q.from ? at(q.from) : '', q.to ? at(addDays(q.to, 1)) : '9', excludeChatId ?? null, q.limit];
   if (!q.query) {
-    const chats = db.prepare(`SELECT c.id AS chatId, c.title, c.updated_at AS createdAt,
-      (SELECT content_json FROM chat_messages WHERE conversation_id = c.id AND role = 'user' ORDER BY seq LIMIT 1) AS first
-      FROM chat_conversations c WHERE first IS NOT NULL AND c.updated_at >= ? AND c.updated_at < ? AND c.id IS NOT ?
+    const chats = db.prepare(`SELECT c.id AS chatId, c.title, f.created_at AS createdAt, f.content_json AS first
+      FROM chat_conversations c JOIN chat_messages f ON f.id = (SELECT id FROM chat_messages WHERE conversation_id = c.id AND role = 'user' ORDER BY seq LIMIT 1)
+      WHERE f.created_at >= ? AND f.created_at < ? AND c.id IS NOT ?
       ORDER BY c.updated_at DESC, c.created_at DESC LIMIT ?`).all(...range) as { chatId: string; title: string; createdAt: string; first: string }[];
     return { results: chats.map(({ createdAt, first, ...c }) => {
       const text = JSON.parse(first) as string;
@@ -124,6 +125,8 @@ export function dropFailedTail(db: Db, chatId: string): void {
   const last = db.prepare('SELECT seq, role, status FROM chat_messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1').get(chatId) as Pick<Row, 'seq' | 'role' | 'status'> | undefined;
   if (last?.role !== 'assistant' || last.status !== 'failed') return;
   db.prepare('DELETE FROM chat_messages WHERE conversation_id = ? AND (seq = ? OR (seq = ? AND role = \'user\'))').run(chatId, last.seq, last.seq - 1);
+  // an emptied chat takes its title from the next question
+  db.prepare('UPDATE chat_conversations SET title = \'\' WHERE id = ? AND NOT EXISTS (SELECT 1 FROM chat_messages WHERE conversation_id = ?)').run(chatId, chatId);
 }
 
 /** A stored turn for replay: drops thinking (its signature binds it to the system prompt and tools it was written under, and only the turn
