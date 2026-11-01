@@ -13,7 +13,7 @@ const EPHEMERAL = { type: 'ephemeral' };
 const CACHED_TOOLS = TOOLS.map((t, i) => (i === TOOLS.length - 1 ? { ...t, cache_control: EPHEMERAL } : t));
 const LAST_CALL = 'Answer now with what you have; no more tools.';
 
-// frozen: thinking signatures and the cache are bound to it, so nothing that changes per day goes here (each question carries its date)
+// stable: the cache and the current answer's thinking are bound to it, so nothing that changes per day goes here (each question carries its date)
 const SYSTEM_PROMPT = `You are the owner's personal finance assistant inside Hermes, their own app. Each question ends with the day it was asked; the latest is today. Amounts from tools are integer cents in USD; show dollars.
 - Every figure you state must come from a tool call in this conversation. Never estimate or recall a number.
 - Name the period and filters behind each figure (e.g. "September 2026, Groceries").
@@ -22,6 +22,9 @@ const SYSTEM_PROMPT = `You are the owner's personal finance assistant inside Her
 - For advice or planning, say what data you used and the assumptions you made (returns, inflation, income), then give a clear recommendation.
 - If no tool covers a question, say so plainly.
 - When the owner refers to an earlier conversation, use search_chats and read_chat; quote what was said and its date.
+- Lead with the direct answer in one or two sentences, then only the details that matter. Keep answers short unless asked for detail.
+- When the data can't show the cause, say so instead of guessing.
+- Don't repeat a tool call you already made with the same input.
 - Write short paragraphs and lists; start list items with "-". No headings. No tables.`;
 const SYSTEM = [{ type: 'text', text: SYSTEM_PROMPT, cache_control: EPHEMERAL }];
 const STOP_CODES: Record<string, string> = { max_tokens: 'MAX_TOKENS', refusal: 'REFUSED' };
