@@ -109,10 +109,11 @@ function assertPrefix(before: Record<string, unknown>, after: Record<string, unk
   assert.equal(JSON.stringify(bare(after.messages as Msg[]).slice(0, prev.length)), JSON.stringify(prev));
 }
 
-test('a later question on another day resends system, tools and every earlier message byte for byte, thinking included', async () => {
+test('the turn being answered resends its own thinking; a later question on another day replays earlier turns without thinking', async () => {
   const s = setup([
     [start(), ...thinking(0, 'SYNTHETIC THOUGHT', 'sig-1'), ...tool(1, 'tu1', 'categories', {}), ...end('tool_use')],
     [start(), ...thinking(0, 'SYNTHETIC THOUGHT 2', 'sig-2'), ...text(1, 'First.'), ...end('end_turn')],
+    [start(), ...thinking(0, 'SYNTHETIC THOUGHT 3', 'sig-3'), ...tool(1, 'tu2', 'categories', {}), ...end('tool_use')],
     [start(), ...text(0, 'Second.'), ...end('end_turn')],
   ]);
   await s.run();
@@ -121,12 +122,24 @@ test('a later question on another day resends system, tools and every earlier me
   addUserMessage(s.db, s.chatId, 'c2', 'And today?', later);
   const second = startAssistant(s.db, s.chatId, later);
   await answer(s.deps, s.chatId, second, () => {}, new AbortController().signal);
-  const [, r1, r2] = s.fake.requests as Record<string, unknown>[];
-  assertPrefix(r1!, r2!);
+  const [r0, r1, r2, r3] = s.fake.requests as Record<string, unknown>[];
+  assertPrefix(r0!, r1!);
+  assert.deepEqual(bare(r1!.messages as Msg[])[1]!.content,
+    [{ type: 'thinking', thinking: 'SYNTHETIC THOUGHT', signature: 'sig-1' }, { type: 'tool_use', id: 'tu1', name: 'categories', input: {} }]);
+  assert.equal(JSON.stringify(r2!.system), JSON.stringify(r1!.system));
+  assert.equal(JSON.stringify(r2!.tools), JSON.stringify(r1!.tools));
   const msgs = bare(r2!.messages as Msg[]);
-  assert.deepEqual(msgs[3], { role: 'assistant', content: [{ type: 'thinking', thinking: 'SYNTHETIC THOUGHT 2', signature: 'sig-2' }, { type: 'text', text: 'First.' }] });
-  assert.deepEqual(msgs[1]!.content, [{ type: 'thinking', thinking: 'SYNTHETIC THOUGHT', signature: 'sig-1' }, { type: 'tool_use', id: 'tu1', name: 'categories', input: {} }]);
+  assert.deepEqual(msgs.slice(0, 4), [
+    { role: 'user', content: q('How much did I spend?') },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name: 'categories', input: {} }] },
+    bare(r1!.messages as Msg[])[2],
+    { role: 'assistant', content: [{ type: 'text', text: 'First.' }] },
+  ]);
   assert.deepEqual(msgs.at(-1), { role: 'user', content: q('And today?', '2026-03-16') });
+  assertPrefix(r2!, r3!);
+  assert.deepEqual(bare(r3!.messages as Msg[]).at(-2)!.content,
+    [{ type: 'thinking', thinking: 'SYNTHETIC THOUGHT 3', signature: 'sig-3' }, { type: 'tool_use', id: 'tu2', name: 'categories', input: {} }]);
+  assert.ok(!JSON.stringify(replay(s.db, s.chatId)).includes('thinking'));
 });
 
 test('stop reasons max_tokens and refusal, and a stream cut before message_stop, save failed with their codes', async () => {
