@@ -309,6 +309,9 @@ test('the first answer names the chat with the title model after done; later ans
   const [call] = s.fake.messageRequests;
   assert.equal(call!.feature, 'chat');
   assert.equal(call!.body.model, 'fake-title-model');
+  // only fields the Haiku 5.5 docs list (effort: all five levels on Haiku 5.5)
+  assert.deepEqual(Object.keys(call!.body).sort(), ['max_tokens', 'messages', 'model', 'output_config', 'system']);
+  assert.deepEqual(call!.body.output_config, { effort: 'low' });
   assert.match(JSON.stringify(call!.body.messages), /How much did I spend at SYNTHETIC GROCER\?.*You spent \$12\.34/);
   addUserMessage(s.db, s.chatId, 'c2', 'And then?', NOW);
   await answer(s.deps, s.chatId, startAssistant(s.db, s.chatId, NOW), () => {}, new AbortController().signal);
