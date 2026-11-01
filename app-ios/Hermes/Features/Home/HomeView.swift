@@ -245,9 +245,9 @@ struct HomeView: View {
 
 /// Showing hidden amounts needs Face ID wherever the hardware exists, even with the app lock off: hiding guards a glance at the screen.
 /// A changed face set signs out. `error` is the failure to show, if any.
-@MainActor func confirmShowBalances(lock: AppLock, model: AppModel) async -> (shown: Bool, error: String?) {
+@MainActor func confirmShowBalances(lock: AppLock, model: AppModel, reason: String = "Show balances") async -> (shown: Bool, error: String?) {
     guard AppLock.hasBiometricHardware else { return (true, nil) }
-    switch await lock.confirmOwnerInApp(reason: "Show balances") {
+    switch await lock.confirmOwnerInApp(reason: reason) {
     case .confirmed: return (true, nil)
     case .failed(let message):
         if let message { AccessibilityNotification.Announcement(message).post() }

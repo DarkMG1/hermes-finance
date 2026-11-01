@@ -76,9 +76,77 @@ private func streaming() -> ChatThread {
     #expect(d.messages.allSatisfy { $0.errorCode == nil } && d.messages[1].tools[0].label == nil)
 }
 
-@Test func jsonValueDisplay() {
-    #expect(JSONValue.object(["n": .number(2), "p": .number(1.5), "s": .string("x")]).display == "n: 2, p: 1.5, s: x")
-    #expect(JSONValue.number(1234567).display == "1234567" && JSONValue.number(-0.25).display == "-0.25")
+@Test func stopRightAfterSendingIsIgnoredUntilTheAnswerStarts() {
+    let sent = Date(timeIntervalSince1970: 1000)
+    var t = ChatThread()
+    t.send(text: "q", clientId: "u1", now: "n")
+    #expect(!t.acceptsStop(sentAt: sent, now: sent.addingTimeInterval(1.4)))
+    #expect(t.acceptsStop(sentAt: sent, now: sent.addingTimeInterval(1.5)))
+    #expect(t.acceptsStop(sentAt: nil, now: sent))
+    var tool = t
+    tool.apply(.tool(name: "spending", label: "Spending", input: [:]))
+    #expect(tool.acceptsStop(sentAt: sent, now: sent.addingTimeInterval(0.2)))
+    t.apply(.text("A"))
+    #expect(t.acceptsStop(sentAt: sent, now: sent.addingTimeInterval(0.2)))
+}
+
+private func chart(_ input: [String: JSONValue], name: String = "show_chart") -> ChatChart? {
+    ChatChart(ChatToolUse(name: name, input: input, label: nil))
+}
+
+private let points: JSONValue = .array([.object(["label": .string("2026-09"), "value": .number(12345)]),
+                                        .object(["label": .string("2026-10"), "value": .number(-50)])])
+
+@Test func chartDecodesValidInput() throws {
+    let c = try #require(chart(["kind": .string("line"), "title": .string("Net worth"), "unit": .string("usd_cents"), "points": points]))
+    #expect(c.kind == .line && c.title == "Net worth" && c.unit == .usdCents)
+    #expect(c.points == [.init(label: "2026-09", value: 12345), .init(label: "2026-10", value: -50)])
+    #expect(c.format(12345) == Money.format(12345))
+    let dates = try #require(c.dates)
+    #expect(Calendar.current.dateComponents([.year, .month, .day], from: dates[1]) == DateComponents(year: 2026, month: 10, day: 1))
+}
+
+@Test func chartRejectsInvalidInput() {
+    let ok: [String: JSONValue] = ["kind": .string("bar"), "title": .string("T"), "unit": .string("count"), "points": points]
+    #expect(chart(ok) != nil)
+    #expect(chart(ok, name: "spending") == nil)
+    let one: JSONValue = .array([.object(["label": .string("a"), "value": .number(1)])])
+    let badPoint: JSONValue = .array([.object(["label": .string("a"), "value": .string("1")]), .object(["label": .string("b"), "value": .number(1)])])
+    let longLabel: JSONValue = .array([.object(["label": .string(String(repeating: "x", count: 25)), "value": .number(1)]),
+                                       .object(["label": .string("b"), "value": .number(1)])])
+    let huge: JSONValue = .array([.object(["label": .string("a"), "value": .number(1e300)]), .object(["label": .string("b"), "value": .number(1)])])
+    for (key, value) in [("kind", JSONValue.string("pie")), ("title", .string("")), ("title", .string(String(repeating: "x", count: 61))),
+                         ("unit", .string("eur")), ("points", one), ("points", badPoint), ("points", longLabel), ("points", huge),
+                         ("points", .array(Array(repeating: .object(["label": .string("a"), "value": .number(1)]), count: 32)))] {
+        var input = ok
+        input[key] = value
+        #expect(chart(input) == nil, "\(key)")
+    }
+    // the server's strict schema: unknown keys at either level, lengths in UTF-16 units, whole cents
+    let extraPoint: JSONValue = .array([.object(["label": .string("a"), "value": .number(1), "color": .string("red")]),
+                                        .object(["label": .string("b"), "value": .number(1)])])
+    let wideLabel: JSONValue = .array([.object(["label": .string(String(repeating: "💵", count: 13)), "value": .number(1)]),
+                                       .object(["label": .string("b"), "value": .number(1)])])
+    let halfCent: JSONValue = .array([.object(["label": .string("a"), "value": .number(1.5)]), .object(["label": .string("b"), "value": .number(1)])])
+    for input in [ok.merging(["extra": .bool(true)]) { $1 }, ok.merging(["points": extraPoint]) { $1 }, ok.merging(["points": wideLabel]) { $1 },
+                  ok.merging(["title": .string(String(repeating: "💵", count: 31))]) { $1 },
+                  ok.merging(["unit": .string("usd_cents"), "points": halfCent]) { $1 }] {
+        #expect(chart(input) == nil, "\(input)")
+    }
+    #expect(chart(ok.merging(["points": halfCent]) { $1 }) != nil)
+}
+
+@Test func chartFormatsUnitsAndDatesOnlyWhenEveryLabelIsOne() throws {
+    let c = try #require(chart(["kind": .string("bar"), "title": .string("T"), "unit": .string("percent"),
+                                "points": .array([.object(["label": .string("2026-10-05"), "value": .number(12.5)]),
+                                                  .object(["label": .string("Food"), "value": .number(3)])])]))
+    #expect(c.dates == nil)
+    #expect(c.format(12.5) == (0.125).formatted(.percent.precision(.fractionLength(0...1))))
+    let n = try #require(chart(["kind": .string("bar"), "title": .string("T"), "unit": .string("count"), "points": points]))
+    #expect(n.format(3) == (3.0).formatted(.number.precision(.fractionLength(0...1))))
+    #expect(chart(["kind": .string("bar"), "title": .string("T"), "unit": .string("count"),
+                   "points": .array([.object(["label": .string("2026-13"), "value": .number(1)]),
+                                     .object(["label": .string("2026-10"), "value": .number(1)])])])?.dates == nil)
 }
 
 @Test func dataLineStripsExactlyOneLeadingSpace() {

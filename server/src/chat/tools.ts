@@ -51,7 +51,9 @@ const MONEY: [string, Entry][] = [
   entry('reimbursements', 'Reimbursement money out and back in per month, with the unpaid amount and the rows.', Empty, (d, _q, today) => getReimbursements(d.db, today)),
   entry('people', 'People the owner shares money with and each running balance (positive: they owe the owner); give id for one person with their history.', z.object({ id: z.string().min(1).optional() }).strict(),
     (d, q) => (q.id ? getPerson(d.db, q.id) : listPeople(d.db, true))),
-  entry('net_worth', 'Daily net worth history over a range with the current value and the change.', NetWorthQuery, (d, q, today) => getNetWorth(d.db, q.range, today)),
+  entry('net_worth', 'Daily net worth history over a range with the current value and the change, hidden accounts left out; give accountIds (from accounts) and/or type for those accounts\' daily balance alone, e.g. to find which account moved.',
+    NetWorthQuery.extend({ accountIds: z.array(z.string().min(1)).min(1).max(50).optional(), type: z.enum(['depository', 'credit', 'loan', 'investment', 'other']).optional() }).strict(),
+    (d, { range, ...filter }, today) => getNetWorth(d.db, range, today, filter)),
   entry('investments', 'Investment holdings with value, cost basis and gain; give holding (a holding key) for that holding\'s value history over range (default 1y).',
     z.object({ holding: z.string().min(1).optional(), range: Range.optional() }).strict(),
     (d, q, today) => (q.holding ? getHoldingHistory(d.db, q.holding, q.range ?? '1y', today) : getInvestments(d.db))),
@@ -68,8 +70,8 @@ const clip = (text: string): string => {
 
 const ENTRIES = new Map<string, Entry>([
   ...MONEY.map(([name, e]): [string, Entry] => [name, { ...e, def: { ...e.def, description: `${e.def.description} ${CENTS}` } }]),
-  entry('search_chats', "Searches the owner's own earlier conversations with you (questions and your answers) for messages containing every word of query, optionally between from and to; returns each match's chatId, title, date and a snippet with the words in [brackets].",
-    z.object({ query: z.string().max(200).regex(/[\p{L}\p{N}]/u, 'query has no words to search for'), from: Day, to: Day, limit: z.number().int().min(1).max(20).optional() }).strict(),
+  entry('search_chats', "Searches the owner's own earlier conversations with you (questions and your answers) for messages containing every word of query, optionally between from and to; returns each match's chatId, title, date and a snippet with the words in [brackets]. Without query (e.g. for \"our last chat\"), lists the most recently active chats newest first, each with its first question as the snippet and that question's date (from and to then apply to that date).",
+    z.object({ query: z.string().max(200).regex(/[\p{L}\p{N}]/u, 'query has no words to search for').optional(), from: Day, to: Day, limit: z.number().int().min(1).max(20).optional() }).strict(),
     (d, q, _today, ctx) => searchChats(d.db, { ...q, limit: q.limit ?? 10 }, ctx.chatId)),
   entry('read_chat', "One of the owner's own earlier conversations with you in full (id is a chatId from search_chats): each message's role, date and text.",
     z.object({ id: z.string().min(1) }).strict(), (d, q) => {
@@ -77,6 +79,11 @@ const ENTRIES = new Map<string, Entry>([
       return chat && { id: chat.id, title: chat.title, createdAt: chat.createdAt,
         messages: chat.messages.map((m) => ({ role: m.role, date: localDay(new Date(m.createdAt)), text: clip(m.text) })) };
     }),
+  entry('show_chart', 'Shows the owner a bar or line chart above your answer, at most 2 per answer. Every value must come from a tool result in this conversation. For unit usd_cents values are integer cents; for unit percent values are percentage points (12.5 = 12.5%).',
+    z.object({ kind: z.enum(['bar', 'line']), title: z.string().min(1).max(60), unit: z.enum(['usd_cents', 'count', 'percent']),
+      points: z.array(z.object({ label: z.string().min(1).max(24), value: z.number() }).strict()).min(2).max(31) }).strict()
+      .refine((c) => c.unit !== 'usd_cents' || c.points.every((p) => Number.isInteger(p.value)), { message: 'usd_cents values must be integer cents', path: ['points'] }),
+    () => ({ shown: true })),
 ]);
 
 export const TOOLS: ToolDef[] = [...ENTRIES.values()].map((e) => e.def);

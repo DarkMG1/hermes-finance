@@ -48,7 +48,14 @@ export class FakeClaude implements Claude {
   private readonly rounds: Ev[][];
   constructor(rounds: Ev[][]) { this.rounds = rounds; }
 
-  async messages(): Promise<never> { throw new Error('not scripted'); }
+  /** The non-streaming reply (the chat title call), or the error it throws; unset replies with no text. */
+  reply?: unknown;
+  messageRequests: { feature: string; body: Record<string, unknown> }[] = [];
+  async messages(feature: string, body: Record<string, unknown>) {
+    this.messageRequests.push({ feature, body: structuredClone(body) });
+    if (this.reply instanceof Error) throw this.reply;
+    return { reply: this.reply ?? { content: [] }, key: 'main' as const };
+  }
   async stream(_feature: string, body: Record<string, unknown>, signal?: AbortSignal) {
     const round = this.requests.length;
     this.requests.push(structuredClone(body));

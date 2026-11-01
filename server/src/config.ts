@@ -15,6 +15,8 @@ export type Config = {
   anthropicBackupKey: string | null;
   /** HERMES_CHAT_MODEL: the Ask chat's model. */
   chatModel: string;
+  /** HERMES_TITLE_MODEL: names a chat after its first answer. */
+  titleModel: string;
   plaid: { clientId: string; secret: string; env: 'sandbox' | 'production' };
 };
 
@@ -52,6 +54,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     anthropicModel: env.ANTHROPIC_MODEL?.trim() || 'claude-sonnet-5-5',
     anthropicBackupKey: env.ANTHROPIC_API_KEY_BACKUP?.trim() || null,
     chatModel: env.HERMES_CHAT_MODEL?.trim() || 'claude-opus-5-5',
+    titleModel: env.HERMES_TITLE_MODEL?.trim() || 'claude-haiku-5-5',
     plaid: { clientId: required(env, 'PLAID_CLIENT_ID'), secret: required(env, 'PLAID_SECRET'), env: plaidEnv },
   };
 }

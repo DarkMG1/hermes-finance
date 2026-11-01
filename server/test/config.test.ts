@@ -34,6 +34,8 @@ test('bad sync interval is rejected without echoing the value', () => {
 test('chat model defaults to Opus 5.5 and the backup key is optional', () => {
   const c = loadConfig({ ...base });
   assert.equal(c.chatModel, 'claude-opus-5-5');
+  assert.equal(c.titleModel, 'claude-haiku-5-5');
+  assert.equal(loadConfig({ ...base, HERMES_TITLE_MODEL: ' claude-sonnet-5-5 ' }).titleModel, 'claude-sonnet-5-5');
   assert.equal(c.anthropicBackupKey, null);
   const d = loadConfig({ ...base, HERMES_CHAT_MODEL: ' claude-sonnet-5-5 ', ANTHROPIC_API_KEY_BACKUP: ' backup-key ' });
   assert.equal(d.chatModel, 'claude-sonnet-5-5');

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { answer, MAX_ROUNDS, type ChatEvent } from '../src/chat/agent.ts';
 import { addUserMessage, createChat, dropFailedTail, getChat, replay, saveAssistant, startAssistant } from '../src/chat/store.ts';
 import { runTool } from '../src/chat/tools.ts';
-import { costMicros, toCents } from '../src/chat/anthropic.ts';
+import { ClaudeError, costMicros, toCents } from '../src/chat/anthropic.ts';
 import { FakeClaude, end, start, text, thinking, tool, type Ev } from './fake-claude.ts';
 import { makeTestDeps, seedAccount, seedTxn } from './helpers.ts';
 
@@ -109,10 +109,11 @@ function assertPrefix(before: Record<string, unknown>, after: Record<string, unk
   assert.equal(JSON.stringify(bare(after.messages as Msg[]).slice(0, prev.length)), JSON.stringify(prev));
 }
 
-test('a later question on another day resends system, tools and every earlier message byte for byte, thinking included', async () => {
+test('the turn being answered resends its own thinking; a later question on another day replays earlier turns without thinking', async () => {
   const s = setup([
     [start(), ...thinking(0, 'SYNTHETIC THOUGHT', 'sig-1'), ...tool(1, 'tu1', 'categories', {}), ...end('tool_use')],
     [start(), ...thinking(0, 'SYNTHETIC THOUGHT 2', 'sig-2'), ...text(1, 'First.'), ...end('end_turn')],
+    [start(), ...thinking(0, 'SYNTHETIC THOUGHT 3', 'sig-3'), ...tool(1, 'tu2', 'categories', {}), ...end('tool_use')],
     [start(), ...text(0, 'Second.'), ...end('end_turn')],
   ]);
   await s.run();
@@ -121,12 +122,24 @@ test('a later question on another day resends system, tools and every earlier me
   addUserMessage(s.db, s.chatId, 'c2', 'And today?', later);
   const second = startAssistant(s.db, s.chatId, later);
   await answer(s.deps, s.chatId, second, () => {}, new AbortController().signal);
-  const [, r1, r2] = s.fake.requests as Record<string, unknown>[];
-  assertPrefix(r1!, r2!);
+  const [r0, r1, r2, r3] = s.fake.requests as Record<string, unknown>[];
+  assertPrefix(r0!, r1!);
+  assert.deepEqual(bare(r1!.messages as Msg[])[1]!.content,
+    [{ type: 'thinking', thinking: 'SYNTHETIC THOUGHT', signature: 'sig-1' }, { type: 'tool_use', id: 'tu1', name: 'categories', input: {} }]);
+  assert.equal(JSON.stringify(r2!.system), JSON.stringify(r1!.system));
+  assert.equal(JSON.stringify(r2!.tools), JSON.stringify(r1!.tools));
   const msgs = bare(r2!.messages as Msg[]);
-  assert.deepEqual(msgs[3], { role: 'assistant', content: [{ type: 'thinking', thinking: 'SYNTHETIC THOUGHT 2', signature: 'sig-2' }, { type: 'text', text: 'First.' }] });
-  assert.deepEqual(msgs[1]!.content, [{ type: 'thinking', thinking: 'SYNTHETIC THOUGHT', signature: 'sig-1' }, { type: 'tool_use', id: 'tu1', name: 'categories', input: {} }]);
+  assert.deepEqual(msgs.slice(0, 4), [
+    { role: 'user', content: q('How much did I spend?') },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name: 'categories', input: {} }] },
+    bare(r1!.messages as Msg[])[2],
+    { role: 'assistant', content: [{ type: 'text', text: 'First.' }] },
+  ]);
   assert.deepEqual(msgs.at(-1), { role: 'user', content: q('And today?', '2026-03-16') });
+  assertPrefix(r2!, r3!);
+  assert.deepEqual(bare(r3!.messages as Msg[]).at(-2)!.content,
+    [{ type: 'thinking', thinking: 'SYNTHETIC THOUGHT 3', signature: 'sig-3' }, { type: 'tool_use', id: 'tu2', name: 'categories', input: {} }]);
+  assert.ok(!JSON.stringify(replay(s.db, s.chatId)).includes('thinking'));
 });
 
 test('stop reasons max_tokens and refusal, and a stream cut before message_stop, save failed with their codes', async () => {
@@ -266,6 +279,7 @@ test('dropFailedTail removes the failed answer and its question', () => {
   saveAssistant(db, assistantId, [], 'failed', 'HTTP_500');
   dropFailedTail(db, chatId);
   assert.deepEqual(getChat(db, chatId)!.messages, []);
+  assert.equal(getChat(db, chatId)!.title, '');
   addUserMessage(db, chatId, 'c2', 'Again', NOW);
   const a = startAssistant(db, chatId, NOW);
   saveAssistant(db, a, [{ role: 'assistant', content: [{ type: 'text', text: 'Ok' }] }], 'done', null);
@@ -278,6 +292,79 @@ test('title is the first message cut to 60 characters', () => {
   const { db, chatId } = setup([], long);
   addUserMessage(db, chatId, 'c2', 'Second question', NOW);
   assert.equal(getChat(db, chatId)!.title, 'x'.repeat(60));
+});
+
+const settle = () => new Promise((r) => setImmediate(r));
+const titled = (title: string, stop_reason = 'end_turn') => ({ content: [{ type: 'thinking', thinking: '', signature: 's' }, { type: 'text', text: title }], stop_reason,
+  usage: { input_tokens: 80, output_tokens: 6 } });
+
+test('the first answer names the chat with the title model after done; later answers and a changed title are left alone', async () => {
+  const s = setup([[start(), ...text(0, 'You spent $12.34 at SYNTHETIC GROCER.'), ...end('end_turn')], [start(), ...text(0, 'Ok.'), ...end('end_turn')]],
+    'How much did I spend at SYNTHETIC GROCER?');
+  s.fake.reply = titled(' "Grocery spending in March." \n');
+  let doneTitle: string | undefined;
+  await answer(s.deps, s.chatId, s.assistantId, (e) => { if (e.type === 'done') doneTitle = getChat(s.db, s.chatId)!.title; }, new AbortController().signal);
+  // done goes out before the title call finishes
+  assert.equal(doneTitle, 'How much did I spend at SYNTHETIC GROCER?');
+  await settle();
+  assert.equal(getChat(s.db, s.chatId)!.title, 'Grocery spending in March');
+  const [call] = s.fake.messageRequests;
+  assert.equal(call!.feature, 'chat');
+  assert.equal(call!.body.model, 'fake-title-model');
+  // only fields the Haiku 5.5 docs list (effort: all five levels on Haiku 5.5)
+  assert.deepEqual(Object.keys(call!.body).sort(), ['max_tokens', 'messages', 'model', 'output_config', 'system']);
+  assert.deepEqual(call!.body.output_config, { effort: 'low' });
+  assert.match(JSON.stringify(call!.body.messages), /How much did I spend at SYNTHETIC GROCER\?.*You spent \$12\.34/);
+  addUserMessage(s.db, s.chatId, 'c2', 'And then?', NOW);
+  await answer(s.deps, s.chatId, startAssistant(s.db, s.chatId, NOW), () => {}, new AbortController().signal);
+  await settle();
+  assert.equal(s.fake.messageRequests.length, 1);
+
+  const renamed = setup([[start(), ...text(0, 'Hi.'), ...end('end_turn')]]);
+  renamed.fake.reply = titled('Some title');
+  await renamed.run();
+  renamed.db.prepare('UPDATE chat_conversations SET title = ? WHERE id = ?').run('Owner title', renamed.chatId);
+  await settle();
+  assert.equal(getChat(renamed.db, renamed.chatId)!.title, 'Owner title');
+});
+
+test('a failed title call, an empty title, a max_tokens reply or a stopped first answer keeps the first-question title', async () => {
+  for (const reply of [new Error('boom'), new ClaudeError('HTTP_500'), { content: [] }, titled('  "." '), titled('Cut short', 'max_tokens')]) {
+    const s = setup([[start(), ...text(0, 'Hi.'), ...end('end_turn')]]);
+    s.fake.reply = reply;
+    await s.run();
+    await settle();
+    assert.equal(s.fake.messageRequests.length, 1);
+    assert.equal(getChat(s.db, s.chatId)!.title, 'How much did I spend?');
+    assert.equal(s.events.at(-1)!.type, 'done');
+  }
+  const stopped = setup([[start(), ...text(0, 'You spent ', 'more'), ...end('end_turn')]]);
+  stopped.fake.reply = titled('Never');
+  const ctl = new AbortController();
+  await answer(stopped.deps, stopped.chatId, stopped.assistantId, () => ctl.abort(), ctl.signal);
+  await settle();
+  assert.equal(stopped.fake.messageRequests.length, 0);
+});
+
+test('a later question also marks the question before the last answer, in every round; four breakpoints at most, none stored', async () => {
+  const s = setup([
+    [start(), ...tool(0, 'tu1', 'categories', {}), ...end('tool_use')],
+    [start(), ...text(0, 'First.'), ...end('end_turn')],
+    [start(), ...tool(0, 'tu2', 'categories', {}), ...end('tool_use')],
+    [start(), ...text(0, 'Second.'), ...end('end_turn')],
+  ]);
+  await s.run();
+  addUserMessage(s.db, s.chatId, 'c2', 'And now?', NOW);
+  await answer(s.deps, s.chatId, startAssistant(s.db, s.chatId, NOW), () => {}, new AbortController().signal);
+  const marked = (body: Record<string, unknown>) => (body.messages as { content: { cache_control?: unknown }[] }[])
+    .flatMap((m, i) => m.content.map((b, j) => (b.cache_control ? `${i}.${j}` : ''))).filter(Boolean);
+  // round 1 of the first answer: only the newest block (the question is not before a stored answer)
+  assert.deepEqual(marked(s.fake.requests[1]!), ['2.0']);
+  // the second answer: question 1 (where the first answer's round 0 cached) and the newest block
+  assert.deepEqual(marked(s.fake.requests[2]!), ['0.1', '4.1']);
+  assert.deepEqual(marked(s.fake.requests[3]!), ['0.1', '6.0']);
+  for (const body of s.fake.requests) assert.ok(JSON.stringify(body).match(/"cache_control"/g)!.length <= 4);
+  assert.ok(!JSON.stringify(replay(s.db, s.chatId)).includes('cache_control'));
 });
 
 test('system prompt, last tool and the newest message block carry cache_control; the system prompt has no date', async () => {
@@ -298,4 +385,77 @@ test('system prompt, last tool and the newest message block carry cache_control;
   assert.equal(body.model, 'fake-chat-model');
   assert.equal(body.stream, true);
   assert.equal(body.max_tokens, 16_000);
+});
+
+test('a first answer stopped (with or without text) leaves the auto title, so the next done answer names the chat', async () => {
+  for (const partial of [[], [...text(0, 'You spent ')]]) {
+    const s = setup([[start(), ...partial, ...text(1, 'more'), ...end('end_turn')], [start(), ...text(0, 'Dining was $45.'), ...end('end_turn')]]);
+    s.fake.reply = titled('Dining this month');
+    const ctl = new AbortController();
+    s.fake.hold = { event: partial.length + 1, until: new Promise(() => {}) };
+    const running = s.run(ctl.signal);
+    await settle();
+    ctl.abort();
+    await running;
+    s.fake.hold = undefined;
+    assert.equal(getChat(s.db, s.chatId)!.messages[1]!.status, 'stopped');
+    addUserMessage(s.db, s.chatId, 'c2', 'What about dining?', NOW);
+    await answer(s.deps, s.chatId, startAssistant(s.db, s.chatId, NOW), () => {}, new AbortController().signal);
+    await settle();
+    assert.equal(getChat(s.db, s.chatId)!.title, 'Dining this month');
+    assert.match(JSON.stringify(s.fake.messageRequests[0]!.body.messages), /Question: What about dining\?/);
+  }
+});
+
+test('a failed first answer replaced by a reworded question titles the chat from the new one', async () => {
+  const s = setup([[start(), ...text(0, 'Rent was $900.'), ...end('end_turn')]], 'Waht is rnet?');
+  saveAssistant(s.db, s.assistantId, [], 'failed', 'HTTP_500');
+  dropFailedTail(s.db, s.chatId);
+  addUserMessage(s.db, s.chatId, 'c2', 'What is rent?', NOW);
+  assert.equal(getChat(s.db, s.chatId)!.title, 'What is rent?');
+  s.fake.reply = titled('Monthly rent');
+  await answer(s.deps, s.chatId, startAssistant(s.db, s.chatId, NOW), () => {}, new AbortController().signal);
+  await settle();
+  assert.equal(getChat(s.db, s.chatId)!.title, 'Monthly rent');
+});
+
+test('a title that is not the auto title is never replaced, and makes no title call', async () => {
+  const s = setup([[start(), ...text(0, 'Hi.'), ...end('end_turn')]]);
+  s.db.prepare('UPDATE chat_conversations SET title = ? WHERE id = ?').run('Owner title', s.chatId);
+  s.fake.reply = titled('Some title');
+  await s.run();
+  await settle();
+  assert.equal(s.fake.messageRequests.length, 0);
+  assert.equal(getChat(s.db, s.chatId)!.title, 'Owner title');
+});
+
+const chart = (title: string) => ({ kind: 'bar', title, unit: 'count', points: [{ label: 'A', value: 1 }, { label: 'B', value: 2 }] });
+
+test('a third chart in one answer is refused; refused charts emit no tool event and getChat leaves them out', async () => {
+  const s = setup([
+    [start(), ...tool(0, 'c1', 'show_chart', chart('One')), ...tool(1, 'c2', 'show_chart', { ...chart('Bad'), kind: 'pie' }), ...end('tool_use')],
+    [start(), ...tool(0, 'c3', 'show_chart', chart('Two')), ...tool(1, 'c4', 'show_chart', chart('Three')), ...end('tool_use')],
+    [start(), ...text(0, 'Done.'), ...end('end_turn')],
+  ]);
+  await s.run();
+  const results = (s.fake.requests[2]!.messages as Msg[]).flatMap((m) => (Array.isArray(m.content) ? m.content : []) as { type: string; tool_use_id?: string; content?: string; is_error?: boolean }[])
+    .filter((b) => b.type === 'tool_result');
+  assert.deepEqual(results.map((b) => [b.tool_use_id, b.is_error]), [['c1', false], ['c2', true], ['c3', false], ['c4', true]]);
+  assert.match(results[3]!.content!, /at most 2 charts per answer/);
+  const shown = s.events.filter((e) => e.type === 'tool').map((e) => (e as { label: string }).label);
+  assert.deepEqual(shown, ['Chart · One', 'Chart · Two']);
+  assert.deepEqual(getChat(s.db, s.chatId)!.messages[1]!.tools.map((t) => t.label), shown);
+});
+
+test('a title call that keeps failing is tried for the first 3 done answers only', async () => {
+  const s = setup([1, 2, 3, 4].map((n) => [start(), ...text(0, `Answer ${n}.`), ...end('end_turn')]));
+  s.fake.reply = new ClaudeError('HTTP_500');
+  await s.run();
+  for (const n of [2, 3, 4]) {
+    addUserMessage(s.db, s.chatId, `c${n}`, `Question ${n}`, NOW);
+    await answer(s.deps, s.chatId, startAssistant(s.db, s.chatId, NOW), () => {}, new AbortController().signal);
+    await settle();
+  }
+  assert.equal(s.fake.messageRequests.length, 3);
+  assert.equal(getChat(s.db, s.chatId)!.title, 'How much did I spend?');
 });

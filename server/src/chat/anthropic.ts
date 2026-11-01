@@ -24,6 +24,8 @@ export type Claude = {
 const PRICES: Record<string, { in: number; out: number; read: number }> = {
   'claude-opus-5-5': { in: 4, out: 20, read: 0.05 },
   'claude-sonnet-5-5': { in: 2, out: 10, read: 0.05 },
+  // ponytail: the up-to-100k-token prompt price; Haiku prompts here are chat titles, a few hundred tokens
+  'claude-haiku-5-5': { in: 0.1, out: 0.5, read: 0.1 },
 };
 export function costMicros(model: string, u: Usage): number {
   const p = PRICES[model] ?? PRICES['claude-opus-5-5']!;

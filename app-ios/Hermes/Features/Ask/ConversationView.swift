@@ -3,6 +3,7 @@ import SwiftUI
 
 struct ConversationView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.askCovered) private var covered
     /// nil until the first question creates the chat.
     @State var chatId: String?
     @State private var title = ""
@@ -11,7 +12,8 @@ struct ConversationView: View {
     @State private var draft = ""
     @State private var stream: Task<Void, Never>?
     @State private var backupActive = false
-    @State private var shownTool: ChatToolUse?
+    /// When the answer now streaming was sent; Stop ignores the send tap's double (see `acceptsStop`).
+    @State private var sentAt: Date?
     @State private var createKey = UUID().uuidString
 
     var body: some View {
@@ -25,7 +27,7 @@ struct ConversationView: View {
                     if message.role == "user" {
                         UserBubble(message: message).equatable()
                     } else {
-                        AnswerRow(message: message, canRetry: stream == nil, onTool: { shownTool = $0 }, onRetry: retry).equatable()
+                        AnswerRow(message: message, canRetry: stream == nil, onRetry: retry).equatable()
                     }
                 }
             }
@@ -38,18 +40,12 @@ struct ConversationView: View {
         .safeAreaInset(edge: .top) {
             if backupActive { Text("Using backup key").textStyle(.caption, color: Palette.secondaryText) }
         }
-        .safeAreaInset(edge: .bottom) { input }
+        // a bar, not an inset: it fades the answers scrolling under it, as the tab bar does
+        .safeAreaBar(edge: .bottom) { input }
         .refreshable { await load() }
         .navigationTitle(title.isEmpty ? "New chat" : title)
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: Binding(get: { shownTool != nil }, set: { if !$0 { shownTool = nil } })) {
-            if let tool = shownTool {
-                // swiftlint:disable:next multiple_closures_with_trailing_closure
-                Sheet(title: tool.label ?? tool.name, dirty: false, onCancel: { shownTool = nil }, onSave: nil) {
-                    ForEach(tool.input.keys.sorted(), id: \.self) { LabeledContent($0, value: tool.input[$0]?.display ?? "") }
-                }
-            }
-        }
+        .toolbarVisibility(covered ? .hidden : .automatic, for: .navigationBar)
         .task { await load() }
         .task { await loadUsage() }
         // an answer still being written by an earlier visit: look again until it ends
@@ -67,7 +63,11 @@ struct ConversationView: View {
         return HStack(alignment: .bottom, spacing: Space.s) {
             TextField("Ask about your money", text: $draft, axis: .vertical).lineLimit(1...5).textStyle(.body)
             Button(streaming ? "Stop" : "Send", systemImage: streaming ? "stop.circle.fill" : "arrow.up.circle.fill") {
-                if streaming { stop() } else { send(text) }
+                if !streaming {
+                    send(text)
+                } else if thread?.acceptsStop(sentAt: sentAt, now: .now) == true {
+                    stop()
+                }
             }
             .labelStyle(.iconOnly)
             .font(TextStyle.title.font)
@@ -75,7 +75,8 @@ struct ConversationView: View {
         }
         .padding(Space.m)
         .background(Palette.surface, in: RoundedRectangle(cornerRadius: Radius.medium))
-        .padding(Space.s)
+        // the floating tab bar's glass reaches past its frame, so the field keeps clear of it; sides line up with the answers
+        .padding([.horizontal, .bottom], Space.l)
     }
 
     /// `resync`: after a local failure, take the server's version only if it kept the question, so an unsent one stays retryable.
@@ -119,7 +120,10 @@ struct ConversationView: View {
             thread?.messages.removeLast()
             if thread?.messages.last?.role == "user" { thread?.messages.removeLast() }
         }
+        // a stopped first answer leaves the chat to be named after the next done one
+        let firstAnswer = !(thread?.messages.contains { $0.role == "assistant" && $0.status == "done" } ?? false)
         thread?.send(text: text, clientId: clientId, now: Date().ISO8601Format())
+        sentAt = .now
         stream = Task {
             var created: String?
             do {
@@ -151,7 +155,24 @@ struct ConversationView: View {
             stream = nil
             // the server may have saved a different outcome (done, stopped) than the connection showed
             if ["NETWORK", "INTERRUPTED"].contains(thread?.messages.last?.errorCode) { await load(resync: true) }
+            refreshTitle(client: client, firstAnswer: firstAnswer)
             await loadUsage()
+        }
+    }
+
+    /// The server names a chat a moment after its first done answer; Haiku can take longer than the first look.
+    private func refreshTitle(client: APIClient, firstAnswer: Bool) {
+        guard firstAnswer, thread?.messages.last?.status == "done", let chatId,
+              let question = thread?.messages.first(where: { $0.role == "user" })?.text else { return }
+        // the server's title from the first question: trimmed, first 60 UTF-16 units (JavaScript's slice)
+        let auto = String(decoding: question.trimmingCharacters(in: .whitespacesAndNewlines).utf16.prefix(60), as: UTF16.self)
+        Task {
+            for wait in [3, 5] {
+                try? await Task.sleep(for: .seconds(wait))
+                guard let detail = try? await client.chat(id: chatId) else { continue }
+                title = detail.title
+                if detail.title != auto { return }
+            }
         }
     }
 
@@ -176,7 +197,7 @@ private struct UserBubble: View, Equatable {
     var body: some View {
         HStack {
             Spacer(minLength: Space.xxl)
-            Text(message.text).textStyle(.body, color: Palette.onAccent)
+            Text(message.text).textStyle(.body, color: Palette.onAccent).textSelection(.enabled)
                 .padding(Space.m)
                 .background(Palette.accent, in: RoundedRectangle(cornerRadius: Radius.medium))
         }
@@ -187,7 +208,6 @@ private struct UserBubble: View, Equatable {
 private struct AnswerRow: View, Equatable {
     let message: ChatMessage
     let canRetry: Bool
-    let onTool: (ChatToolUse) -> Void
     let onRetry: () -> Void
 
     nonisolated static func == (a: Self, b: Self) -> Bool { a.message == b.message && a.canRetry == b.canRetry }
@@ -195,11 +215,17 @@ private struct AnswerRow: View, Equatable {
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             ForEach(Array(message.tools.enumerated()), id: \.offset) { _, tool in
-                Button { onTool(tool) } label: { Text("Looked at " + (tool.label ?? tool.name)).textStyle(.caption, color: Palette.secondaryText) }
-                    .buttonStyle(.plain)
+                if let chart = ChatChart(tool) {
+                    ChatChartCard(chart: chart)
+                } else {
+                    Text("Looked at " + (tool.label ?? tool.name)).textStyle(.caption, color: Palette.secondaryText)
+                }
             }
             if !message.text.isEmpty {
-                Text(markdown).textStyle(.body).textSelection(.enabled)
+                VStack(alignment: .leading, spacing: Space.s) {
+                    ForEach(Array(MarkdownBlock.parse(message.text).enumerated()), id: \.offset) { _, block in Block(block: block) }
+                }
+                .textSelection(.enabled)
             }
             switch message.status {
             case "streaming" where message.text.isEmpty: ProgressView()
@@ -209,14 +235,9 @@ private struct AnswerRow: View, Equatable {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// Links are dropped: the text comes from a model that read bank data, so a link in it can't be trusted.
-    private var markdown: AttributedString {
-        var text = (try? AttributedString(markdown: message.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-            ?? AttributedString(message.text)
-        text.link = nil
-        return text
+        .contextMenu {
+            if !message.text.isEmpty { Button("Copy", systemImage: "doc.on.doc") { UIPasteboard.general.string = message.text } }
+        }
     }
 
     @ViewBuilder
@@ -229,6 +250,36 @@ private struct AnswerRow: View, Equatable {
         } else {
             Button("\(retryable[message.errorCode ?? ""] ?? "Couldn't answer") · Retry", action: onRetry)
                 .textStyle(.caption, color: Palette.loss).disabled(!canRetry)
+        }
+    }
+}
+
+private struct Block: View {
+    let block: MarkdownBlock
+
+    var body: some View {
+        switch block {
+        case .paragraph(let text): Text(text).textStyle(.body)
+        case .heading(let text): Text(text).textStyle(.headline)
+        case .listItem(let marker, let depth, let text, let continued):
+            HStack(alignment: .firstTextBaseline, spacing: Space.s) {
+                // hidden, not left out, so a later paragraph lines up with the item's first
+                Text(marker).textStyle(.body).monospacedDigit().opacity(continued ? 0 : 1).accessibilityHidden(continued)
+                Text(text).textStyle(.body)
+            }
+            .padding(.leading, CGFloat(depth) * Space.l)
+        case .code(let code): Text(code).font(TextStyle.subhead.font.monospaced()).foregroundStyle(Palette.text)
+        case .table(let rows):
+            Grid(alignment: .leading, horizontalSpacing: Space.m, verticalSpacing: Space.xs) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                    GridRow {
+                        ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                            Text(cell).textStyle(index == 0 ? .subhead : .body, color: index == 0 ? Palette.secondaryText : Palette.text)
+                        }
+                    }
+                    if index == 0 { Divider().overlay(Palette.separator) }
+                }
+            }
         }
     }
 }

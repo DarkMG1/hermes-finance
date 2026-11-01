@@ -36,6 +36,8 @@ struct Sheet<Content: View>: View {
                                     UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                                 }
                             }
+                            // its own glass: sharing Save's, the capsule stays stretched while this button leaves (after a pushed search)
+                            ToolbarSpacer(.fixed, placement: .topBarTrailing)
                         }
                         ToolbarItem(placement: .cancellationAction) {
                             Button(dirty ? "Cancel" : "Close") { unresolved ? confirmingClose = true : onCancel() }.disabled(busy)

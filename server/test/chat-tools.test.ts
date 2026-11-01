@@ -35,6 +35,17 @@ test('transactions, people, net_worth, bills, accounts match the functions the r
   assert.deepEqual(call(deps, 'accounts', {}), listAccounts(db));
 });
 
+test('net_worth filtered by account ids or type matches getNetWorth with that filter', () => {
+  const { deps, db, today } = setup();
+  seedAccount(db, { id: 'cc', type: 'credit', balanceCents: 30000 });
+  db.prepare('INSERT INTO balance_snapshots (account_id, date, balance_cents) VALUES (\'a1\', ?, 100000), (\'cc\', ?, 30000)').run(today, today);
+  const one = call(deps, 'net_worth', { range: '1m', accountIds: ['cc'] });
+  assert.deepEqual(one, getNetWorth(db, '1m', today, { accountIds: ['cc'] }));
+  assert.equal(one.currentCents, -30000);
+  assert.deepEqual(call(deps, 'net_worth', { range: '3m', type: 'depository' }), getNetWorth(db, '3m', today, { type: 'depository' }));
+  assert.equal(runTool(deps, 'net_worth', { range: '1m', accountIds: [] }).isError, true);
+});
+
 test('bad input is an error result, not a throw', () => {
   const { deps } = setup();
   const r = runTool(deps, 'spending', { period: 'month', date: 'September' });
@@ -141,4 +152,19 @@ test('a single transaction over the cap is delivered with its amounts and shorte
   assert.ok(first.transactions[0].bankDescription.length < 600);
   const next = JSON.parse(runTool(deps, 'transactions', { to: '2026-02-28', limit: 200, cursor: first.nextCursor }).content);
   assert.deepEqual(next.transactions.map((t: { id: string }) => t.id), ['older']);
+});
+
+test('show_chart validates its input and returns only shown; its label names the title', () => {
+  const { deps } = setup();
+  const points = [{ label: 'Food', value: 4000 }, { label: 'Rent', value: 150000 }, { label: 'Fun', value: 2500 }];
+  const chart = { kind: 'bar', title: 'March spending by category', unit: 'usd_cents', points };
+  assert.deepEqual(runTool(deps, 'show_chart', chart), { content: '{"shown":true}', isError: false });
+  assert.equal(runTool(deps, 'show_chart', { ...chart, kind: 'line', unit: 'percent', points: points.slice(0, 2) }).isError, false);
+  assert.equal(runTool(deps, 'show_chart', { ...chart, unit: 'percent', points: [{ label: 'A', value: 12.5 }, { label: 'B', value: 7.25 }] }).isError, false);
+  for (const bad of [{ ...chart, kind: 'pie' }, { ...chart, unit: 'eur' }, { ...chart, title: 'x'.repeat(61) }, { ...chart, title: '' },
+    { ...chart, points: points.slice(0, 1) }, { ...chart, points: Array.from({ length: 32 }, (_, i) => ({ label: `d${i}`, value: i })) },
+    { ...chart, points: [{ label: 'x'.repeat(25), value: 1 }, ...points] }, { ...chart, points: [{ label: 'Food', value: '4000' }, ...points] }, { ...chart, extra: 1 }, { ...chart, points: [{ label: 'Food', value: 40.5 }, ...points] }]) {
+    assert.equal(runTool(deps, 'show_chart', bad).isError, true, JSON.stringify(bad).slice(0, 80));
+  }
+  assert.equal(toolLabel('show_chart', chart), 'Chart · March spending by category');
 });
