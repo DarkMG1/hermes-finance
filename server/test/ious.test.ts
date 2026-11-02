@@ -368,6 +368,22 @@ test('re-saving a split with two lines for one person keeps each link on its own
   assert.deepEqual(links(), [{ p: 'b2', pos: 1 }]);
 });
 
+test('deleting the owner line in front of two linked lines for one person keeps each link on its own line (R3)', async () => {
+  const { deps, send, link } = app();
+  seedTxn(deps.db, { id: 'item', accountId: 'a1', date: '2026-03-01', amountCents: -6000 });
+  seedSplit(deps.db, { id: 'L1', transactionId: 'item', amountCents: -3000, categoryId: null });
+  seedSplit(deps.db, { id: 'L2', transactionId: 'item', amountCents: -1000, categoryId: null, personId: 'p1' });
+  seedSplit(deps.db, { id: 'L3', transactionId: 'item', amountCents: -2000, categoryId: null, personId: 'p1' });
+  seedTxn(deps.db, { id: 'b1', accountId: 'a1', date: '2026-03-02', amountCents: 1000, personId: 'p1' });
+  seedTxn(deps.db, { id: 'b2', accountId: 'a1', date: '2026-03-03', amountCents: 2000, personId: 'p1' });
+  link('k1', 'b1', 'item', 1000, 'L2');
+  link('k2', 'b2', 'item', 2000, 'L3');
+  const lines = { lines: [{ amountCents: -4000, categoryId: null, personId: 'p1', payee: null }, { amountCents: -2000, categoryId: null, personId: 'p1', payee: null }] };
+  assert.equal((await send('PUT', '/v1/transactions/item/splits', 'dl-1', lines)).statusCode, 200);
+  assert.deepEqual(deps.db.prepare(`SELECT k.payback_transaction_id AS p, (SELECT COUNT(*) FROM split_lines s WHERE s.transaction_id = 'item' AND s.id < k.item_line_id) AS pos
+    FROM iou_links k ORDER BY p`).all(), [{ p: 'b1', pos: 0 }, { p: 'b2', pos: 1 }]);
+});
+
 test('itemizing reorders the lines: the link follows the person to their line at its new position (R3)', () => {
   const { deps, link } = app();
   seedTxn(deps.db, { id: 'back', accountId: 'a1', date: '2026-03-05', amountCents: 500, personId: 'p1' });

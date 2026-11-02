@@ -157,8 +157,9 @@ struct ActivityView: View {
         guard let reader = model.reader else { return }
         let gen = generation
         for personId in Set(rows.flatMap { [$0.personId, $0.paidByPersonId] + $0.splitLines.map(\.personId) }.compactMap { $0 }) {
-            guard let page = try? await reader.read("/v1/transactions", query: TransactionQuery(personId: personId).items, as: TransactionPage.self).value,
-                  gen == generation, !Task.isCancelled else { return }
+            let page = try? await reader.read("/v1/transactions", query: TransactionQuery(personId: personId).items, as: TransactionPage.self).value
+            guard gen == generation, !Task.isCancelled else { return }
+            guard let page else { continue }
             for fresh in page.transactions { if let i = items.firstIndex(where: { $0.id == fresh.id }) { items[i] = fresh } }
         }
     }

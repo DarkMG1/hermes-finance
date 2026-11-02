@@ -125,8 +125,8 @@ export function captureLinks(db: Db, txnId: string): Captured[] {
 }
 
 /** Retarget each captured link: to the row if it is unsplit and has that person, else (from an unsplit row) their first line with that sign.
- * Split → split: the line at the same position if it still has that person and sign; else, while that person's count of such lines
- * is unchanged (lines reordered), the one at the same rank among them; else the line's person changed and the link drops (R6). */
+ * Split → split: while that person's count of same-sign lines is unchanged, the one at the same rank among them (other lines may move);
+ * else the line at the same position if it still has that person and sign; else the line's person changed and the link drops (R6). */
 export function restoreLinks(db: Db, txnId: string, captured: Captured[]): void {
   const row = db.prepare('SELECT person_id AS p, amount_cents AS a FROM transactions WHERE id = ?').get(txnId) as { p: string | null; a: number } | undefined;
   const lines = linesOf(db, txnId);
@@ -139,7 +139,7 @@ export function restoreLinks(db: Db, txnId: string, captured: Captured[]): void 
     const same = alike({ p: c.personId, a: c.sign });
     const peers = lines.filter(same);
     const target = !lines.length ? (same(row) ? null : undefined)
-      : c.pos === null ? peers[0]?.id : same(lines[c.pos]) ? lines[c.pos]!.id : peers.length === c.peers ? peers[c.rank]?.id : undefined;
+      : c.pos === null ? peers[0]?.id : peers.length === c.peers ? peers[c.rank]?.id : same(lines[c.pos]) ? lines[c.pos]!.id : undefined;
     if (target === undefined) continue;
     const k = c.link;
     ins.run(k.id, k.payback_transaction_id, c.side === 'payback' ? target : k.payback_line_id, k.item_transaction_id,
