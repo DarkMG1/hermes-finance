@@ -5,7 +5,8 @@ public enum TransactionLabel {
         guard amountCents < 0 else {
             let paid = iou?.paidBack ?? []
             if paid.count > 1 { return "\(personName) repaid · \(paid.count) items" }
-            return paid.first.map { "\(personName) repaid · \($0.payee ?? "")" } ?? "\(personName) repaid"
+            if let payee = paid.first?.payee, !payee.isEmpty { return "\(personName) repaid · \(payee)" }
+            return "\(personName) repaid"
         }
         guard let left = iou?.leftCents else { return "\(personName) owes" }
         if left == 0 { return "\(personName) repaid" }

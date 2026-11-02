@@ -10,7 +10,7 @@ public enum PaybackFill {
         items.first { $0.leftCents == paybackCents }.map { [$0.id] } ?? []
     }
 
-    /// items arrive oldest first from the server
+    /// `items` must be the server's oldest-first list, not `ordered()` output (that puts the exact match first).
     public static func amounts(_ items: [OpenItem], selected: Set<String>, paybackCents: Int) -> [PaybackItem] {
         var rest = paybackCents
         return items.filter { selected.contains($0.id) }.compactMap { item in

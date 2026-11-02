@@ -35,8 +35,10 @@ private func item(_ id: String, left: Int, total: Int? = nil, date: String = "20
 
 @Test func paybackBodyEncodesNullLineId() throws {
     let body = PaybackBody(personId: "p1", lineId: nil, items: [PaybackItem(transactionId: "a", lineId: nil, amountCents: 100)])
-    let json = try #require(String(data: JSONEncoder().encode(body), encoding: .utf8))
-    #expect(json.components(separatedBy: "\"lineId\":null").count == 3)
+    let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(body)) as? [String: Any])
+    #expect(json["lineId"] is NSNull)
+    let items = try #require(json["items"] as? [[String: Any]])
+    #expect(items[0]["lineId"] is NSNull)
 }
 
 @Test func exactMatchIsPreselectedAndFirst() {
@@ -52,6 +54,13 @@ private func item(_ id: String, left: Int, total: Int? = nil, date: String = "20
     #expect(filled == [PaybackItem(transactionId: "a", lineId: nil, amountCents: 1000), PaybackItem(transactionId: "b", lineId: nil, amountCents: 1500)])
 }
 
+@Test func amountsFromTheServerListFillOldestFirstEvenWhenTheExactMatchIsNewest() {
+    let items = [item("a", left: 1000, date: "2026-03-01"), item("b", left: 2500, date: "2026-03-02")]
+    let filled = PaybackFill.amounts(items, selected: PaybackFill.preselected(items, paybackCents: 2500).union(["a|"]), paybackCents: 2500)
+    #expect(filled.map(\.transactionId) == ["a", "b"])
+    #expect(filled.map(\.amountCents) == [1000, 1500])
+}
+
 @Test func statusLines() {
     func tag(_ amount: Int, _ iou: TransactionIOU?) -> String {
         TransactionLabel.tag(personName: "Synthetic Quill", categoryName: "", amountCents: amount, iou: iou)
@@ -63,5 +72,7 @@ private func item(_ id: String, left: Int, total: Int? = nil, date: String = "20
     #expect(tag(6000, TransactionIOU(leftCents: nil, paidBack: one)) == "Synthetic Quill repaid · SYNTHETIC CONCERT")
     #expect(tag(6000, TransactionIOU(leftCents: nil, paidBack: one + one)) == "Synthetic Quill repaid · 2 items")
     #expect(tag(6000, TransactionIOU(leftCents: nil, paidBack: [])) == "Synthetic Quill repaid")
+    #expect(tag(6000, TransactionIOU(leftCents: nil, paidBack: [PaidBack(transactionId: "c", lineId: nil, amountCents: 6000)])) == "Synthetic Quill repaid")
+    #expect(tag(6000, TransactionIOU(leftCents: nil, paidBack: [PaidBack(transactionId: "c", lineId: nil, amountCents: 6000, payee: "")])) == "Synthetic Quill repaid")
     #expect(tag(6000, nil) == "Synthetic Quill repaid")
 }
