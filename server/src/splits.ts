@@ -18,13 +18,23 @@ export function writeSplit(db: Db, txnId: string, amountCents: number, lines: Pu
   if (lines.length && lines.reduce((s, l) => s + l.amountCents, 0) !== amountCents) {
     throw new ApiError(400, 'INVALID_REQUEST', `${field}: must add up to the transaction amount`, field);
   }
+  const current = new Set((db.prepare('SELECT id FROM split_lines WHERE transaction_id = ?').all(txnId) as { id: string }[]).map((r) => r.id));
+  lines.forEach((l, i) => {
+    if (l.id !== undefined && (!current.has(l.id) || lines.findIndex((x) => x.id === l.id) !== i)) {
+      throw new ApiError(400, 'INVALID_REQUEST', `${field}.${i}.id: must be a different line of this transaction`, `${field}.${i}.id`);
+    }
+  });
   const kept = captureLinks(db, txnId);
   db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(txnId);
-  // ids sort in entry order (lines are read back ORDER BY id)
+  // ids sort in entry order (lines are read back ORDER BY id), so every line gets a new one; moved: old id → new id
+  const moved = new Map<string, string>();
   const insert = db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id, notes, person_id, payee) VALUES (?, ?, ?, ?, ?, ?, ?)');
-  lines.forEach((l, i) => insert.run(`${String(i).padStart(2, '0')}-${randomUUID()}`, txnId, l.amountCents, l.categoryId, l.notes ?? null, l.personId ?? null,
-    l.payee || null));
+  lines.forEach((l, i) => {
+    const id = `${String(i).padStart(2, '0')}-${randomUUID()}`;
+    if (l.id !== undefined) moved.set(l.id, id);
+    insert.run(id, txnId, l.amountCents, l.categoryId, l.notes ?? null, l.personId ?? null, l.payee || null);
+  });
   // a split transaction's category lives on its lines; the owner decided, so learned mappings leave it alone
   db.prepare('UPDATE transactions SET category_id = NULL, person_id = NULL, category_owner_set = 1, updated_at = ? WHERE id = ?').run(nowIso, txnId);
-  restoreLinks(db, txnId, kept);
+  restoreLinks(db, txnId, kept, moved);
 }

@@ -81,6 +81,8 @@ export type PatchAccountBody = z.infer<typeof PatchAccountBody>;
  * Send personId and payee explicitly (null to clear); omitting either on an annotated split returns APP_OUTDATED. */
 export const PutSplitsBody = z.object({
   lines: z.array(z.object({
+    /** A current line of this transaction: its IOU links stay on this line. Absent on new lines and from older apps. */
+    id: Id.optional(),
     amountCents: LedgerCents.refine((n) => n !== 0, 'amount must not be zero'), categoryId: Id.nullable(), notes: z.string().max(2000).nullable().optional(),
     personId: Id.nullable().optional(),
     /** The line's own name; blank or missing shows the transaction's payee. */

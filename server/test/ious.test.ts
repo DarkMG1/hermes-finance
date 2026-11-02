@@ -433,3 +433,43 @@ test('cleanup lists live rows in the Reimbursement category, unsplit or by a spl
   assert.deepEqual((await get('/v1/people/reimbursements-cleanup')).rows.map((r: { transaction: { id: string }; lineId: string | null }) => [r.transaction.id, r.lineId]),
     [['new', null], ['sp', 'S1'], ['old', null]]);
 });
+
+test('a split save with line ids keeps each link on its own line: deleting the first of two lines for one person drops only its link (R3, R6)', async () => {
+  const { deps, send, link } = app();
+  seedPerson(deps.db, { id: 'p2', name: 'Synthetic Wren' });
+  seedTxn(deps.db, { id: 'item', accountId: 'a1', date: '2026-03-01', amountCents: -6000 });
+  seedSplit(deps.db, { id: 'L1', transactionId: 'item', amountCents: -1000, categoryId: null, personId: 'p2' });
+  seedSplit(deps.db, { id: 'L2', transactionId: 'item', amountCents: -2000, categoryId: null, personId: 'p2' });
+  seedSplit(deps.db, { id: 'L3', transactionId: 'item', amountCents: -3000, categoryId: null });
+  seedTxn(deps.db, { id: 'b1', accountId: 'a1', date: '2026-03-02', amountCents: 1000, personId: 'p2' });
+  seedTxn(deps.db, { id: 'b2', accountId: 'a1', date: '2026-03-03', amountCents: 2000, personId: 'p2' });
+  link('k1', 'b1', 'item', 1000, 'L1');
+  link('k2', 'b2', 'item', 2000, 'L2');
+  const line = (id: string | undefined, amountCents: number, personId: string | null) => ({ ...(id ? { id } : {}), amountCents, categoryId: null, personId, payee: null });
+  const ids = () => deps.db.prepare("SELECT id FROM split_lines WHERE transaction_id = 'item' ORDER BY id").all().map((r) => (r as { id: string }).id);
+  const links = () => deps.db.prepare(`SELECT k.payback_transaction_id AS p, (SELECT COUNT(*) FROM split_lines s WHERE s.transaction_id = 'item' AND s.id < k.item_line_id) AS pos
+    FROM iou_links k ORDER BY p`).all();
+  assert.equal((await send('PUT', '/v1/transactions/item/splits', 'li-1', { lines: [line('L1', -1000, 'p2'), line('L2', -2000, 'p2'), line('L3', -3000, null)] })).statusCode, 200);
+  assert.deepEqual(links(), [{ p: 'b1', pos: 0 }, { p: 'b2', pos: 1 }]);
+  const [, b, me] = ids();
+  assert.equal((await send('PUT', '/v1/transactions/item/splits', 'li-2', { lines: [line(b, -2000, 'p2'), line(undefined, -500, 'p2'), line(me, -3500, null)] })).statusCode, 200);
+  assert.deepEqual(links(), [{ p: 'b2', pos: 0 }]);
+  const [b2, , me2] = ids();
+  assert.equal((await send('PUT', '/v1/transactions/item/splits', 'li-3', { lines: [line(b2, -2000, 'p1'), line(me2, -4000, null)] })).statusCode, 200);
+  assert.deepEqual(links(), []);
+});
+
+test('split line ids must be current lines of this transaction, once each', async () => {
+  const { deps, send } = app();
+  seedTxn(deps.db, { id: 'item', accountId: 'a1', date: '2026-03-01', amountCents: -2000 });
+  seedTxn(deps.db, { id: 'other', accountId: 'a1', date: '2026-03-01', amountCents: -2000 });
+  seedSplit(deps.db, { id: 'L1', transactionId: 'item', amountCents: -1000, categoryId: null });
+  seedSplit(deps.db, { id: 'L2', transactionId: 'item', amountCents: -1000, categoryId: null });
+  seedSplit(deps.db, { id: 'O1', transactionId: 'other', amountCents: -2000, categoryId: null });
+  const put = async (key: string, a: string, b: string) => (await send('PUT', '/v1/transactions/item/splits', key, { lines: [
+    { id: a, amountCents: -1000, categoryId: null, personId: null, payee: null }, { id: b, amountCents: -1000, categoryId: null, personId: null, payee: null }] })).json();
+  assert.equal((await put('bi-1', 'L1', 'L1')).field, 'lines.1.id');
+  assert.equal((await put('bi-2', 'L1', 'O1')).field, 'lines.1.id');
+  assert.equal((await put('bi-3', 'NOPE', 'L2')).field, 'lines.0.id');
+  assert.deepEqual(deps.db.prepare("SELECT id FROM split_lines WHERE transaction_id = 'item' ORDER BY id").all(), [{ id: 'L1' }, { id: 'L2' }]);
+});

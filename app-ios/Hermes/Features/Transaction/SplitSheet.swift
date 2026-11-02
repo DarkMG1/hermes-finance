@@ -13,6 +13,8 @@ struct SplitSheet: View {
 
     private struct Line: Identifiable {
         let id = UUID()
+        /// The server line it was loaded from; nil for a new line.
+        var lineId: String?
         var amount = ""
         var categoryId: String?
         var notes = ""
@@ -146,7 +148,8 @@ struct SplitSheet: View {
             }
         } else {
             lines = transaction.splitLines.map {
-                Line(amount: plain(abs($0.amountCents)), categoryId: $0.categoryId, notes: $0.notes ?? "", personId: $0.personId, name: $0.payee ?? "")
+                Line(lineId: $0.id, amount: plain(abs($0.amountCents)), categoryId: $0.categoryId, notes: $0.notes ?? "", personId: $0.personId,
+                     name: $0.payee ?? "")
             }
         }
     }
@@ -156,7 +159,7 @@ struct SplitSheet: View {
         let body = PutSplitsBody(lines: zip(cents, lines).map { amount, line in
             let notes = line.notes.trimmingCharacters(in: .whitespacesAndNewlines)
             let name = line.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            return .init(amountCents: amount, categoryId: line.personId == nil ? line.categoryId : nil,
+            return .init(id: line.lineId, amountCents: amount, categoryId: line.personId == nil ? line.categoryId : nil,
                          notes: notes.isEmpty ? nil : notes, personId: line.personId, payee: name.isEmpty ? nil : name)
         })
         await write(body, guard: $writes)

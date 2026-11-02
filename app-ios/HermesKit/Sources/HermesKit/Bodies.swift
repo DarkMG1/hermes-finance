@@ -71,6 +71,8 @@ public struct PatchAccountBody: Encodable, Sendable, Equatable {
 
 /// One line of a split. Nil category, person and name send JSON null; nil notes are left out.
 public struct SplitLineBody: Encodable, Sendable, Equatable {
+    /// The server line this one was loaded from, so its IOU links stay on it; nil for a new line.
+    public let id: String?
     public let amountCents: Int
     public let categoryId: String?
     public let notes: String?
@@ -78,7 +80,8 @@ public struct SplitLineBody: Encodable, Sendable, Equatable {
     /// The line's own name; nil keeps the transaction's payee.
     public let payee: String?
 
-    public init(amountCents: Int, categoryId: String?, notes: String?, personId: String? = nil, payee: String? = nil) {
+    public init(id: String? = nil, amountCents: Int, categoryId: String?, notes: String?, personId: String? = nil, payee: String? = nil) {
+        self.id = id
         self.amountCents = amountCents
         self.categoryId = categoryId
         self.notes = notes
@@ -86,10 +89,11 @@ public struct SplitLineBody: Encodable, Sendable, Equatable {
         self.payee = payee
     }
 
-    private enum Keys: String, CodingKey { case amountCents, categoryId, notes, personId, payee }
+    private enum Keys: String, CodingKey { case id, amountCents, categoryId, notes, personId, payee }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: Keys.self)
+        try container.encodeIfPresent(id, forKey: .id)
         try container.encode(amountCents, forKey: .amountCents)
         if let categoryId { try container.encode(categoryId, forKey: .categoryId) } else { try container.encodeNil(forKey: .categoryId) }
         try container.encodeIfPresent(notes, forKey: .notes)
