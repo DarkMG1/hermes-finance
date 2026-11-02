@@ -52,6 +52,8 @@ struct TransactionDetailSheet: View {
     @State private var closeAfterPaying = false
     /// The saved copy when the sheet stays open after Save (the open-items read failed).
     @State private var afterSave: LedgerTransaction?
+    /// Kept apart from `error` (Save's), so a successful reload clears only its own message.
+    @State private var iouError: String?
 
     var body: some View {
         Sheet(
@@ -116,7 +118,7 @@ struct TransactionDetailSheet: View {
                         }
                     }
                 }
-                NotesField(text: $notes, error: error)
+                NotesField(text: $notes, error: error ?? iouError)
             }
             .disabled(writes.unresolved || deleteWrites.unresolved)
             if !current.splitLines.isEmpty || canSplit {
@@ -215,8 +217,11 @@ struct TransactionDetailSheet: View {
             }
         })
         .sheet(item: $paying, onDismiss: { if closeAfterPaying { dismiss() } }, content: { target in
-            PaybackPicker(transactionId: target.transactionId, lineId: nil, personId: target.personId,
-                          paybackCents: target.paybackCents) { await reloadIOU() }
+            PaybackPicker(target: target) {
+                savedOutside = true
+                // the sheet closes with the picker: nothing to show the reload in
+                if !closeAfterPaying { await reloadIOU() }
+            }
         })
         .sheet(isPresented: $itemizing, onDismiss: {
             // the items save rewrote the split or the amount: this sheet's copy is stale, so close it
@@ -279,13 +284,12 @@ struct TransactionDetailSheet: View {
     }
 
     private func reloadIOU() async {
-        savedOutside = true
         guard let reader = model.reader else { return }
         do {
             iou = try await reader.read("/v1/transactions/\(current.id)", as: LedgerTransaction.self).value.iou
-            error = nil
+            iouError = nil
         } catch {
-            self.error = "Couldn't refresh what this pays back: \(errorMessage(error))"
+            iouError = "Couldn't refresh what this pays back: \(errorMessage(error))"
         }
     }
 
@@ -312,7 +316,7 @@ struct TransactionDetailSheet: View {
                 // the tag is saved: stay open on it, and the Paying back row is the retry
                 afterSave = saved
                 fill(saved)
-                self.error = "Saved. Couldn't load open items — use Paying back to link them."
+                iouError = "Saved. Couldn't load open items — use Paying back to link them."
             }
         } catch {
             writes.didFail(error)

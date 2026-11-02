@@ -66,9 +66,7 @@ struct WhoOwesView: View {
             }
         }
         .sheet(item: $paying) { target in
-            PaybackPicker(transactionId: target.transactionId, lineId: nil, personId: target.personId, paybackCents: target.paybackCents) {
-                await load()
-            }
+            PaybackPicker(target: target) { await load() }
         }
     }
 

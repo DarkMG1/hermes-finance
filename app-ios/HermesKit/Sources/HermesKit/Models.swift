@@ -67,7 +67,7 @@ public struct LedgerTransaction: Codable, Sendable, Identifiable, Hashable {
     public let hasHistory: Bool?
     /// The bill this charge belongs to; nil when none, and from servers before 1.8.1 (183).
     public let recurring: TransactionRecurring?
-    /// What a person-tagged charge still has left, or what a payback paid; nil when none, and from servers before 1.8.3.
+    /// What a person-tagged charge still has left, or what a payback paid; nil when none, and from servers before 2.1.0.
     public let iou: TransactionIOU?
 }
 
@@ -135,7 +135,14 @@ public struct PaybackChoices: Codable, Sendable {
 }
 
 public struct ReimbursementsCleanup: Codable, Sendable {
-    public let rows: [LedgerTransaction]
+    /// One per unsplit row, or per split line, in the Reimbursement category.
+    public struct Entry: Codable, Sendable, Identifiable {
+        public let transaction: LedgerTransaction
+        public let lineId: String?
+        public var id: String { "\(transaction.id)|\(lineId ?? "")" }
+        public var amountCents: Int { transaction.splitLines.first { $0.id == lineId }?.amountCents ?? transaction.amountCents }
+    }
+    public let rows: [Entry]
 }
 
 public struct TransactionRecurring: Codable, Sendable, Hashable {
@@ -204,7 +211,7 @@ public struct HistoryEntry: Codable, Sendable, Identifiable, Hashable {
     public let balanceAfterCents: Int
     public let settled: Bool
     public let hasReceipt: Bool?
-    /// What is still owed on a For-them entry; nil from servers before 1.8.3.
+    /// What is still owed on a For-them entry; nil from servers before 2.1.0.
     public let leftCents: Int?
     public let paidBack: [PaidBack]?
     public var id: String { "\(transactionId)|\(lineId ?? "")" }
@@ -217,7 +224,7 @@ public struct PersonDetail: Codable, Sendable {
     /// nil from servers before v1.7.5
     public let spentOnThemCents: Int?
     public let forgivenCents: Int?
-    /// nil from servers before 1.8.3
+    /// nil from servers before 2.1.0
     public let openItems: [OpenItem]?
 }
 

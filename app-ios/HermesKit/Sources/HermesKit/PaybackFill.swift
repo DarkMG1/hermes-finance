@@ -10,13 +10,21 @@ public enum PaybackFill {
         items.first { $0.leftCents == paybackCents }.map { [$0.id] } ?? []
     }
 
+    /// The server's cap on items in one payback.
+    public static let maxItems = 200
+
     /// `items` must be the server's oldest-first list, not `ordered()` output (that puts the exact match first).
     public static func amounts(_ items: [OpenItem], selected: Set<String>, paybackCents: Int) -> [PaybackItem] {
         var rest = paybackCents
-        return items.filter { selected.contains($0.id) }.compactMap { item in
+        return Array(items.filter { selected.contains($0.id) }.compactMap { item in
             let cents = min(item.leftCents, rest)
             rest -= cents
             return cents > 0 ? PaybackItem(transactionId: item.transactionId, lineId: item.lineId, amountCents: cents) : nil
-        }
+        }.prefix(maxItems))
+    }
+
+    /// The ticked items Save would send: one the payback can't reach shows unticked.
+    public static func reachable(_ items: [OpenItem], selected: Set<String>, paybackCents: Int) -> Set<String> {
+        Set(amounts(items, selected: selected, paybackCents: paybackCents).map { "\($0.transactionId)|\($0.lineId ?? "")" })
     }
 }

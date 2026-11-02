@@ -12,15 +12,17 @@ struct PaybackTarget: Identifiable, Hashable {
 
 /// The open-items read before a payback is tagged failed: nothing was written.
 struct PaybackChoicesUnavailable: LocalizedError {
-    var errorDescription: String? { "Couldn't load open items. Try again." }
+    let message: String
+    var errorDescription: String? { message }
 }
 
 extension AppModel {
-    /// nil from a server before 1.8.3, which has no payback route.
+    /// nil from a server before 2.1.0, which has no payback route.
     func paybackChoices(_ target: PaybackTarget) async throws -> PaybackChoices? {
         guard let reader else { return nil }
         do {
-            return try await reader.read(PaybackPicker.path(target.transactionId), query: PaybackPicker.query(target), as: PaybackChoices.self).value
+            let query = [URLQueryItem(name: "personId", value: target.personId)] + (target.lineId.map { [URLQueryItem(name: "lineId", value: $0)] } ?? [])
+            return try await reader.read("/v1/transactions/\(target.transactionId)/payback", query: query, as: PaybackChoices.self).value
         } catch ClientError.api(status: 404, _) {
             return nil
         }
@@ -31,7 +33,7 @@ extension AppModel {
     func tagPayback(_ target: PaybackTarget, idempotencyKey: String) async throws -> Bool {
         guard let client else { return false }
         let choices: PaybackChoices?
-        do { choices = try await paybackChoices(target) } catch { throw PaybackChoicesUnavailable() }
+        do { choices = try await paybackChoices(target) } catch { throw PaybackChoicesUnavailable(message: errorMessage(error)) }
         if let choices, !choices.items.isEmpty || !choices.linked.isEmpty { return true }
         if let lineId = target.lineId {
             _ = try await client.patchSplitLine(transactionId: target.transactionId, lineId: lineId,
@@ -52,32 +54,25 @@ struct PaybackPicker: View {
     let onDone: () async -> Void
     @State private var choices: PaybackChoices?
     @State private var selected: Set<String> = []
-    @State private var writes: [String: WriteGuard] = [:]
+    /// One key until the outcome is known, and the selection frozen meanwhile: a retry resends exactly what may have been saved.
+    @State private var writes = WriteGuard()
     @State private var busy = false
     @State private var error: String?
 
-    init(transactionId: String, lineId: String?, personId: String, paybackCents: Int, onDone: @escaping () async -> Void) {
-        target = PaybackTarget(transactionId: transactionId, lineId: lineId, personId: personId, paybackCents: paybackCents)
-        self.onDone = onDone
-    }
-
-    static func path(_ transactionId: String) -> String { "/v1/transactions/\(transactionId)/payback" }
-    static func query(_ target: PaybackTarget) -> [URLQueryItem] {
-        [URLQueryItem(name: "personId", value: target.personId)] + (target.lineId.map { [URLQueryItem(name: "lineId", value: $0)] } ?? [])
-    }
-
     var body: some View {
-        Sheet(title: "What is this paying back?", canSave: choices != nil, busy: busy, unresolved: writes[slot]?.unresolved ?? false,
+        Sheet(title: "What is this paying back?", canSave: choices != nil, busy: busy, unresolved: writes.unresolved,
               onCancel: { dismiss() }, onSave: { Task { await save() } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             InlineError(message: error)
             if let choices {
                 let fills = Dictionary(PaybackFill.amounts(choices.items, selected: selected, paybackCents: target.paybackCents)
                     .map { ("\($0.transactionId)|\($0.lineId ?? "")", $0.amountCents) }, uniquingKeysWith: { a, _ in a })
                 Button { selected = [] } label: { SelectionRow(title: "Just the balance", selected: selected.isEmpty) }
+                    .disabled(writes.unresolved)
                 Section {
                     ForEach(PaybackFill.ordered(choices.items, paybackCents: target.paybackCents)) { item in
                         Button {
-                            if selected.contains(item.id) { selected.remove(item.id) } else { selected.insert(item.id) }
+                            selected = PaybackFill.reachable(choices.items, selected: selected.symmetricDifference([item.id]),
+                                                             paybackCents: target.paybackCents)
                         } label: {
                             ListRow(title: item.payee, subtitle: "\(DayText.display(item.date)) · \(Money.format(item.leftCents)) left") {
                                 if selected.contains(item.id) {
@@ -90,24 +85,24 @@ struct PaybackPicker: View {
                         .accessibilityAddTraits(selected.contains(item.id) ? .isSelected : [])
                     }
                 }
+                .disabled(writes.unresolved)
             } else if error == nil {
                 ProgressView().frame(maxWidth: .infinity)
+            } else {
+                Button("Retry") { Task { await load() } }
             }
         }
         .task { await load() }
     }
 
-    /// One key per choice, like WhoOwesView.perform: retrying an unknown outcome resends the same request.
-    private var slot: String { selected.sorted().joined(separator: ",") }
-
     private func load() async {
-        guard let reader = model.reader else { return }
         do {
-            let loaded = try await reader.read(Self.path(target.transactionId), query: Self.query(target), as: PaybackChoices.self).value
+            guard let loaded = try await model.paybackChoices(target) else { error = "This server can't link paybacks."; return }
             choices = loaded
             // a linked charge that was untagged or deleted since is no longer an item to tick
             let linked = Set(loaded.linked.map { "\($0.transactionId)|\($0.lineId ?? "")" }).intersection(loaded.items.map(\.id))
-            selected = linked.isEmpty ? PaybackFill.preselected(loaded.items, paybackCents: target.paybackCents) : linked
+            let ticked = linked.isEmpty ? PaybackFill.preselected(loaded.items, paybackCents: target.paybackCents) : linked
+            selected = PaybackFill.reachable(loaded.items, selected: ticked, paybackCents: target.paybackCents)
             error = nil
         } catch {
             self.error = errorMessage(error)
@@ -118,22 +113,19 @@ struct PaybackPicker: View {
         guard !busy, let client = model.client, let choices else { return }
         busy = true
         defer { busy = false }
-        let slot = slot
-        var writeGuard = writes[slot] ?? WriteGuard()
-        writes[slot] = writeGuard
         do {
             let items = PaybackFill.amounts(choices.items, selected: selected, paybackCents: target.paybackCents)
             _ = try await client.putPayback(transactionId: target.transactionId,
                                             body: PaybackBody(personId: target.personId, lineId: target.lineId, items: items),
-                                            idempotencyKey: writeGuard.key)
-            writeGuard.didSucceed()
-            writes[slot] = writeGuard
+                                            idempotencyKey: writes.key)
+            writes.didSucceed()
             await onDone()
             dismiss()
         } catch {
-            writeGuard.didFail(error)
-            writes[slot] = writeGuard
-            self.error = writeGuard.unresolved ? "Couldn't confirm the save. Tap Save to retry." : errorMessage(error)
+            writes.didFail(error)
+            // refused (an item closed or retagged elsewhere): show what the server has now
+            if !writes.unresolved { await load() }
+            self.error = writes.unresolved ? "Couldn't confirm the save. Tap Save to retry." : errorMessage(error)
         }
     }
 }

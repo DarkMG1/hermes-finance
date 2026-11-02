@@ -137,15 +137,6 @@ public struct PaybackBody: Encodable, Sendable {
         self.lineId = lineId
         self.items = items
     }
-
-    private enum Keys: String, CodingKey { case personId, lineId, items }
-
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: Keys.self)
-        try c.encode(personId, forKey: .personId)
-        try c.encode(lineId, forKey: .lineId)
-        try c.encode(items, forKey: .items)
-    }
 }
 
 public struct PaybackItem: Encodable, Sendable, Hashable {
@@ -157,15 +148,6 @@ public struct PaybackItem: Encodable, Sendable, Hashable {
         self.transactionId = transactionId
         self.lineId = lineId
         self.amountCents = amountCents
-    }
-
-    private enum Keys: String, CodingKey { case transactionId, lineId, amountCents }
-
-    public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: Keys.self)
-        try c.encode(transactionId, forKey: .transactionId)
-        try c.encode(lineId, forKey: .lineId)
-        try c.encode(amountCents, forKey: .amountCents)
     }
 }
 

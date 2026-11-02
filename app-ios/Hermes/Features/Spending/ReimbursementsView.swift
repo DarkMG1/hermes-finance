@@ -10,7 +10,7 @@ struct ReimbursementsView: View {
     @State private var opened: LedgerTransaction?
     @State private var openGeneration = 0
     @State private var showsEarlier = false
-    /// Rows still tagged Reimbursement that could move to IOUs; false on servers before 1.8.3.
+    /// Rows still tagged Reimbursement that could move to IOUs; false on servers before 2.1.0.
     @State private var canCleanUp = false
 
     var body: some View {

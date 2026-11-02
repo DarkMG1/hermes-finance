@@ -19,6 +19,7 @@ struct SplitLineSheet: View {
     @State private var busy = false
     @State private var splitting: LedgerTransaction?
     @State private var savedForSplit = false
+    @State private var paying: PaybackTarget?
 
     private var line: SplitLine? { transaction.splitLines.first { $0.id == lineId } }
 
@@ -79,6 +80,7 @@ struct SplitLineSheet: View {
                 dismiss()
             }
         })
+        .sheet(item: $paying, onDismiss: { dismiss() }, content: { target in PaybackPicker(target: target) { await onChange() } })
     }
 
     private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -97,11 +99,17 @@ struct SplitLineSheet: View {
         guard let client = model.client else { return }
         busy = true
         defer { busy = false }
+        // a positive line newly tagged to someone goes on to what it paid back, like a deposit in TransactionDetailSheet
+        let target = line.flatMap { line in
+            line.amountCents > 0 && personId != line.personId
+                ? personId.map { PaybackTarget(transactionId: transaction.id, lineId: lineId, personId: $0, paybackCents: line.amountCents) } : nil
+        }
         do {
             _ = try await client.patchSplitLine(transactionId: transaction.id, lineId: lineId, body: patch, idempotencyKey: writes.key)
             writes.didSucceed()
             await onChange()
-            dismiss()
+            // the tag is saved either way: with no items (or no read) it stays "just the balance"
+            if let target, let choices = try? await model.paybackChoices(target), !choices.items.isEmpty { paying = target } else { dismiss() }
         } catch {
             writes.didFail(error)
             self.error = writes.unresolved ? "Couldn't confirm the save. Tap Save to retry." : errorMessage(error)

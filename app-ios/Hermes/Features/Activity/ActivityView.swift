@@ -80,8 +80,14 @@ struct ActivityView: View {
             }
         }
         .sheet(item: $selected) { transaction in
-            TransactionDetailSheet(transaction: transaction, onOthersChange: { ids in for id in ids { await refresh(id) } },
-                                   onChange: { await refresh(transaction.id) })
+            TransactionDetailSheet(transaction: transaction, onOthersChange: { ids in
+                let before = items.filter { ids.contains($0.id) }
+                for id in ids { await refresh(id) }
+                await refreshPeople(before + items.filter { ids.contains($0.id) })
+            }, onChange: {
+                await refresh(transaction.id)
+                await refreshPeople([transaction] + items.filter { $0.id == transaction.id })
+            })
         }
         .sheet(isPresented: $adding) {
             AddTransactionSheet { await load(reset: true) }
@@ -143,6 +149,17 @@ struct ActivityView: View {
         } catch {
             guard gen == generation, requested == filters, !Task.isCancelled else { return }
             self.error = errorMessage(error)
+        }
+    }
+
+    /// A tag or payback change re-settles those people's IOUs, so their other loaded rows' labels change too: newest page each, in place.
+    private func refreshPeople(_ rows: [LedgerTransaction]) async {
+        guard let reader = model.reader else { return }
+        let gen = generation
+        for personId in Set(rows.flatMap { [$0.personId, $0.paidByPersonId] + $0.splitLines.map(\.personId) }.compactMap { $0 }) {
+            guard let page = try? await reader.read("/v1/transactions", query: TransactionQuery(personId: personId).items, as: TransactionPage.self).value,
+                  gen == generation, !Task.isCancelled else { return }
+            for fresh in page.transactions { if let i = items.firstIndex(where: { $0.id == fresh.id }) { items[i] = fresh } }
         }
     }
 

@@ -33,12 +33,22 @@ private func item(_ id: String, left: Int, total: Int? = nil, date: String = "20
     #expect(old.iou == nil)
 }
 
-@Test func paybackBodyEncodesNullLineId() throws {
-    let body = PaybackBody(personId: "p1", lineId: nil, items: [PaybackItem(transactionId: "a", lineId: nil, amountCents: 100)])
-    let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(body)) as? [String: Any])
-    #expect(json["lineId"] is NSNull)
-    let items = try #require(json["items"] as? [[String: Any]])
-    #expect(items[0]["lineId"] is NSNull)
+@Test func paybackChoicesAndCleanupDecode() throws {
+    let choices = try decode(PaybackChoices.self, "payback-choices")
+    #expect(choices.linked.map(\.lineId) == ["line-2"])
+    #expect(choices.items.contains { $0.lineId == "line-2" })
+    let cleanup = try decode(ReimbursementsCleanup.self, "reimbursements-cleanup")
+    #expect(cleanup.rows.first?.transaction.id == "txn-10")
+    #expect(cleanup.rows.allSatisfy { $0.lineId == nil })
+}
+
+@Test func reachableUnticksItemsThePaybackCantReachAndCapsAt200() {
+    let items = [item("a", left: 2000, date: "2026-03-01"), item("b", left: 3000, date: "2026-03-02")]
+    #expect(PaybackFill.reachable(items, selected: ["a|", "b|"], paybackCents: 2000) == ["a|"])
+    #expect(PaybackFill.reachable(items, selected: ["a|", "b|"], paybackCents: 2500) == ["a|", "b|"])
+    let many = (0..<250).map { item("i\($0)", left: 1) }
+    #expect(PaybackFill.reachable(many, selected: Set(many.map(\.id)), paybackCents: 1000).count == PaybackFill.maxItems)
+    #expect(PaybackFill.amounts(many, selected: Set(many.map(\.id)), paybackCents: 1000).count == PaybackFill.maxItems)
 }
 
 @Test func exactMatchIsPreselectedAndFirst() {

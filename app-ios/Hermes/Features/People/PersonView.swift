@@ -139,7 +139,7 @@ struct PersonView: View {
                 ListRow(title: item.payee, subtitle: [DayText.display(item.date), amount].joined(separator: " · ")) {
                     if item.hasReceipt { receiptIcon }
                 }
-                ForEach(item.paybacks, id: \.self) { payback in
+                ForEach(Array(item.paybacks.enumerated()), id: \.offset) { _, payback in
                     Text("Paid back \(Money.format(payback.amountCents)) · \(DayText.display(payback.date))")
                         .textStyle(.caption, color: Palette.secondaryText)
                 }

@@ -4,20 +4,13 @@ import SwiftUI
 /// Rows still in the Reimbursement category, one per split line in it, to move onto a person's IOUs.
 struct ReimbursementsCleanupView: View {
     @Environment(AppModel.self) private var model
-    @State private var entries: [Entry]?
+    @State private var entries: [ReimbursementsCleanup.Entry]?
     /// Moved or skipped; a skip is this screen's only, so it comes back on the next visit.
     @State private var hidden: Set<String> = []
     @State private var writes: [String: WriteGuard] = [:]
     @State private var busyIds: Set<String> = []
     @State private var paying: PaybackTarget?
     @State private var error: String?
-
-    struct Entry: Identifiable {
-        let transaction: LedgerTransaction
-        let lineId: String?
-        let amountCents: Int
-        var id: String { "\(transaction.id)|\(lineId ?? "")" }
-    }
 
     var body: some View {
         List {
@@ -49,13 +42,12 @@ struct ReimbursementsCleanupView: View {
         .task { if entries == nil { await load() } }
         .refreshable { await load() }
         .sheet(item: $paying) { target in
-            PaybackPicker(transactionId: target.transactionId, lineId: target.lineId, personId: target.personId,
-                          paybackCents: target.paybackCents) { hidden.insert("\(target.transactionId)|\(target.lineId ?? "")") }
+            PaybackPicker(target: target) { hidden.insert("\(target.transactionId)|\(target.lineId ?? "")") }
         }
     }
 
     /// A charge (or negative line) is tagged straight away; a payback goes through the picker when it has items to choose from.
-    private func move(_ entry: Entry, to personId: String) async {
+    private func move(_ entry: ReimbursementsCleanup.Entry, to personId: String) async {
         guard let client = model.client, !busyIds.contains(entry.id) else { return }
         busyIds.insert(entry.id)
         defer { busyIds.remove(entry.id) }
@@ -89,20 +81,7 @@ struct ReimbursementsCleanupView: View {
     private func load() async {
         guard let reader = model.reader else { return }
         do {
-            let rows = try await reader.read("/v1/people/reimbursements-cleanup", as: ReimbursementsCleanup.self).value.rows
-            if model.categories.isEmpty { await model.refreshReferenceData() }
-            // without categories every split row would drop out and the screen would wrongly read empty
-            guard !model.categories.isEmpty || rows.allSatisfy(\.splitLines.isEmpty) else {
-                error = "Couldn't load categories. Pull to refresh."
-                return
-            }
-            // the server's rule: a transfer category named Reimburs…
-            let reimbursement = Set(model.categories.filter { $0.isTransfer && $0.name.lowercased().hasPrefix("reimburs") }.map(\.id))
-            entries = rows.flatMap { row in
-                row.splitLines.isEmpty ? [Entry(transaction: row, lineId: nil, amountCents: row.amountCents)]
-                    : row.splitLines.filter { $0.categoryId.map(reimbursement.contains) ?? false }
-                        .map { Entry(transaction: row, lineId: $0.id, amountCents: $0.amountCents) }
-            }
+            entries = try await reader.read("/v1/people/reimbursements-cleanup", as: ReimbursementsCleanup.self).value.rows
             error = nil
         } catch {
             self.error = errorMessage(error)
