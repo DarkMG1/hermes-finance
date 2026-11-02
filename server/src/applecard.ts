@@ -97,23 +97,26 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
   // only a per-account cutover applies: Actual never held this card, so the global migration cutover is irrelevant here
   const cutover = (db.prepare('SELECT cutover_date FROM accounts WHERE id = ?').get(accountId) as { cutover_date: string | null }).cutover_date;
   const upsert = db.prepare(`
-    INSERT INTO transactions (id, account_id, source, source_id, date, bank_date, authorized_date, clearing_date, amount_cents, bank_description, merchant_name, plaid_category, category_id, source_file_date, created_at, updated_at)
+    INSERT INTO transactions (id, account_id, source, source_id, date, bank_date, authorized_date, clearing_date, amount_cents, bank_description, merchant_name, plaid_category, category_id, source_file_date, source_clear_from, source_clear_to, created_at, updated_at)
     VALUES (@id, @accountId, 'applecard', @sourceId, @date, @date, @date, @clearing, @amount, @desc, @merchant, @plaidCategory,
-      COALESCE(@remembered, (SELECT category_id FROM plaid_category_map WHERE plaid_category = @plaidCategory)), @fileDate, @now, @now)
+      COALESCE(@remembered, (SELECT category_id FROM plaid_category_map WHERE plaid_category = @plaidCategory)), @fileDate, @clearFrom, @clearTo, @now, @now)
     ON CONFLICT (source, source_id) DO UPDATE SET
       date = CASE WHEN transactions.date_owner_set = 1 THEN transactions.date ELSE excluded.date END, bank_date = excluded.bank_date,
       date_owner_set = CASE WHEN transactions.date = excluded.bank_date THEN 0 ELSE transactions.date_owner_set END, authorized_date = excluded.authorized_date, clearing_date = COALESCE(excluded.clearing_date, transactions.clearing_date),
       amount_cents = excluded.amount_cents, source_file_date = excluded.source_file_date,
+      source_clear_from = excluded.source_clear_from, source_clear_to = excluded.source_clear_to,
       bank_description = excluded.bank_description, merchant_name = excluded.merchant_name, plaid_category = excluded.plaid_category,
       category_id = COALESCE(transactions.category_id, CASE WHEN transactions.category_owner_set = 0 THEN excluded.category_id END),
       updated_at = excluded.updated_at`);
   const remembered = merchantMemory(db);
   const result: AppleCardImportResult = { accountId, rows: rows.length, added: 0, updated: 0, skippedBeforeCutover: 0 };
   const fileDate = rows.reduce((max, r) => (r.transactionDate > max ? r.transactionDate : max), '');
-  const cols = 'id, source_id AS sourceId, clearing_date AS c, amount_cents AS amount, source_file_date AS fileDate';
+  const cols = 'id, source_id AS sourceId, clearing_date AS c, amount_cents AS amount, source_file_date AS fileDate, source_clear_from AS clearFrom, source_clear_to AS clearTo';
+  const clearings = rows.flatMap((r) => r.clearingDate ?? []).sort();
+  const [clearFrom, clearTo] = [clearings[0] ?? null, clearings.at(-1) ?? null];
   const stored = db.prepare(`SELECT ${cols} FROM transactions WHERE source = 'applecard' AND source_id = ?`);
   const taken = new Set<string>();
-  type Stored = { id: string; sourceId: string; c: string | null; amount: number; fileDate: string | null } | undefined;
+  type Stored = { id: string; sourceId: string; c: string | null; amount: number; fileDate: string | null; clearFrom: string | null; clearTo: string | null } | undefined;
   type Slot = { sourceId: string; row: NonNullable<Stored>; n: number };
   const groups = new Map<string, { all: Slot[]; dates: Map<string | null, Slot[]>; sourceIds: Set<string>; next: number; nextId: string }>();
   const groupFor = (base: string) => {
@@ -171,9 +174,8 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
   const unpaired = new Map<string, number>();
   const correctionKey = (r: AppleCardRow) => JSON.stringify([r.transactionDate, r.description, r.type]);
   for (const k of rows.flatMap((r, i) => (found[i] ? [] : [correctionKey(r), baseOf(r)]))) unpaired.set(k, (unpaired.get(k) ?? 0) + 1);
-  // a stored charge cleared inside this file's clearing range would be in it, so only then can a same-amount row be its re-export
-  const clearings = rows.flatMap((r) => r.clearingDate ?? []).sort();
-  const covers = (c: string | null) => c !== null && c >= clearings[0]! && c <= clearings.at(-1)!;
+  // a same-amount row is a re-export only when one statement's clearing range covers the other's charge; otherwise it's a twin purchase
+  const within = (c: string | null, from: string | null, to: string | null) => c !== null && from !== null && to !== null && c >= from && c <= to;
   const counterparts = db.prepare(`SELECT ${cols} FROM transactions
     WHERE source = 'applecard' AND removed_at IS NULL AND account_id = ? AND COALESCE(authorized_date, date) = ? AND bank_description = ?`);
   rows.forEach((r, i) => {
@@ -182,7 +184,7 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
     const candidates = (counterparts.all(accountId, r.transactionDate, r.description) as NonNullable<Stored>[])
       .filter((s) => !taken.has(s.sourceId) && groupFor(baseOf({ ...r, amountCents: s.amount })).sourceIds.has(s.sourceId));
     const same = candidates.filter((s) => s.amount === r.amountCents);
-    const row = same.length ? (same.length === 1 && covers(same[0]!.c) ? same[0] : undefined)
+    const row = same.length ? (same.length === 1 && (within(same[0]!.c, clearFrom, clearTo) || within(r.clearingDate, same[0]!.clearFrom, same[0]!.clearTo)) ? same[0] : undefined)
       : candidates.length === 1 && unpaired.get(correctionKey(r)) === 1 ? candidates[0] : undefined;
     if (!row) return;
     taken.add(row.sourceId);
@@ -207,7 +209,7 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
     const plaidCategory = r.type.toLowerCase() === 'payment' ? 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' : r.category;
     upsert.run({ id: randomUUID(), accountId, sourceId, date: r.transactionDate, clearing: r.clearingDate, amount: r.amountCents, desc: r.description,
       merchant: r.merchant, plaidCategory,
-      remembered: plaidCategory === 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' ? null : remembered(r.merchant, r.description), fileDate, now: nowIso });
+      remembered: plaidCategory === 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' ? null : remembered(r.merchant, r.description), fileDate, clearFrom, clearTo, now: nowIso });
     if (row && row.amount !== r.amountCents) fitSplitToAmount(db, row.id, nowIso);
   });
   const sum = (db.prepare("SELECT COALESCE(SUM(amount_cents), 0) AS s FROM transactions WHERE account_id = ? AND source = 'applecard' AND removed_at IS NULL")

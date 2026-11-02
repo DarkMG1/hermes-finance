@@ -183,22 +183,37 @@ test('re-import fills an uncategorized row from merchant memory learned since, n
 
 const statement = (clearing: string) => `${HEADER}\n09/30/2026,${clearing},SYNTHETIC COFFEE,Synthetic Coffee,Restaurants,Purchase,5.00,Synthetic Person`;
 
+const coffee = (clearing: string) => `09/30/2026,${clearing},SYNTHETIC COFFEE,Synthetic Coffee,Restaurants,Purchase,5.00,Synthetic Person`;
 const grocer = (clearing: string) => `09/20/2026,${clearing},SYNTHETIC GROCER,Synthetic Grocer,Grocery,Purchase,20.00,Synthetic Person`;
 const books = '10/05/2026,10/06/2026,SYNTHETIC BOOKS,Synthetic Books,Shopping,Purchase,8.00,Synthetic Person';
+const cup = (amount: string, clearing = '09/30/2026') => coffee(clearing).replace('5.00', amount);
+const csv = (...rows: string[]) => [HEADER, ...rows].join('\n');
+const coffees = (db: ReturnType<typeof makeTestDeps>['deps']['db']) =>
+  db.prepare("SELECT id, amount_cents AS a, clearing_date AS c FROM transactions WHERE bank_description = 'SYNTHETIC COFFEE' ORDER BY amount_cents, clearing_date").all() as { id: string; a: number; c: string }[];
 
-test('a lone re-exported row whose clearing date changed inside the file\'s clearing range updates the stored row', async () => {
-  const { deps } = makeTestDeps();
-  const app = buildApp(deps);
-  const a = (await post(app, `${statement('09/30/2026')}\n${grocer('09/28/2026')}`, 'ac-a')).json() as { accountId: string };
-  const id = deps.db.prepare("SELECT id FROM transactions WHERE bank_description = 'SYNTHETIC COFFEE'").pluck().get();
-  const reexport = `${statement('10/01/2026')}\n${grocer('09/28/2026')}`;
-  const b = (await post(app, reexport, 'ac-b')).json() as { added: number; updated: number };
-  assert.deepEqual([b.added, b.updated], [0, 2]);
-  assert.deepEqual(deps.db.prepare("SELECT id, clearing_date FROM transactions WHERE bank_description = 'SYNTHETIC COFFEE'").all(), [{ id, clearing_date: '2026-10-01' }]);
-  assert.equal(deps.db.prepare('SELECT balance_current_cents FROM accounts WHERE id = ?').pluck().get(a.accountId), 2500);
-  const again = (await post(app, reexport, 'ac-b2')).json() as { added: number; updated: number };
-  assert.deepEqual([again.added, again.updated], [0, 2]);
-  assert.equal(deps.db.prepare("SELECT COUNT(*) FROM transactions WHERE source = 'applecard'").pluck().get(), 2);
+test('a lone re-exported row whose clearing date changed merges, and the original statement re-imported in either order changes nothing', async () => {
+  const original = statement('09/30/2026');
+  const reexport = csv(coffee('10/01/2026'), grocer('09/28/2026'), books);
+  for (const order of ['original first', 're-export first']) {
+    const { deps } = makeTestDeps();
+    const app = buildApp(deps);
+    const imp = async (file: string, key: string) => (await post(app, file, key)).json() as { accountId: string; added: number; updated: number };
+    if (order === 'original first') {
+      await imp(original, 'original');
+      const id = deps.db.prepare("SELECT id FROM transactions WHERE bank_description = 'SYNTHETIC COFFEE'").pluck().get();
+      const b = await imp(reexport, 'reexport');
+      assert.deepEqual([b.added, b.updated], [2, 1]);
+      assert.deepEqual(coffees(deps.db).map((t) => t.id), [id]);
+    } else await imp(reexport, 'reexport');
+    const snapshot = deps.db.prepare('SELECT * FROM transactions ORDER BY id').all();
+    const again = await imp(original, 'original-again');
+    assert.deepEqual([again.added, again.updated], [0, 0], order);
+    assert.deepEqual(deps.db.prepare('SELECT * FROM transactions ORDER BY id').all(), snapshot, order);
+    assert.deepEqual(coffees(deps.db).map((t) => t.c), ['2026-10-01'], order);
+    assert.equal(deps.db.prepare('SELECT balance_current_cents FROM accounts WHERE id = ?').pluck().get(again.accountId), 3300, order);
+    const re = await imp(reexport, 'reexport-again');
+    assert.deepEqual([re.added, re.updated], [0, 3], order);
+  }
 });
 
 test('identical same-day purchases on consecutive statements stay separate in either import order', async () => {
@@ -228,8 +243,6 @@ test('rows imported before clearing dates were stored update on re-import instea
   const rows = deps.db.prepare("SELECT clearing_date FROM transactions WHERE source = 'applecard'").all() as { clearing_date: string | null }[];
   assert.deepEqual(rows, [{ clearing_date: '2026-09-30' }]);
 });
-
-const coffee = (clearing: string) => `09/30/2026,${clearing},SYNTHETIC COFFEE,Synthetic Coffee,Restaurants,Purchase,5.00,Synthetic Person`;
 
 test('a later identical row still claims the stored charge it matches after an earlier row skipped past it', async () => {
   const { deps } = makeTestDeps();
@@ -371,16 +384,10 @@ test('an equal-amount counterpart takes a clearing-date change instead of an amo
   const app = buildApp(deps);
   await post(app, [HEADER, coffee('09/30/2026'), coffee('10/01/2026').replace('5.00', '7.50')].join('\n'), 'first');
   const before = deps.db.prepare("SELECT id, amount_cents AS a, clearing_date AS c FROM transactions ORDER BY amount_cents").all() as { id: string; a: number; c: string }[];
-  const r = await post(app, [HEADER, coffee('09/30/2026'), coffee('10/02/2026').replace('5.00', '7.50')].join('\n'), 'next');
-  assert.deepEqual([r.statusCode, r.json().added, r.json().updated], [200, 0, 2]);
-  assert.deepEqual(deps.db.prepare("SELECT id, amount_cents AS a, clearing_date AS c FROM transactions ORDER BY amount_cents").all(),
-    [{ ...before[0]!, c: '2026-10-02' }, before[1]]);
+  const r = await post(app, [HEADER, grocer('09/29/2026'), coffee('10/02/2026').replace('5.00', '7.50')].join('\n'), 'next');
+  assert.deepEqual([r.statusCode, r.json().added, r.json().updated], [200, 1, 1]);
+  assert.deepEqual(coffees(deps.db), [{ ...before[0]!, c: '2026-10-02' }, before[1]]);
 });
-
-const cup = (amount: string, clearing = '09/30/2026') => coffee(clearing).replace('5.00', amount);
-const csv = (...rows: string[]) => [HEADER, ...rows].join('\n');
-const coffees = (db: ReturnType<typeof makeTestDeps>['deps']['db']) =>
-  db.prepare("SELECT id, amount_cents AS a, clearing_date AS c FROM transactions WHERE bank_description = 'SYNTHETIC COFFEE' ORDER BY amount_cents, clearing_date").all() as { id: string; a: number; c: string }[];
 
 test('a correction counts only unpaired file rows and unclaimed stored rows', async () => {
   const cases: [string[], string[], number[]][] = [
@@ -425,11 +432,11 @@ test('each import stamps its newest transaction date and an older statement neve
   for (const newer of [cup('7.50', '10/01/2026'), coffee('10/01/2026')]) {
     const { deps } = makeTestDeps();
     const app = buildApp(deps);
-    const old = csv(coffee('09/30/2026'), grocer('10/02/2026'));
+    const old = statement('09/30/2026');
     const stamps = () => deps.db.prepare('SELECT DISTINCT source_file_date FROM transactions').pluck().all();
     await post(app, old, 'old');
     assert.deepEqual(stamps(), ['2026-09-30']);
-    await post(app, csv(newer, grocer('10/02/2026'), bakery, books), 'new');
+    await post(app, csv(newer, bakery, books), 'new');
     assert.deepEqual(stamps(), ['2026-10-05']);
     assert.equal(coffees(deps.db).length, 1, newer);
     const snapshot = deps.db.prepare('SELECT * FROM transactions ORDER BY id').all();

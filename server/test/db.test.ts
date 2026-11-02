@@ -90,7 +90,7 @@ test('migration 004 protects bank rows a stored PATCH response shows uncategoriz
 test('migration 027 copies the date into bank_date only for bank rows the owner never re-dated', () => {
   const db = tempDb();
   migrate(db);
-  db.exec('ALTER TABLE transactions DROP COLUMN bank_date; ALTER TABLE transactions DROP COLUMN source_file_date; DELETE FROM migrations WHERE version = 27');
+  db.exec('ALTER TABLE transactions DROP COLUMN bank_date; ALTER TABLE transactions DROP COLUMN source_file_date; ALTER TABLE transactions DROP COLUMN source_clear_from; ALTER TABLE transactions DROP COLUMN source_clear_to; DELETE FROM migrations WHERE version = 27');
   db.prepare("INSERT INTO accounts (id, name, type) VALUES ('a1', 'Synthetic', 'credit')").run();
   const ins = db.prepare("INSERT INTO transactions (id, account_id, source, source_id, date, date_owner_set, amount_cents, created_at, updated_at) VALUES (?, 'a1', ?, ?, '2026-01-01', ?, -1, 'x', 'x')");
   for (const [id, source, owner] of [['plaid', 'plaid', 0], ['redated', 'plaid', 1], ['apple', 'applecard', 0], ['manual', 'manual', 0], ['actual', 'actual', 0]] as const) ins.run(id, source, id, owner);
