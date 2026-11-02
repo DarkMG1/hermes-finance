@@ -5,7 +5,7 @@ const Id = z.string().min(1).max(100);
 const DateStr = z.string().regex(DATE_RE, 'expected YYYY-MM-DD')
   .refine((s) => DATE_RE.test(s) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s, 'not a real date');
 // Leave year 9999 for exclusive period boundaries and derived dates in responses.
-const DateInput = DateStr.refine((s) => s < '9999-01-01', 'year must be at most 9998').refine((s) => s >= '2000-01-01', 'must be 2000-01-01 or later');
+const DateInput = DateStr.refine((s) => s < '9999-01-01', 'year must be at most 9998');
 const Cents = z.number().int().safe();
 export const MAX_AMOUNT_CENTS = 1_000_000_000;
 const LedgerCents = Cents.min(-MAX_AMOUNT_CENTS).max(MAX_AMOUNT_CENTS);

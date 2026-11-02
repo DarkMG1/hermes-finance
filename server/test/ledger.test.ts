@@ -433,4 +433,5 @@ test('owner dates run from 2000-01-01 to a year after today', async () => {
     }
     for (const date of ['2000-01-01', '2027-03-15']) assert.ok([200, 201].includes((await send(date)).statusCode), date);
   }
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/transactions?from=1999-01-01&to=1999-12-31', headers: AUTH })).statusCode, 200, 'filters are not bounded');
 });
