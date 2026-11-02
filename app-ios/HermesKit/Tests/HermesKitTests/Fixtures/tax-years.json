@@ -1,0 +1,46 @@
+{
+  "years": [
+    {
+      "year": 2025,
+      "returns": [
+        {
+          "id": "return-1",
+          "year": 2025,
+          "jurisdiction": "federal",
+          "filingStatus": "single",
+          "wagesCents": 6500000,
+          "totalIncomeCents": 6520000,
+          "agiCents": 6520000,
+          "deductionKind": "standard",
+          "deductionCents": 1500000,
+          "taxableIncomeCents": 5020000,
+          "totalTaxCents": 650000,
+          "creditsCents": 0,
+          "withholdingCents": 800000,
+          "refundCents": 150000,
+          "capitalGainsCents": 20000,
+          "capitalLossCarryoverCents": 0,
+          "createdAt": "seed",
+          "updatedAt": "seed"
+        }
+      ],
+      "forms": [
+        {
+          "id": "form-1",
+          "jobId": "job-1",
+          "year": 2025,
+          "kind": "w2",
+          "payer": "SYNTHETIC EMPLOYER",
+          "amountCents": 6500000,
+          "federalWithheldCents": 800000,
+          "state": "MI",
+          "stateWithheldCents": 270000,
+          "ssWagesCents": 7000000,
+          "medicareWagesCents": 7000000,
+          "createdAt": "seed"
+        }
+      ],
+      "effectiveRate": 0.0997
+    }
+  ]
+}

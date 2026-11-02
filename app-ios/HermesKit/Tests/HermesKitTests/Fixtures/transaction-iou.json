@@ -30,5 +30,6 @@
         "payee": "Synthetic Split"
       }
     ]
-  }
+  },
+  "payStub": null
 }

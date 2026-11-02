@@ -156,6 +156,18 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   out['chat-detail'] = chatIds(detail);
   db.prepare("INSERT INTO ai_usage (at, month, key, feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_microdollars) VALUES (?, '2026-03', 'main', 'chat', 'fixture-model', 1000, 50, 0, 0, 420000)").run(deps.now().toISOString());
   out['ai-usage'] = await get('/v1/ai/usage');
+  // the financial profile goes in last so the fixtures above stay as they are
+  db.prepare(`INSERT INTO jobs (id, employer, title, status, start_date, base_cents, bonus_target_pct, created_at, updated_at)
+    VALUES ('job-1', 'SYNTHETIC EMPLOYER', 'Synthetic Engineer', 'current', '2025-06-01', 12000000, 10, 'seed', 'seed')`).run();
+  db.prepare("INSERT INTO equity_grants VALUES ('grant-1', 'job-1', 'rsu', 400, NULL, NULL, '2025-06-01', 12, 48, 3)").run();
+  db.prepare(`INSERT INTO pay_stubs VALUES ('stub-1', 'job-1', '2026-03-13', '2026-02-28', '2026-03-13', 420000, 50000, 15000, 26040, 6090, 21000, 1870, 300000,
+    2520000, 'txn-2', 'seed')`).run();
+  db.prepare("INSERT INTO tax_forms VALUES ('form-1', 'job-1', 2025, 'w2', 'SYNTHETIC EMPLOYER', 6500000, 800000, 'MI', 270000, 7000000, 7000000, 'seed')").run();
+  db.prepare(`INSERT INTO tax_returns VALUES ('return-1', 2025, 'federal', 'single', 6500000, 6520000, 6520000, 'standard', 1500000, 5020000, 650000, 0,
+    800000, 150000, 20000, 0, 'seed', 'seed')`).run();
+  out.job = await get('/v1/jobs/job-1');
+  out['tax-years'] = await get('/v1/tax-years');
+  out['transaction-pay-stub'] = await get('/v1/transactions/txn-2');
   // ids minted at runtime are replaced so the files are stable
   const text = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
   const normalise = (s: string) => s.replace(/"accountId": "[0-9a-f-]{36}"/g, '"accountId": "fixture-applecard"').replace(/"itemId": "[0-9a-f-]{36}"/g, '"itemId": "fixture-item"');

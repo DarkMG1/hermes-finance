@@ -1,0 +1,91 @@
+{
+  "id": "job-1",
+  "employer": "SYNTHETIC EMPLOYER",
+  "title": "Synthetic Engineer",
+  "status": "current",
+  "startDate": "2025-06-01",
+  "endDate": null,
+  "baseCents": 12000000,
+  "bonusTargetPct": 10,
+  "signingBonusCents": null,
+  "relocationCents": null,
+  "note": null,
+  "createdAt": "seed",
+  "updatedAt": "seed",
+  "grants": [
+    {
+      "id": "grant-1",
+      "jobId": "job-1",
+      "kind": "rsu",
+      "shares": 400,
+      "valueCents": null,
+      "strikeCents": null,
+      "grantDate": "2025-06-01",
+      "cliffMonths": 12,
+      "vestMonths": 48,
+      "vestEveryMonths": 3
+    }
+  ],
+  "nextVests": [
+    {
+      "date": "2026-06-01",
+      "shares": 100,
+      "valueCents": null,
+      "grantId": "grant-1"
+    },
+    {
+      "date": "2026-09-01",
+      "shares": 25,
+      "valueCents": null,
+      "grantId": "grant-1"
+    },
+    {
+      "date": "2026-12-01",
+      "shares": 25,
+      "valueCents": null,
+      "grantId": "grant-1"
+    },
+    {
+      "date": "2027-03-01",
+      "shares": 25,
+      "valueCents": null,
+      "grantId": "grant-1"
+    }
+  ],
+  "stubs": [
+    {
+      "id": "stub-1",
+      "jobId": "job-1",
+      "payDate": "2026-03-13",
+      "periodStart": "2026-02-28",
+      "periodEnd": "2026-03-13",
+      "grossCents": 420000,
+      "federalCents": 50000,
+      "stateCents": 15000,
+      "socialSecurityCents": 26040,
+      "medicareCents": 6090,
+      "retirementCents": 21000,
+      "otherDeductionsCents": 1870,
+      "netCents": 300000,
+      "ytdGrossCents": 2520000,
+      "transactionId": "txn-2",
+      "createdAt": "seed"
+    }
+  ],
+  "forms": [
+    {
+      "id": "form-1",
+      "jobId": "job-1",
+      "year": 2025,
+      "kind": "w2",
+      "payer": "SYNTHETIC EMPLOYER",
+      "amountCents": 6500000,
+      "federalWithheldCents": 800000,
+      "state": "MI",
+      "stateWithheldCents": 270000,
+      "ssWagesCents": 7000000,
+      "medicareWagesCents": 7000000,
+      "createdAt": "seed"
+    }
+  ]
+}

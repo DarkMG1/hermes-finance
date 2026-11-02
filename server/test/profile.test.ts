@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { buildApp } from '../src/app.ts';
 import { migrate, openDb } from '../src/db.ts';
 import { vestEvents } from '../src/profile.ts';
+import { applyPages } from '../src/sync/apply.ts';
+import { txn } from './fake-plaid.ts';
 import { AUTH, makeTestDeps, seedAccount, seedTxn } from './helpers.ts';
 
 function setup() {
@@ -156,4 +158,127 @@ test('vesting: each event vests what accrued so far, so monthly 1000 shares afte
   assert.equal(events.length, 37);
   assert.deepEqual([events[0]!.shares, events[1]!.shares, events.at(-1)!.shares], [250, 20, 21]);
   assert.equal(events.reduce((s, e) => s + e.shares!, 0), 1000);
+});
+
+const stub = { payDate: '2026-03-13', periodStart: '2026-02-28', periodEnd: '2026-03-13', grossCents: 400000, federalCents: 50000, stateCents: 15000,
+  socialSecurityCents: 24800, medicareCents: 5800, retirementCents: 24000, otherDeductionsCents: 400, netCents: 280000 };
+
+test('pay stubs: create, validate the parts against net, patch, delete; the job detail lists them newest first', async () => {
+  const { get, send } = setup();
+  const job = (await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'current' })).json();
+  const made = await send('POST', '/v1/pay-stubs', { ...stub, jobId: job.id }, 'stub');
+  assert.equal(made.statusCode, 201);
+  const s = made.json();
+  assert.deepEqual(s, { ...stub, id: s.id, jobId: job.id, ytdGrossCents: null, transactionId: null, createdAt: '2026-03-15T12:00:00.000Z' });
+  assert.deepEqual((await send('POST', '/v1/pay-stubs', { ...stub, jobId: job.id }, 'stub')).json(), s, 'one row per Idempotency-Key');
+  assert.equal((await send('POST', '/v1/pay-stubs', { ...stub, netCents: 279999 })).statusCode, 201, 'within a cent');
+  for (const [body, field] of [
+    [{ ...stub, netCents: 279998 }, 'netCents'], [{ ...stub, netCents: 400001, grossCents: 400000 }, 'netCents'], [{ ...stub, grossCents: -1 }, 'grossCents'],
+    [{ ...stub, periodEnd: '2026-02-27' }, 'periodEnd'], [{ ...stub, jobId: 'missing' }, 'jobId'],
+    [{ ...stub, payDate: undefined }, 'payDate'], [{ ...stub, ssn: '000-00-0000' }, undefined],
+  ] as const) {
+    const r = await send('POST', '/v1/pay-stubs', body);
+    assert.deepEqual([r.statusCode, r.json().field], [400, field], JSON.stringify(body));
+  }
+  const bonus = (await send('POST', '/v1/pay-stubs', { jobId: job.id, payDate: '2026-03-14', periodStart: null, periodEnd: null, grossCents: 1000, federalCents: 220, netCents: 780 })).json();
+  assert.deepEqual([bonus.stateCents, bonus.otherDeductionsCents, bonus.periodStart], [0, 0, null], 'a bonus check may leave out its period and zero lines');
+  assert.equal((await send('PATCH', `/v1/pay-stubs/${s.id}`, { netCents: 1 })).json().field, 'netCents', 'the merged stub is checked');
+  const p = await send('PATCH', `/v1/pay-stubs/${s.id}`, { otherDeductionsCents: 0, netCents: 280400, ytdGrossCents: 2_400_000 });
+  assert.deepEqual([p.statusCode, p.json().netCents, p.json().ytdGrossCents, p.json().payDate], [200, 280400, 2_400_000, '2026-03-13']);
+  assert.deepEqual((await get(`/v1/jobs/${job.id}`)).json().stubs.map((x: { id: string }) => x.id), [bonus.id, s.id]);
+  assert.equal((await send('PATCH', '/v1/pay-stubs/missing', { netCents: 1 })).statusCode, 404);
+  assert.equal((await send('DELETE', `/v1/pay-stubs/${s.id}`, undefined, 'd')).statusCode, 200);
+  assert.equal((await send('DELETE', `/v1/pay-stubs/${s.id}`, undefined, 'd')).statusCode, 200);
+  assert.equal((await send('DELETE', `/v1/pay-stubs/${s.id}`)).statusCode, 404);
+});
+
+test('stub matches: exact net within 3 days, deposits only, closest then newest, never a deposit linked to another stub; link, unlink, delete', async () => {
+  const { get, send, db } = setup();
+  seedAccount(db, { id: 'chk' });
+  for (const [id, date, amountCents, removedAt] of [['a', '2026-03-13', 280000], ['b', '2026-03-12', 280000], ['c', '2026-03-14', 280000], ['far', '2026-03-17', 280000],
+    ['early', '2026-03-10', 280000], ['out', '2026-03-13', -280000], ['other', '2026-03-13', 280001], ['gone', '2026-03-13', 280000, '2026-03-14T00:00:00Z']] as const) {
+    seedTxn(db, { id, accountId: 'chk', date, amountCents, ...(removedAt ? { removedAt } : {}) });
+  }
+  const s = (await send('POST', '/v1/pay-stubs', stub)).json();
+  const ids = async (id: string) => (await get(`/v1/pay-stubs/${id}/matches`)).json().map((t: { id: string }) => t.id);
+  assert.deepEqual(await ids(s.id), ['a', 'c', 'b', 'early'], 'two equal candidates are both listed');
+  assert.equal((await get('/v1/pay-stubs/missing/matches')).statusCode, 404);
+  assert.equal((await send('PUT', `/v1/pay-stubs/${s.id}/link`, { transactionId: 'far' })).json().field, 'transactionId');
+  const linked = await send('PUT', `/v1/pay-stubs/${s.id}/link`, { transactionId: 'c' }, 'link');
+  assert.deepEqual([linked.statusCode, linked.json().transactionId], [200, 'c']);
+  assert.equal((await send('PUT', `/v1/pay-stubs/${s.id}/link`, { transactionId: 'c' }, 'link')).statusCode, 200);
+  assert.deepEqual(await ids(s.id), ['a', 'c', 'b', 'early'], 'its own deposit stays listed');
+  const t = (await get('/v1/transactions/c')).json();
+  assert.deepEqual(t.payStub, { id: s.id, grossCents: 400000, federalCents: 50000, stateCents: 15000, socialSecurityCents: 24800, medicareCents: 5800, retirementCents: 24000, otherDeductionsCents: 400 });
+  assert.equal((await get('/v1/transactions/a')).json().payStub, null);
+  assert.deepEqual((await get('/v1/transactions?limit=10')).json().transactions.filter((x: { payStub: unknown }) => x.payStub).map((x: { id: string }) => x.id), ['c']);
+  const twin = (await send('POST', '/v1/pay-stubs', stub)).json();
+  assert.deepEqual(await ids(twin.id), ['a', 'b', 'early'], 'a deposit linked to another stub is never offered');
+  const taken = await send('PUT', `/v1/pay-stubs/${twin.id}/link`, { transactionId: 'c' });
+  assert.deepEqual([taken.statusCode, taken.json().code], [409, 'ALREADY_LINKED']);
+  assert.equal((await send('PATCH', `/v1/pay-stubs/${s.id}`, { otherDeductionsCents: 300, retirementCents: 24100 })).json().transactionId, 'c', 'an edit that still matches keeps the link');
+  assert.equal((await send('PATCH', `/v1/pay-stubs/${s.id}`, { payDate: '2026-03-01', periodStart: '2026-02-14', periodEnd: '2026-02-27' })).json().transactionId, null,
+    'an edit the deposit no longer matches drops the link');
+  await send('PUT', `/v1/pay-stubs/${twin.id}/link`, { transactionId: 'c' });
+  assert.equal((await send('PUT', `/v1/pay-stubs/${twin.id}/link`, { transactionId: null })).json().transactionId, null);
+  assert.equal((await get('/v1/transactions/c')).json().payStub, null);
+  await send('PUT', `/v1/pay-stubs/${twin.id}/link`, { transactionId: 'a' });
+  await send('DELETE', `/v1/pay-stubs/${twin.id}`);
+  assert.equal((await get('/v1/transactions/a')).json().payStub, null, 'deleting the stub frees the deposit');
+  assert.deepEqual(await ids(s.id), [], 'none near its new date');
+  assert.equal((await send('PUT', `/v1/pay-stubs/${s.id}/link`, { transactionId: 'a', extra: 1 })).statusCode, 400);
+});
+
+test('a stub linked to a pending deposit follows the posted row', async () => {
+  const { get, send, db } = setup();
+  seedAccount(db, { id: 'chk', plaidAccountId: 'pa-chk' });
+  seedTxn(db, { id: 'pend', accountId: 'chk', date: '2026-03-13', amountCents: 280000, source: 'plaid', sourceId: 'p-pend', pending: true });
+  const s = (await send('POST', '/v1/pay-stubs', stub)).json();
+  await send('PUT', `/v1/pay-stubs/${s.id}/link`, { transactionId: 'pend' });
+  db.transaction(() => applyPages(db, [{ added: [txn({ transactionId: 'posted', pendingTransactionId: 'p-pend', accountId: 'pa-chk', amount: -2800, date: '2026-03-14' })],
+    modified: [], removed: [], nextCursor: 'c', hasMore: false }], { itemId: 'item-x', cutoverDate: null, nowIso: '2026-03-16T00:00:00.000Z' }))();
+  const postedId = db.prepare("SELECT id FROM transactions WHERE source_id = 'posted'").pluck().get() as string;
+  assert.equal((await get(`/v1/transactions/${postedId}`)).json().payStub.id, s.id);
+});
+
+test('tax forms and returns: CRUD, upsert by year and jurisdiction, tax years newest first with the federal effective rate', async () => {
+  const { get, send } = setup();
+  const job = (await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'current' })).json();
+  const w2 = { jobId: job.id, year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 9_000_000, federalWithheldCents: 1_100_000, state: 'MI',
+    stateWithheldCents: 380_000, ssWagesCents: 9_500_000, medicareWagesCents: 9_500_000 };
+  const f = await send('POST', '/v1/tax-forms', w2, 'form');
+  assert.equal(f.statusCode, 201);
+  assert.deepEqual(f.json(), { ...w2, id: f.json().id, createdAt: '2026-03-15T12:00:00.000Z' });
+  assert.deepEqual((await send('POST', '/v1/tax-forms', w2, 'form')).json(), f.json());
+  for (const [body, field] of [
+    [{ ...w2, kind: '1098' }, 'kind'], [{ ...w2, year: 1999 }, 'year'], [{ ...w2, year: 2028 }, 'year'], [{ ...w2, state: 'mi' }, 'state'],
+    [{ ...w2, payer: '' }, 'payer'], [{ ...w2, jobId: 'missing' }, 'jobId'], [{ ...w2, amountCents: -1 }, 'amountCents'],
+  ] as const) assert.equal((await send('POST', '/v1/tax-forms', body)).json().field, field, JSON.stringify(body));
+  const int = (await send('POST', '/v1/tax-forms', { year: 2027, kind: '1099_int', payer: 'SYNTHETIC BANK', amountCents: 1200 })).json();
+  assert.deepEqual([int.jobId, int.federalWithheldCents, int.state], [null, null, null]);
+  assert.equal((await send('PATCH', `/v1/tax-forms/${int.id}`, { year: 2024 })).json().year, 2024);
+  assert.equal((await send('PATCH', `/v1/tax-forms/${int.id}`, { year: 2030 })).json().field, 'year');
+  assert.deepEqual((await get(`/v1/jobs/${job.id}`)).json().forms.map((x: { id: string }) => x.id), [f.json().id]);
+
+  const fed = await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal', filingStatus: 'single', totalIncomeCents: 9_000_000, totalTaxCents: 1_000_000, refundCents: -5000 }, 'ret');
+  assert.equal(fed.statusCode, 200);
+  assert.deepEqual((await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal', filingStatus: 'single', totalIncomeCents: 9_000_000, totalTaxCents: 1_000_000, refundCents: -5000 }, 'ret')).json(), fed.json());
+  const again = (await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal', agiCents: 8_800_000 })).json();
+  assert.deepEqual([again.id, again.totalTaxCents, again.agiCents, again.refundCents], [fed.json().id, 1_000_000, 8_800_000, -5000], 'upsert keeps left-out fields');
+  await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'MI', totalTaxCents: 380_000 });
+  await send('PUT', '/v1/tax-returns', { year: 2024, jurisdiction: 'federal', totalIncomeCents: 0, totalTaxCents: 0 });
+  for (const [body, field] of [[{ year: 2025, jurisdiction: 'mi' }, 'jurisdiction'], [{ year: 2025, jurisdiction: 'state' }, 'jurisdiction'],
+    [{ year: 1999, jurisdiction: 'federal' }, 'year'], [{ year: 2025, jurisdiction: 'federal', deductionKind: 'both' }, 'deductionKind']] as const) {
+    assert.equal((await send('PUT', '/v1/tax-returns', body)).json().field, field, JSON.stringify(body));
+  }
+  const years = (await get('/v1/tax-years')).json().years;
+  assert.deepEqual(years.map((y: { year: number; effectiveRate: number | null; returns: { jurisdiction: string }[]; forms: { id: string }[] }) =>
+    [y.year, y.effectiveRate, y.returns.map((r) => r.jurisdiction), y.forms.map((x) => x.id)]),
+  [[2025, 0.1111, ['federal', 'MI'], [f.json().id]], [2024, null, ['federal'], [int.id]]]);
+  assert.equal((await send('DELETE', `/v1/tax-returns/${fed.json().id}`)).statusCode, 200);
+  assert.equal((await get('/v1/tax-years')).json().years[0].effectiveRate, null, 'no federal return');
+  assert.equal((await send('DELETE', `/v1/tax-returns/${fed.json().id}`)).statusCode, 404);
+  assert.equal((await send('DELETE', `/v1/tax-forms/${int.id}`)).statusCode, 200);
+  assert.equal((await send('DELETE', `/v1/tax-forms/${int.id}`)).statusCode, 404);
+  assert.deepEqual((await get('/v1/tax-years')).json().years.map((y: { year: number }) => y.year), [2025, 2024]);
 });

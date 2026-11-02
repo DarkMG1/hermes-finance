@@ -50,6 +50,9 @@ export const Transaction = z.object({
   recurring: z.object({ id: z.string(), name: z.string(), frequency: RecurringFrequency }).nullable(),
   /** Unsplit person-tagged rows: an item's leftCents (null on a payback) and what a payback paid. */
   iou: z.object({ leftCents: Cents.nullable(), paidBack: z.array(PaidBack.extend({ payee: z.string() })) }).nullable(),
+  /** The pay stub linked to this deposit. */
+  payStub: z.object({ id: Id, grossCents: Cents, federalCents: Cents, stateCents: Cents, socialSecurityCents: Cents, medicareCents: Cents,
+    retirementCents: Cents, otherDeductionsCents: Cents }).nullable().optional(),
 });
 export type Transaction = z.infer<typeof Transaction>;
 
@@ -447,8 +450,9 @@ export type AiUsage = z.infer<typeof AiUsage>;
 
 const FilingStatus = z.enum(['single', 'married_joint', 'married_separate', 'head_of_household']);
 const Money = Cents.min(0).max(MAX_AMOUNT_CENTS);
+const StateCode = z.string().regex(/^[A-Z]{2}$/, 'expected a 2-letter state code');
 const AboutMe = z.object({
-  state: z.string().regex(/^[A-Z]{2}$/, 'expected a 2-letter state code').nullable(), filingStatus: FilingStatus.nullable(),
+  state: StateCode.nullable(), filingStatus: FilingStatus.nullable(),
   birthYear: z.number().int().min(1900).nullable(), dependents: z.number().int().min(0).max(20).nullable(),
   retirementPct: z.number().min(0).max(100).nullable(), retirementKind: z.enum(['pre_tax', 'roth', 'mixed']).nullable(),
   /** has a health savings account */
@@ -497,7 +501,61 @@ export const PatchGrantBody = GrantFields.partial().strict().refine((b) => Objec
 export type PatchGrantBody = z.infer<typeof PatchGrantBody>;
 export const VestEvent = z.object({ date: DateStr, shares: z.number().nullable(), valueCents: Cents.nullable(), grantId: Id });
 export type VestEvent = z.infer<typeof VestEvent>;
+const PayStubFields = z.object({
+  jobId: Id.nullable(), payDate: DateInput, periodStart: DateInput.nullable(), periodEnd: DateInput.nullable(),
+  grossCents: Money, federalCents: Money, stateCents: Money, socialSecurityCents: Money, medicareCents: Money, retirementCents: Money,
+  otherDeductionsCents: Money, netCents: Money, ytdGrossCents: Money.nullable(),
+});
+export const PayStub = PayStubFields.extend({ id: Id, transactionId: Id.nullable(), createdAt: z.string() });
+export type PayStub = z.infer<typeof PayStub>;
+const STUB_PARTS = ['federalCents', 'stateCents', 'socialSecurityCents', 'medicareCents', 'retirementCents', 'otherDeductionsCents'] as const;
+/** Left-out deduction lines are 0; gross minus every line must equal net within a cent. PATCH checks the merged stub. */
+export const PayStubBody = PayStubFields.partial().required({ payDate: true, grossCents: true, netCents: true }).strict()
+  .refine((s) => s.netCents <= s.grossCents, { message: 'must be at most grossCents', path: ['netCents'] })
+  .refine((s) => Math.abs(STUB_PARTS.reduce((n, k) => n - (s[k] ?? 0), s.grossCents) - s.netCents) <= 1,
+    { message: 'gross minus deductions must equal net', path: ['netCents'] })
+  .refine((s) => !s.periodStart || !s.periodEnd || s.periodStart <= s.periodEnd, { message: 'must be on or after periodStart', path: ['periodEnd'] });
+export type PayStubBody = z.infer<typeof PayStubBody>;
+export const PatchPayStubBody = PayStubFields.partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+export type PatchPayStubBody = z.infer<typeof PatchPayStubBody>;
+export const LinkPayStubBody = z.object({ transactionId: Id.nullable() }).strict();
+export type LinkPayStubBody = z.infer<typeof LinkPayStubBody>;
+
+const TaxFormFields = z.object({
+  jobId: Id.nullable(), year: z.number().int().min(2000), kind: z.enum(['w2', '1099_nec', '1099_int', '1099_div', '1099_b', '1099_misc', 'other']),
+  payer: z.string().trim().min(1).max(200),
+  /** wages (W-2 box 1), box 1, or the form's total */
+  amountCents: Money, federalWithheldCents: Money.nullable(), state: StateCode.nullable(), stateWithheldCents: Money.nullable(),
+  ssWagesCents: Money.nullable(), medicareWagesCents: Money.nullable(),
+});
+export const TaxForm = TaxFormFields.extend({ id: Id, createdAt: z.string() });
+export type TaxForm = z.infer<typeof TaxForm>;
+/** year runs from 2000 to the owner's next year */
+export const TaxFormBody = TaxFormFields.partial().required({ year: true, kind: true, payer: true, amountCents: true }).strict();
+export type TaxFormBody = z.infer<typeof TaxFormBody>;
+export const PatchTaxFormBody = TaxFormFields.partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+export type PatchTaxFormBody = z.infer<typeof PatchTaxFormBody>;
+
+const TaxReturnFields = z.object({
+  year: z.number().int().min(2000), jurisdiction: z.union([z.literal('federal'), StateCode], { error: "expected 'federal' or a 2-letter state code" }),
+  filingStatus: FilingStatus.nullable(), wagesCents: Money.nullable(), totalIncomeCents: LedgerCents.nullable(), agiCents: LedgerCents.nullable(),
+  deductionKind: z.enum(['standard', 'itemized']).nullable(), deductionCents: Money.nullable(), taxableIncomeCents: Money.nullable(),
+  totalTaxCents: Money.nullable(), creditsCents: Money.nullable(), withholdingCents: Money.nullable(),
+  /** positive refund, negative owed */
+  refundCents: LedgerCents.nullable(), capitalGainsCents: LedgerCents.nullable(), capitalLossCarryoverCents: Money.nullable(),
+});
+export const TaxReturn = TaxReturnFields.extend({ id: Id, createdAt: z.string(), updatedAt: z.string() });
+export type TaxReturn = z.infer<typeof TaxReturn>;
+/** Upserts by year + jurisdiction: left-out fields keep their value; null clears. */
+export const TaxReturnBody = TaxReturnFields.partial().required({ year: true, jurisdiction: true }).strict();
+export type TaxReturnBody = z.infer<typeof TaxReturnBody>;
+/** Newest year first; effectiveRate is the federal return's totalTax / totalIncome (4 places), null without one. */
+export const TaxYears = z.object({
+  years: z.array(z.object({ year: z.number().int(), returns: z.array(TaxReturn), forms: z.array(TaxForm), effectiveRate: z.number().nullable() })),
+});
+export type TaxYears = z.infer<typeof TaxYears>;
+
 export const JobDetail = Job.extend({
-  grants: z.array(EquityGrant), nextVests: z.array(VestEvent), stubs: z.array(z.unknown()), forms: z.array(z.unknown()),
+  grants: z.array(EquityGrant), nextVests: z.array(VestEvent), stubs: z.array(PayStub), forms: z.array(TaxForm),
 });
 export type JobDetail = z.infer<typeof JobDetail>;

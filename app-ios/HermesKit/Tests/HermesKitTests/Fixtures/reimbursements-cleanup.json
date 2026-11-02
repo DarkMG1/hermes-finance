@@ -23,7 +23,8 @@
         "hasReceipt": false,
         "hasHistory": false,
         "recurring": null,
-        "iou": null
+        "iou": null,
+        "payStub": null
       },
       "lineId": null
     },
@@ -50,7 +51,8 @@
         "hasReceipt": false,
         "hasHistory": true,
         "recurring": null,
-        "iou": null
+        "iou": null,
+        "payStub": null
       },
       "lineId": null
     }

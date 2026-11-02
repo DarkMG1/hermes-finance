@@ -24,5 +24,6 @@
     "name": "Synthetic TV",
     "frequency": "monthly"
   },
-  "iou": null
+  "iou": null,
+  "payStub": null
 }

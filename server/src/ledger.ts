@@ -31,6 +31,10 @@ export function lookups(db: Db, rows: TxnRow[], member: ReturnType<typeof member
   }
   const receipts = new Set((db.prepare('SELECT transaction_id AS id FROM receipts WHERE transaction_id IN (SELECT value FROM json_each(?))')
     .all(ids) as { id: string }[]).map((r) => r.id));
+  const payStubs = new Map((db.prepare(`SELECT transaction_id AS tid, id, gross_cents AS grossCents, federal_cents AS federalCents, state_cents AS stateCents,
+      social_security_cents AS socialSecurityCents, medicare_cents AS medicareCents, retirement_cents AS retirementCents, other_deductions_cents AS otherDeductionsCents
+    FROM pay_stubs WHERE transaction_id IN (SELECT value FROM json_each(?))`).all(ids) as ({ tid: string } & NonNullable<Transaction['payStub']>)[])
+    .map(({ tid, ...stub }) => [tid, stub]));
   // only unsplit person-tagged rows carry iou; one settle per person in the list
   const iou = new Map<string, Transaction['iou']>();
   for (const pid of new Set(rows.filter((r) => r.person_id && !splits.has(r.id)).map((r) => r.person_id!))) {
@@ -43,10 +47,10 @@ export function lookups(db: Db, rows: TxnRow[], member: ReturnType<typeof member
     }
   }
   // a bill holds only the charges its History lists: owner money out (a refund or someone's IOU never opens the bill)
-  return { spending, splits, receipts, iou, recurring: member(rows.filter((r) => r.amount_cents < 0 && r.person_id === null && r.forgiven === 0 && billable.has(r.id))) };
+  return { spending, splits, receipts, iou, payStubs, recurring: member(rows.filter((r) => r.amount_cents < 0 && r.person_id === null && r.forgiven === 0 && billable.has(r.id))) };
 }
 
-export function rowToTransaction(r: TxnRow, { spending, recurring, splits, receipts, iou }: ReturnType<typeof lookups>): Transaction {
+export function rowToTransaction(r: TxnRow, { spending, recurring, splits, receipts, iou, payStubs }: ReturnType<typeof lookups>): Transaction {
   const splitLines = splits.get(r.id) ?? [];
   const payee = r.payee ?? r.merchant_name ?? r.bank_description;
   return {
@@ -61,6 +65,7 @@ export function rowToTransaction(r: TxnRow, { spending, recurring, splits, recei
     hasHistory: (normalizeName(payee) !== '' && (r.payee !== null || r.merchant_name !== null) && spending.has(r.id)) || recurring.has(r.id),
     recurring: recurring.get(r.id) ?? null,
     iou: iou.get(r.id) ?? null,
+    payStub: payStubs.get(r.id) ?? null,
   };
 }
 
