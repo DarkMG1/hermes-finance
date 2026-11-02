@@ -526,6 +526,20 @@ test('different-amount same-day purchases on consecutive statements are not a co
   assert.deepEqual(coffees(deps.db).map((t) => [t.a, t.c]), [[-750, '2026-10-01']]);
 });
 
+test('a correction ignores a same-day twin on another statement whose range does not overlap, in either import order', async () => {
+  const sept = csv(coffee('09/30/2026'), grocer('09/21/2026'));
+  const oct = csv(cup('7.50', '10/01/2026'), books);
+  for (const order of [[sept, oct], [oct, sept]]) {
+    const { deps } = makeTestDeps();
+    const app = buildApp(deps);
+    for (const [k, file] of order.entries()) await post(app, file, `first-${k}`);
+    const ids = coffees(deps.db).map((t) => t.id);
+    const r = (await post(app, csv(cup('6.00'), grocer('09/21/2026')), 'sept-corrected')).json() as { added: number; updated: number };
+    assert.deepEqual([r.added, r.updated], [0, 2]);
+    assert.deepEqual(coffees(deps.db).map((t) => [t.id, t.a, t.c]), [[ids[0], -750, '2026-10-01'], [ids[1], -600, '2026-09-30']]);
+  }
+});
+
 test('a row stored before statement ranges matches only when the new file covers its clearing date', async () => {
   const sept = csv(coffee('09/30/2026'), grocer('09/21/2026'));
   const cases: [string, [number, string][]][] = [

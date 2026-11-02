@@ -189,8 +189,10 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
     const candidates = (counterparts.all(accountId, r.transactionDate, r.description) as NonNullable<Stored>[])
       .filter((s) => !taken.has(s.sourceId) && groupFor(baseOf({ ...r, amountCents: s.amount })).sourceIds.has(s.sourceId));
     const same = candidates.filter((s) => s.amount === r.amountCents);
-    const pick = same.length ? same : unpaired.get(correctionKey(r)) === 1 ? candidates : [];
-    const row = pick.length === 1 && (within(pick[0]!.c, clearFrom, clearTo) || within(r.clearingDate, pick[0]!.clearFrom, pick[0]!.clearTo)) ? pick[0] : undefined;
+    const covers = (s: NonNullable<Stored>) => within(s.c, clearFrom, clearTo) || within(r.clearingDate, s.clearFrom, s.clearTo);
+    // a twin on a statement that doesn't overlap is another purchase, so it never makes a correction ambiguous
+    const pick = same.length ? same : unpaired.get(correctionKey(r)) === 1 ? candidates.filter(covers) : [];
+    const row = pick.length === 1 && covers(pick[0]!) ? pick[0] : undefined;
     if (!row) return;
     taken.add(row.sourceId);
     found[i] = row;
