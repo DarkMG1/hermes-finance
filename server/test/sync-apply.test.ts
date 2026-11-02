@@ -1,7 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { applyPages, upsertAccounts } from '../src/sync/apply.ts';
-import { matchInbox } from '../src/inbox.ts';
 import { txn } from './fake-plaid.ts';
 import { AUTH, makeTestDeps, seedAccount, seedCategory, seedItem, seedSplit, seedPerson, seedTxn } from './helpers.ts';
 import { buildApp } from '../src/app.ts';
@@ -612,17 +611,16 @@ test('an owner date the bank later agrees with follows the bank again, on update
   assert.equal(row('p1')?.date_owner_set, 0);
 });
 
-test('pending to posted keeps a posted row its own inbox receipt; the other goes back to the inbox', () => {
+test('two inbox receipts linked to one pending row: the posted row takes exactly one', () => {
   const { deps, apply, row } = setup();
-  apply([page({ added: [txn({ transactionId: 'post1', amount: 20 }), txn({ transactionId: 'pend1', pending: true, amount: 20 })] })]);
-  const [postedId, pendingId] = [row('post1')?.id as string, row('pend1')?.id as string];
-  for (const [inbox, t] of [['i-post', postedId], ['i-pend', pendingId]]) {
-    deps.db.prepare("INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at, linked_transaction_id, linked_at) VALUES (?, NULL, 3, 'x', ?, 'x')").run(inbox, t);
-    deps.db.prepare("INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES (?, x'FFD8FF', 3, 'x')").run(t);
+  apply([page({ added: [txn({ transactionId: 'pend1', pending: true, amount: 20 })] })]);
+  const pendingId = row('pend1')?.id as string;
+  for (const inbox of ['i-a', 'i-b']) {
+    deps.db.prepare("INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at, linked_transaction_id, linked_at) VALUES (?, NULL, 3, 'x', ?, 'x')").run(inbox, pendingId);
   }
-  apply([page({ modified: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', amount: 20 })], removed: [{ transactionId: 'pend1' }] })]);
-  matchInbox(deps);
-  assert.deepEqual(deps.db.prepare('SELECT id, linked_transaction_id AS t FROM inbox_receipts ORDER BY id').all(), [{ id: 'i-pend', t: null }, { id: 'i-post', t: postedId }]);
+  deps.db.prepare("INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES (?, x'FFD8FF', 3, 'x')").run(pendingId);
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', amount: 20 })], removed: [{ transactionId: 'pend1' }] })]);
+  assert.deepEqual(deps.db.prepare('SELECT id FROM inbox_receipts WHERE linked_transaction_id = ?').pluck().all(row('post1')?.id), ['i-a']);
 });
 
 test('an owner date that differs from the bank posted date survives pending to posted, with bank_date from the posted row', () => {
