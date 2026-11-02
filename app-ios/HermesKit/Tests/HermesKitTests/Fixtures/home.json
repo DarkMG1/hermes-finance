@@ -21,7 +21,8 @@
       "forgiven": false,
       "hasReceipt": false,
       "hasHistory": true,
-      "recurring": null
+      "recurring": null,
+      "iou": null
     },
     {
       "id": "txn-2",
@@ -43,7 +44,8 @@
       "forgiven": false,
       "hasReceipt": false,
       "hasHistory": false,
-      "recurring": null
+      "recurring": null,
+      "iou": null
     },
     {
       "id": "txn-3",
@@ -82,7 +84,8 @@
       "forgiven": false,
       "hasReceipt": false,
       "hasHistory": true,
-      "recurring": null
+      "recurring": null,
+      "iou": null
     },
     {
       "id": "txn-4",
@@ -104,7 +107,18 @@
       "forgiven": false,
       "hasReceipt": false,
       "hasHistory": false,
-      "recurring": null
+      "recurring": null,
+      "iou": {
+        "leftCents": null,
+        "paidBack": [
+          {
+            "transactionId": "txn-3",
+            "lineId": "line-2",
+            "amountCents": 1000,
+            "payee": "Synthetic Split"
+          }
+        ]
+      }
     },
     {
       "id": "txn-5",
@@ -126,7 +140,8 @@
       "forgiven": false,
       "hasReceipt": false,
       "hasHistory": false,
-      "recurring": null
+      "recurring": null,
+      "iou": null
     },
     {
       "id": "txn-6",
@@ -148,7 +163,8 @@
       "forgiven": false,
       "hasReceipt": false,
       "hasHistory": true,
-      "recurring": null
+      "recurring": null,
+      "iou": null
     }
   ],
   "reconnect": [

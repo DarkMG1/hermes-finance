@@ -534,3 +534,29 @@ test('merchant memory fills stored uncategorized bank rows on every sync, never 
   const cat = (id: string) => (db.prepare('SELECT category_id AS c FROM transactions WHERE id = ?').get(id) as { c: string | null }).c;
   assert.deepEqual(['stored', 'cleared', 'tagged', 'payment'].map(cat), ['gym', null, null, null]);
 });
+
+test('a linked payback that posts with a new Plaid id keeps its links (R5)', () => {
+  const { deps, apply, row } = setup();
+  seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill' });
+  apply([page({ added: [txn({ transactionId: 'item1', amount: 30 }), txn({ transactionId: 'pend1', pending: true, amount: -30 })] })]);
+  const [item, pend] = [row('item1')!.id, row('pend1')!.id];
+  deps.db.prepare('UPDATE transactions SET person_id = ? WHERE id IN (?, ?)').run('p1', item, pend);
+  deps.db.prepare(`INSERT INTO iou_links (id, payback_transaction_id, payback_line_id, item_transaction_id, item_line_id, amount_cents, created_at)
+    VALUES ('k1', ?, NULL, ?, NULL, 3000, '2026-04-01T00:00:00Z')`).run(pend, item);
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', amount: -30 })], removed: [{ transactionId: 'pend1' }] })]);
+  const posted = row('post1')!.id;
+  assert.deepEqual(deps.db.prepare('SELECT payback_transaction_id AS p, item_transaction_id AS i FROM iou_links').all(), [{ p: posted, i: item }]);
+  assert.equal(row('post1')!.person_id, 'p1');
+});
+
+test('a pending charge linked as an item keeps its links when it posts with a new Plaid id (R5)', () => {
+  const { deps, apply, row } = setup();
+  seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill' });
+  apply([page({ added: [txn({ transactionId: 'pendc', pending: true, amount: 30 }), txn({ transactionId: 'back1', amount: -30 })] })]);
+  const [pend, back] = [row('pendc')!.id, row('back1')!.id];
+  deps.db.prepare('UPDATE transactions SET person_id = ? WHERE id IN (?, ?)').run('p1', pend, back);
+  deps.db.prepare(`INSERT INTO iou_links (id, payback_transaction_id, payback_line_id, item_transaction_id, item_line_id, amount_cents, created_at)
+    VALUES ('k1', ?, NULL, ?, NULL, 3000, '2026-04-01T00:00:00Z')`).run(back, pend);
+  apply([page({ added: [txn({ transactionId: 'postc', pendingTransactionId: 'pendc', amount: 30 })], removed: [{ transactionId: 'pendc' }] })]);
+  assert.deepEqual(deps.db.prepare('SELECT payback_transaction_id AS p, item_transaction_id AS i FROM iou_links').all(), [{ p: back, i: row('postc')!.id }]);
+});

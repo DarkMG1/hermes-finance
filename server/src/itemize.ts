@@ -3,6 +3,7 @@ import { MAX_AMOUNT_CENTS, type Itemization, type SaveItemsBody, type Transactio
 import type { Db } from './db.ts';
 import { localDay } from './days.ts';
 import { ApiError } from './errors.ts';
+import { captureLinks, restoreLinks } from './ious.ts';
 import { getTransaction } from './ledger.ts';
 import { assertPersonTaggable } from './people.ts';
 import { writeSplit } from './splits.ts';
@@ -137,12 +138,14 @@ export function applyItems(db: Db, id: string, body: SaveItemsBody, nowIso: stri
       writeSplit(db, id, txn.amountCents, lines, 'items', nowIso);
     } else {
       // one share: no split; the whole row is mine (owner category) or that person's
+      const kept = captureLinks(db, id);
       db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(id);
       const only = shares[0]!.person;
       // all mine with no category: the flag stays as it was, so the bank category can still map once posted
       const category = only === ME ? ownerCategory : null;
       db.prepare('UPDATE transactions SET category_id = ?, person_id = ?, category_owner_set = CASE WHEN ? THEN category_owner_set ELSE 1 END, updated_at = ? WHERE id = ?')
         .run(category, only === ME ? null : only, only === ME && category === null ? 1 : 0, nowIso, id);
+      restoreLinks(db, id, kept);
     }
   }
   replaceItems(db, id, body.items);

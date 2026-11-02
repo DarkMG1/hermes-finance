@@ -3,27 +3,9 @@ import type { Db } from './db.ts';
 import { localDay } from './days.ts';
 import { memberships } from './recurring.ts';
 import { ApiError } from './errors.ts';
+import { TAGGED, entryKey, openItems, personEntries, personLinks, receiptIds, settle } from './ious.ts';
 import { TXN_COLS, lookups, rowToTransaction, type TxnRow } from './ledger.ts';
 
-// Every live amount between the owner and a person: split lines and unsplit transactions tagged with them, and manual rows they paid.
-// Money out (negative) raises what they owe; money in, and a row they paid (its share counted as positive), lowers it.
-const TAGGED = `
-  SELECT sl.person_id AS person_id, t.id AS transaction_id, sl.id AS line_id, t.date AS date,
-         COALESCE(sl.payee, t.payee, t.merchant_name, t.bank_description) AS payee, sl.amount_cents AS amount, 0 AS paid_by,
-         t.created_at AS created_at, t.rowid AS row_order, t.forgiven AS forgiven
-    FROM split_lines sl JOIN transactions t ON t.id = sl.transaction_id
-   WHERE sl.person_id IS NOT NULL AND t.removed_at IS NULL
-  UNION ALL
-  SELECT t.person_id, t.id, NULL, t.date, COALESCE(t.payee, t.merchant_name, t.bank_description), t.amount_cents, 0, t.created_at, t.rowid, t.forgiven
-    FROM transactions t
-   WHERE t.person_id IS NOT NULL AND t.removed_at IS NULL
-     AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
-  UNION ALL
-  SELECT t.paid_by_person_id, t.id, NULL, t.date, COALESCE(t.payee, t.merchant_name, t.bank_description), -t.amount_cents, 1, t.created_at, t.rowid, t.forgiven
-    FROM transactions t
-   WHERE t.paid_by_person_id IS NOT NULL AND t.removed_at IS NULL AND t.source = 'manual' AND t.amount_cents < 0`;
-
-type Tagged = { person_id: string; transaction_id: string; line_id: string | null; date: string; payee: string; amount: number; paid_by: number; created_at: string; forgiven: number };
 type PersonRow = { id: string; name: string; match_text: string | null; archived: number };
 
 const toPerson = (r: PersonRow, balanceCents: number): Person =>
@@ -46,21 +28,26 @@ export function getPerson(db: Db, id: string): PersonDetail | null {
   const row = db.prepare('SELECT id, name, match_text, archived FROM people WHERE id = ?').get(id) as PersonRow | undefined;
   if (!row) return null;
   // same-day entries in the order they were recorded (rowid when one sync gave them the same created_at); ids are random
-  const items = db.prepare(`SELECT * FROM (${TAGGED}) WHERE person_id = ? ORDER BY date, created_at, row_order, line_id`).all(id) as Tagged[];
-  const withReceipt = new Set((db.prepare('SELECT transaction_id AS id FROM receipts').all() as { id: string }[]).map((r) => r.id));
+  const items = personEntries(db, id);
+  const s = settle(items, personLinks(db, items));
+  const withReceipt = receiptIds(db);
   let balance = 0;
   // computed on every read, so bank edits and removals rewrite the feed
   const history: HistoryEntry[] = items.map((t) => {
     balance -= t.amount;
+    const key = entryKey(t.transaction_id, t.line_id);
+    const item = s.items.get(key);
+    const paidBack = s.paidBack.get(key);
     return {
       transactionId: t.transaction_id, lineId: t.line_id, date: t.date, payee: t.payee,
       kind: t.forgiven ? 'forgiven' : t.paid_by ? 'paidByThem' : t.amount < 0 ? 'forThem' : 'fromThem', effectCents: -t.amount, balanceAfterCents: balance, settled: balance === 0,
       hasReceipt: withReceipt.has(t.transaction_id),
+      ...(item ? { leftCents: item.leftCents } : {}), ...(paidBack ? { paidBack } : {}),
     };
   });
   const spentOnThemCents = items.filter((t) => t.amount < 0 && !t.paid_by && !t.forgiven).reduce((s, t) => s - t.amount, 0);
   const forgivenCents = items.filter((t) => t.forgiven).reduce((s, t) => s + t.amount, 0);
-  return { person: toPerson(row, balance), history: history.reverse(), spentOnThemCents, forgivenCents };
+  return { person: toPerson(row, balance), history: history.reverse(), spentOnThemCents, forgivenCents, openItems: openItems(s, withReceipt) };
 }
 
 /** A new tag or payer must name a live person; an archived person stays valid in the same role on that transaction. */

@@ -35,5 +35,6 @@
   "forgiven": false,
   "hasReceipt": false,
   "hasHistory": true,
-  "recurring": null
+  "recurring": null,
+  "iou": null
 }

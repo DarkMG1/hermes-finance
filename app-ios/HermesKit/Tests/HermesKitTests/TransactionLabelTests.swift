@@ -8,7 +8,7 @@ private func labelTransaction(amount: Int = -1000, pending: Bool = false, person
                       payee: "Synthetic Grocer", bankDescription: "SYNTHETIC CARD PAYMENT", merchantName: nil,
                       pending: pending, categoryId: nil, notes: nil, splitLines: lines, personId: person,
                       paidByPersonId: payer, repaymentDismissed: nil, reconciled: reconciled, hasReceipt: nil,
-                      forgiven: forgiven, hasHistory: nil, recurring: recurring)
+                      forgiven: forgiven, hasHistory: nil, recurring: recurring, iou: nil)
 }
 
 private func labelLine(_ amount: Int, person: String? = nil, category: String? = nil) -> SplitLine {

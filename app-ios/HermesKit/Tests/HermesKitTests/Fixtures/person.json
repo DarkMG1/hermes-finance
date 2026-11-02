@@ -16,7 +16,8 @@
       "effectCents": 1500,
       "balanceAfterCents": 200,
       "settled": false,
-      "hasReceipt": false
+      "hasReceipt": false,
+      "leftCents": 200
     },
     {
       "transactionId": "txn-4",
@@ -27,7 +28,14 @@
       "effectCents": -1000,
       "balanceAfterCents": -1300,
       "settled": false,
-      "hasReceipt": false
+      "hasReceipt": false,
+      "paidBack": [
+        {
+          "transactionId": "txn-3",
+          "lineId": "line-2",
+          "amountCents": 1000
+        }
+      ]
     },
     {
       "transactionId": "txn-6",
@@ -42,5 +50,24 @@
     }
   ],
   "spentOnThemCents": 1500,
-  "forgivenCents": 0
+  "forgivenCents": 0,
+  "openItems": [
+    {
+      "transactionId": "txn-3",
+      "lineId": "line-2",
+      "date": "2026-03-12",
+      "payee": "Synthetic Split",
+      "totalCents": 1500,
+      "leftCents": 200,
+      "hasReceipt": false,
+      "paybacks": [
+        {
+          "transactionId": "txn-4",
+          "lineId": null,
+          "date": "2026-03-11",
+          "amountCents": 1000
+        }
+      ]
+    }
+  ]
 }

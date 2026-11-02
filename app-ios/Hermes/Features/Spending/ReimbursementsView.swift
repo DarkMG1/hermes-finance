@@ -10,6 +10,8 @@ struct ReimbursementsView: View {
     @State private var opened: LedgerTransaction?
     @State private var openGeneration = 0
     @State private var showsEarlier = false
+    /// Rows still tagged Reimbursement that could move to IOUs; false on servers before 2.1.0.
+    @State private var canCleanUp = false
 
     var body: some View {
         List {
@@ -32,6 +34,11 @@ struct ReimbursementsView: View {
         .themedForm()
         .navigationTitle("Reimbursements")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if canCleanUp {
+                ToolbarItem(placement: .topBarTrailing) { NavigationLink("Move to IOUs") { ReimbursementsCleanupView() } }
+            }
+        }
         .task { await load() }
         .refreshable { await load() }
         .sheet(item: $opened) { transaction in TransactionDetailSheet(transaction: transaction) { await load() } }
@@ -73,6 +80,7 @@ struct ReimbursementsView: View {
         guard let reader = model.reader else { return }
         generation += 1
         let gen = generation
+        async let cleanup = try? reader.read("/v1/people/reimbursements-cleanup", as: ReimbursementsCleanup.self).value
         do {
             let loaded = try await reader.read("/v1/reimbursements", as: Reimbursements.self)
             guard gen == generation, !Task.isCancelled else { return }
@@ -82,6 +90,9 @@ struct ReimbursementsView: View {
             guard gen == generation, !Task.isCancelled else { return }
             self.error = errorMessage(error)
         }
+        let rows = await cleanup?.rows
+        guard gen == generation, !Task.isCancelled else { return }
+        canCleanUp = !(rows ?? []).isEmpty
     }
 
     /// Rows carry ids only, so the transaction is read fresh; a slow read must not open over a sheet a later tap already opened.

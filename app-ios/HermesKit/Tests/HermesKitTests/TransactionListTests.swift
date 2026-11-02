@@ -7,7 +7,7 @@ private func row(_ id: String, _ date: String = "2026-03-10", account: String = 
                       payee: "Synthetic Quill", bankDescription: "SYNTHETIC CARD PAYMENT", merchantName: nil,
                       pending: false, categoryId: category, notes: nil, splitLines: lines, personId: person,
                       paidByPersonId: payer, repaymentDismissed: nil, reconciled: nil, hasReceipt: nil,
-                      forgiven: nil, hasHistory: nil, recurring: nil)
+                      forgiven: nil, hasHistory: nil, recurring: nil, iou: nil)
 }
 
 @Test func appendedPagesKeepExistingRowsAndDropRepeatedIDs() {

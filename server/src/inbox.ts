@@ -3,6 +3,7 @@ import type { Db } from './db.ts';
 import type { Deps } from './deps.ts';
 import { addDays, localDay } from './days.ts';
 import { ApiError } from './errors.ts';
+import { dropLinks } from './ious.ts';
 import { applyItems, computeShares, getItemization, ME, replaceItems, ShareError } from './itemize.ts';
 import { getTransaction, lookups, rowToTransaction, TXN_COLS, type TxnRow } from './ledger.ts';
 import { assertPersonTaggable } from './people.ts';
@@ -129,6 +130,7 @@ export function linkInbox(deps: Deps, inboxId: string, transactionId: string): L
       assertPersonTaggable(db, row.for_person_id, 'personId', txn.id);
       db.prepare('UPDATE transactions SET person_id = ?, category_id = NULL, category_owner_set = 1, updated_at = ? WHERE id = ?')
         .run(row.for_person_id, now, transactionId);
+      if (txn.personId !== row.for_person_id) dropLinks(db, transactionId, null);
     }
     db.prepare(`INSERT INTO receipts (transaction_id, jpeg, bytes, created_at, tax_cents, tip_cents, fees_cents, total_cents, read_at, model)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)

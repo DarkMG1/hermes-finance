@@ -45,6 +45,15 @@ struct TransactionDetailSheet: View {
     @State private var othersChanged: Set<String> = []
     /// onAppear runs again when a full-screen cover (camera, receipt viewer) closes; fill the fields only once.
     @State private var loaded = false
+    /// Reloaded after the payback picker saves, so the row shows the new links without reopening.
+    @State private var iou: TransactionIOU?
+    @State private var paying: PaybackTarget?
+    /// The picker opened right after Save tagged this deposit: the sheet closes with it.
+    @State private var closeAfterPaying = false
+    /// The saved copy when the sheet stays open after Save (the open-items read failed).
+    @State private var afterSave: LedgerTransaction?
+    /// Kept apart from `error` (Save's), so a successful reload clears only its own message.
+    @State private var iouError: String?
 
     var body: some View {
         Sheet(
@@ -57,12 +66,12 @@ struct TransactionDetailSheet: View {
             onSave: { Task { await save() } }
         ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
-                LabeledContent("Amount") { MoneyText(cents: transaction.amountCents) }
+                LabeledContent("Amount") { MoneyText(cents: current.amountCents) }
                 DatePicker("Date", selection: $date, displayedComponents: .date)
                     .disabled(busy || writes.unresolved || deleteWrites.unresolved)
-                LabeledContent("Account", value: model.accountName(transaction.accountId))
-                if transaction.pending { LabeledContent("Status", value: "Pending") }
-                if !transaction.bankDescription.isEmpty { LabeledContent("Bank description", value: transaction.bankDescription) }
+                LabeledContent("Account", value: model.accountName(current.accountId))
+                if current.pending { LabeledContent("Status", value: "Pending") }
+                if !current.bankDescription.isEmpty { LabeledContent("Bank description", value: current.bankDescription) }
             }
             if !forgiven {
                 Section {
@@ -74,22 +83,27 @@ struct TransactionDetailSheet: View {
             Section {
                 Field(label: "Payee", error: payeeInvalid ? "Payee can't be empty" : nil) { TextField("Payee", text: $payee) }
                 // the saved payee, not the text being typed
-                if showsHistory && (transaction.hasHistory == true || bill != nil) {
+                if showsHistory && (current.hasHistory == true || bill != nil) {
                     NavigationLink {
                         PayeeHistoryView(match: bill.map { [URLQueryItem(name: "recurringId", value: $0.id)] }
-                                         ?? [URLQueryItem(name: "name", value: transaction.payee)]
-                                         + (transaction.bankDescription.isEmpty ? [] : [URLQueryItem(name: "bank", value: transaction.bankDescription)]),
-                                         title: bill?.name ?? transaction.payee) { ids in
-                            othersChanged.formUnion(ids.subtracting([transaction.id]))
+                                         ?? [URLQueryItem(name: "name", value: current.payee)]
+                                         + (current.bankDescription.isEmpty ? [] : [URLQueryItem(name: "bank", value: current.bankDescription)]),
+                                         title: bill?.name ?? current.payee) { ids in
+                            othersChanged.formUnion(ids.subtracting([current.id]))
                             // this sheet's own charge changed there: its copy is stale, so close it rather than let it save over
-                            if ids.contains(transaction.id) { busy = true; await onChange(); dismiss() } else { savedOutside = true }
+                            if ids.contains(current.id) { busy = true; await onChange(); dismiss() } else { savedOutside = true }
                         }
                     } label: { Text("History") }
                 }
-                if transaction.splitLines.isEmpty {
+                if current.splitLines.isEmpty {
                     if paidById == nil {
                         NavigationLink { PersonPicker(selection: $personId, noneTitle: noneTitle) } label: {
-                            LabeledContent(transaction.amountCents < 0 ? "For" : "Repaid by", value: personId.map(model.personName) ?? noneTitle)
+                            LabeledContent(current.amountCents < 0 ? "For" : "Repaid by", value: personId.map(model.personName) ?? noneTitle)
+                        }
+                        // the saved person's links; hidden while another person is picked but not saved
+                        if current.amountCents > 0, let saved = current.personId, personId == saved, let iou {
+                            Button { paying = paybackTarget(saved) } label: { LabeledContent("Paying back", value: paybackLabel(iou)) }
+                                .foregroundStyle(Palette.text)
                         }
                     }
                     // someone else paid this manual expense: it stays your spending, and counts as their credit
@@ -104,12 +118,12 @@ struct TransactionDetailSheet: View {
                         }
                     }
                 }
-                NotesField(text: $notes, error: error)
+                NotesField(text: $notes, error: error ?? iouError)
             }
             .disabled(writes.unresolved || deleteWrites.unresolved)
-            if !transaction.splitLines.isEmpty || canSplit {
-                Section(transaction.splitLines.isEmpty ? "" : "Split") {
-                    ForEach(transaction.splitLines) { line in
+            if !current.splitLines.isEmpty || canSplit {
+                Section(current.splitLines.isEmpty ? "" : "Split") {
+                    ForEach(current.splitLines) { line in
                         ListRow(
                             title: model.tagLabel(personId: line.personId, categoryId: line.categoryId, amountCents: line.amountCents), subtitle: line.notes
                         ) {
@@ -117,7 +131,7 @@ struct TransactionDetailSheet: View {
                         }
                     }
                     if forgiven {
-                        let name = transaction.splitLines.first?.personId.map(model.personName) ?? "them"
+                        let name = current.splitLines.first?.personId.map(model.personName) ?? "them"
                         Text("Forgiveness for \(name). Delete it to change the amount.").textStyle(.caption, color: Palette.secondaryText)
                     }
                     if splitDrifted {
@@ -126,21 +140,21 @@ struct TransactionDetailSheet: View {
                     }
                     // unsaved edits would be lost when the split saves and this sheet closes, so the button saves them first
                     if canSplit {
-                        Button(transaction.splitLines.isEmpty ? "Split transaction" : "Edit split") { Task { await split() } }
+                        Button(current.splitLines.isEmpty ? "Split transaction" : "Edit split") { Task { await split() } }
                             .disabled(busy || payeeInvalid || deleteWrites.unresolved)
                     }
                 }
             }
             if !forgiven {
                 Section("Receipt") {
-                    ReceiptSection(transactionId: transaction.id, hadReceipt: transaction.hasReceipt ?? false, busy: $receiptBusy,
-                                   onItemize: patch.isEmpty && transaction.amountCents < 0 ? { itemizing = true } : nil) { savedOutside = true }
+                    ReceiptSection(transactionId: current.id, hadReceipt: current.hasReceipt ?? false, busy: $receiptBusy,
+                                   onItemize: patch.isEmpty && current.amountCents < 0 ? { itemizing = true } : nil) { savedOutside = true }
                 }
                 .disabled(deleteWrites.unresolved)
             }
             if let bill {
                 Section { Text("Recurring · \(RecurringFrequency.label(bill.frequency))") }
-            } else if transaction.canMarkRecurring {
+            } else if current.canMarkRecurring {
                 Section {
                     // dialog on its button: on the Form it floats mid-screen
                     Button("Mark as recurring…") {
@@ -155,14 +169,14 @@ struct TransactionDetailSheet: View {
                     InlineError(message: recurringError)
                 }
             }
-            if transaction.repaymentDismissed == true {
+            if current.repaymentDismissed == true {
                 Section {
                     Text("Hidden from repayment suggestions").textStyle(.subhead, color: Palette.secondaryText)
                     HButton(title: "Undo", busy: busy) { Task { await undoDismiss() } }
                         .disabled(writes.unresolved || deleteWrites.unresolved)
                 }
             }
-            if transaction.source == "manual" {
+            if current.source == "manual" {
                 Section {
                     HButton(title: "Delete transaction", kind: .destructive, busy: busy) { confirmDelete = true }
                         .disabled(writes.unresolved)
@@ -175,14 +189,7 @@ struct TransactionDetailSheet: View {
         .onAppear {
             guard !loaded else { return }
             loaded = true
-            payee = transaction.payee
-            notes = transaction.notes ?? ""
-            categoryId = transaction.categoryId
-            personId = transaction.personId
-            paidById = transaction.paidByPersonId
-            date = DayText.date(transaction.date) ?? .now
-            loadedDate = DayText.ymd(date)
-            reconciled = transaction.reconciled ?? false
+            fill(transaction)
         }
         // a swipe-down skips onCancel, so the reconcile or receipt change refreshes the list here
         .onDisappear {
@@ -209,6 +216,13 @@ struct TransactionDetailSheet: View {
                 dismiss()
             }
         })
+        .sheet(item: $paying, onDismiss: { if closeAfterPaying { dismiss() } }, content: { target in
+            PaybackPicker(target: target) {
+                savedOutside = true
+                // the sheet closes with the picker: nothing to show the reload in
+                if !closeAfterPaying { await reloadIOU() }
+            }
+        })
         .sheet(isPresented: $itemizing, onDismiss: {
             // the items save rewrote the split or the amount: this sheet's copy is stale, so close it
             if savedFromItems {
@@ -216,46 +230,94 @@ struct TransactionDetailSheet: View {
                 Task { await onChange(); dismiss() }
             }
         }, content: {
-            ItemizeView(transaction: transaction) { savedFromItems = true }
+            ItemizeView(transaction: current) { savedFromItems = true }
         })
     }
 
     private var splitDrifted: Bool {
-        !transaction.splitLines.isEmpty && transaction.splitLines.reduce(0) { $0 + $1.amountCents } != transaction.amountCents
+        !current.splitLines.isEmpty && current.splitLines.reduce(0) { $0 + $1.amountCents } != current.amountCents
     }
 
-    private var forgiven: Bool { transaction.forgiven == true }
-    private var bill: TransactionRecurring? { marked ?? transaction.recurring }
+    private var current: LedgerTransaction { afterSave ?? transaction }
+
+    private func fill(_ transaction: LedgerTransaction) {
+        payee = transaction.payee
+        notes = transaction.notes ?? ""
+        categoryId = transaction.categoryId
+        personId = transaction.personId
+        paidById = transaction.paidByPersonId
+        date = DayText.date(transaction.date) ?? .now
+        loadedDate = DayText.ymd(date)
+        reconciled = transaction.reconciled ?? false
+        iou = transaction.iou
+    }
+
+    private var forgiven: Bool { current.forgiven == true }
+    private var bill: TransactionRecurring? { marked ?? current.recurring }
     private var unresolved: Bool { writes.unresolved || deleteWrites.unresolved || undoWrites.unresolved || recurringWrites.unresolved }
-    private var canSplit: Bool { transaction.paidByPersonId == nil && paidById == nil && !forgiven }
+    private var canSplit: Bool { current.paidByPersonId == nil && paidById == nil && !forgiven }
     private var trimmedPayee: String { payee.trimmingCharacters(in: .whitespacesAndNewlines) }
 
-    private var payeeInvalid: Bool { transaction.source == "manual" && trimmedPayee.isEmpty }
+    private var payeeInvalid: Bool { current.source == "manual" && trimmedPayee.isEmpty }
 
     private var patch: PatchTransactionBody {
         PatchTransactionBody(
             // a person clears the category on the server, so the category is only sent when nobody is chosen
-            categoryId: personId == nil && categoryId != transaction.categoryId ? .set(categoryId) : .unchanged,
-            payee: trimmedPayee != transaction.payee ? .set(trimmedPayee.isEmpty ? nil : trimmedPayee) : .unchanged,
-            notes: notes != (transaction.notes ?? "") ? .set(notes.isEmpty ? nil : notes) : .unchanged,
-            personId: personId != transaction.personId ? .set(personId) : .unchanged,
-            paidByPersonId: paidById != transaction.paidByPersonId ? .set(paidById) : .unchanged,
+            categoryId: personId == nil && categoryId != current.categoryId ? .set(categoryId) : .unchanged,
+            payee: trimmedPayee != current.payee ? .set(trimmedPayee.isEmpty ? nil : trimmedPayee) : .unchanged,
+            notes: notes != (current.notes ?? "") ? .set(notes.isEmpty ? nil : notes) : .unchanged,
+            personId: personId != current.personId ? .set(personId) : .unchanged,
+            paidByPersonId: paidById != current.paidByPersonId ? .set(paidById) : .unchanged,
             date: DayText.ymd(date) != loadedDate ? DayText.ymd(date) : nil)
     }
 
-    private var noneTitle: String { transaction.amountCents < 0 ? "Me" : "Nobody" }
+    private func paybackLabel(_ iou: TransactionIOU) -> String {
+        switch iou.paidBack.count {
+        case 0: "Just the balance"
+        case 1: iou.paidBack[0].payee ?? "1 item"
+        case let n: "\(n) items"
+        }
+    }
 
-    private var canHavePayer: Bool { transaction.source == "manual" && transaction.amountCents < 0 }
+    private func paybackTarget(_ personId: String) -> PaybackTarget {
+        PaybackTarget(transactionId: current.id, lineId: nil, personId: personId, paybackCents: current.amountCents)
+    }
+
+    private func reloadIOU() async {
+        guard let reader = model.reader else { return }
+        do {
+            iou = try await reader.read("/v1/transactions/\(current.id)", as: LedgerTransaction.self).value.iou
+            iouError = nil
+        } catch {
+            iouError = "Couldn't refresh what this pays back: \(errorMessage(error))"
+        }
+    }
+
+    private var noneTitle: String { current.amountCents < 0 ? "Me" : "Nobody" }
+
+    private var canHavePayer: Bool { current.source == "manual" && current.amountCents < 0 }
 
     private func save() async {
         guard let client = model.client else { return }
         busy = true
         defer { busy = false }
+        // a deposit newly tagged to someone goes on to what it paid back, like a confirmed repayment suggestion
+        let paidBy = current.amountCents > 0 && current.splitLines.isEmpty && personId != current.personId ? personId : nil
         do {
-            _ = try await client.patchTransaction(id: transaction.id, body: patch, idempotencyKey: writes.key)
+            let saved = try await client.patchTransaction(id: current.id, body: patch, idempotencyKey: writes.key)
             writes.didSucceed()
             await onChange()
-            dismiss()
+            guard let target = paidBy.map(paybackTarget) else { return dismiss() }
+            do {
+                guard let choices = try await model.paybackChoices(target), !choices.items.isEmpty else { return dismiss() }
+                closeAfterPaying = true
+                paying = target
+            } catch {
+                // the tag is saved: stay open on it, and the Paying back row is the retry
+                afterSave = saved
+                fill(saved)
+                iouError = "Saved. Couldn't load open items — use Paying back to link them."
+            }
         } catch {
             writes.didFail(error)
             self.error = writes.unresolved ? "Couldn't confirm the save. Tap Save to retry." : errorMessage(error)
@@ -263,12 +325,12 @@ struct TransactionDetailSheet: View {
     }
 
     private func split() async {
-        guard !patch.isEmpty else { splitting = transaction; return }
+        guard !patch.isEmpty else { splitting = current; return }
         guard let client = model.client else { return }
         busy = true
         defer { busy = false }
         do {
-            let saved = try await client.patchTransaction(id: transaction.id, body: patch, idempotencyKey: writes.key)
+            let saved = try await client.patchTransaction(id: current.id, body: patch, idempotencyKey: writes.key)
             writes.didSucceed()
             savedForSplit = true
             splitting = saved
@@ -287,7 +349,7 @@ struct TransactionDetailSheet: View {
         reconcileError = nil
         defer { reconciling = false }
         do {
-            _ = try await client.setReconciled(id: transaction.id, reconciled: on, amountCents: on ? transaction.amountCents : nil,
+            _ = try await client.setReconciled(id: current.id, reconciled: on, amountCents: on ? current.amountCents : nil,
                                                idempotencyKey: UUID().uuidString)
             savedOutside = true
         } catch {
@@ -299,13 +361,13 @@ struct TransactionDetailSheet: View {
     }
 
     private func markRecurring(_ frequency: String) async {
-        guard !recurringBusy, transaction.canMarkRecurring, let client = model.client else { return }
+        guard !recurringBusy, current.canMarkRecurring, let client = model.client else { return }
         recurringBusy = true
         defer { recurringBusy = false }
         recurringError = nil
         markFrequency = frequency
         do {
-            let item = try await client.createRecurring(body: CreateRecurringBody(transactionId: transaction.id, frequency: frequency, name: nil),
+            let item = try await client.createRecurring(body: CreateRecurringBody(transactionId: current.id, frequency: frequency, name: nil),
                                                         idempotencyKey: recurringWrites.key)
             recurringWrites.didSucceed()
             marked = TransactionRecurring(id: item.id, name: item.name, frequency: item.frequency)
@@ -322,7 +384,7 @@ struct TransactionDetailSheet: View {
         busy = true
         defer { busy = false }
         do {
-            _ = try await client.patchTransaction(id: transaction.id, body: PatchTransactionBody(repaymentDismissed: false),
+            _ = try await client.patchTransaction(id: current.id, body: PatchTransactionBody(repaymentDismissed: false),
                                                   idempotencyKey: undoWrites.key)
             undoWrites.didSucceed()
             await onChange()
@@ -338,7 +400,7 @@ struct TransactionDetailSheet: View {
         busy = true
         defer { busy = false }
         do {
-            try await client.deleteTransaction(id: transaction.id, idempotencyKey: deleteWrites.key)
+            try await client.deleteTransaction(id: current.id, idempotencyKey: deleteWrites.key)
             deleteWrites.didSucceed()
             await onChange()
             dismiss()

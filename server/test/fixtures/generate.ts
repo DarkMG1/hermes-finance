@@ -30,6 +30,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
     plaidCategory: 'TRANSFER_IN_ACCOUNT_TRANSFER', bankDescription: 'ZELLE FROM SYNTHETIC QUILL' });
   seedTxn(db, { id: 'txn-6', accountId: 'manual', date: '2026-03-09', amountCents: -300, categoryId: 'cat-food', payee: 'Synthetic Market',
     paidByPersonId: 'person-1' });
+  db.prepare("INSERT INTO iou_links (id, payback_transaction_id, payback_line_id, item_transaction_id, item_line_id, amount_cents, created_at) VALUES ('link-1', 'txn-4', NULL, 'txn-3', 'line-2', 1000, 'seed')").run();
   const snap = db.prepare('INSERT INTO balance_snapshots (account_id, date, balance_cents) VALUES (?, ?, ?)');
   snap.run('acct-checking', '2026-03-14', 400000);
   snap.run('acct-card', '2026-03-14', 4000);
@@ -54,6 +55,8 @@ export async function buildFixtures(): Promise<Record<string, string>> {
     categories: await get('/v1/categories'),
     'transactions-page': await get('/v1/transactions?limit=2'),
     transaction: await get('/v1/transactions/txn-3'),
+    'transaction-iou': await get('/v1/transactions/txn-4'),
+    'payback-choices': await get('/v1/transactions/txn-4/payback?personId=person-1'),
     spending: await get('/v1/spending?period=month&date=2026-03'),
     expenses: await get('/v1/expenses?period=month&date=2026-03'),
     reconcile: await get('/v1/reconcile?month=2026-03'),
@@ -99,6 +102,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   seedTxn(db, { id: 'txn-9', accountId: 'acct-card', date: '2026-03-04', amountCents: -2000, categoryId: 'cat-reimb', payee: 'Synthetic Airline' });
   seedTxn(db, { id: 'txn-10', accountId: 'acct-checking', date: '2026-03-06', amountCents: 1500, categoryId: 'cat-reimb', payee: 'Synthetic Employer' });
   out.reimbursements = await get('/v1/reimbursements');
+  out['reimbursements-cleanup'] = await get('/v1/people/reimbursements-cleanup');
   // investments use their own database so the accounts, home and net worth fixtures stay as they are
   const inv = makeTestDeps().deps;
   seedAccount(inv.db, { id: 'acct-brokerage', type: 'investment', subtype: 'brokerage', balanceCents: 150000 });

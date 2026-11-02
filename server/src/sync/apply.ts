@@ -63,6 +63,8 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
   };
   const isInvestment = db.prepare("SELECT 1 FROM accounts WHERE plaid_account_id = ? AND type = 'investment'");
   const moveSplit = db.prepare('UPDATE split_lines SET transaction_id = ? WHERE transaction_id = ?');
+  const moveLinks = [db.prepare('UPDATE iou_links SET payback_transaction_id = ? WHERE payback_transaction_id = ?'),
+    db.prepare('UPDATE iou_links SET item_transaction_id = ? WHERE item_transaction_id = ?')];
   // a receipt added while pending moves to the posted row (unless that row already has one)
   // items follow their receipt; checked before the receipt moves, with the same condition
   const moveItems = db.prepare('UPDATE receipt_items SET transaction_id = ? WHERE transaction_id = ? AND NOT EXISTS (SELECT 1 FROM receipts WHERE transaction_id = ?)');
@@ -148,6 +150,7 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
     const id = (getRow.get(t.transactionId) as { id: string }).id;
     // a split made while pending moves to the posted row
     if (pendingId) moveSplit.run(id, pendingId);
+    if (pendingId) for (const m of moveLinks) m.run(id, pendingId);
     if (pendingId) moveItems.run(id, pendingId, id);
     if (pendingId) moveReceipt.run(id, pendingId, id);
     if (pendingId) moveInboxLink.run(id, pendingId);

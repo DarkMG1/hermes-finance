@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { AppleCardImportResult, Bank, Home, InboxList, Investments, Itemization, LinkSession, NetWorthHistory, PayeeHistory, RecurringList, Reimbursements, Spending, SyncStatus, Transaction, TransactionPage } from '@hermes/shared';
+import { AppleCardImportResult, Bank, Home, InboxList, Investments, Itemization, LinkSession, NetWorthHistory, PayeeHistory, PaybackChoices, PersonDetail, RecurringList, Reimbursements, ReimbursementsCleanup, Spending, SyncStatus, Transaction, TransactionPage } from '@hermes/shared';
 import { buildFixtures, FIXTURE_DIR } from './fixtures/generate.ts';
 
 const root = join(import.meta.dirname, '..', '..');
@@ -20,6 +20,10 @@ test('fixtures satisfy the shared contract', async () => {
   PayeeHistory.parse(f['payee-history.json']);
   TransactionPage.parse(f['transactions-page.json']);
   Transaction.parse(f['transaction.json']);
+  assert.equal(Transaction.parse(f['transaction-iou.json']).iou!.paidBack[0]!.lineId, 'line-2');
+  assert.equal(PersonDetail.parse(f['person.json']).openItems[0]!.paybacks[0]!.transactionId, 'txn-4');
+  assert.deepEqual(PaybackChoices.parse(f['payback-choices.json']).linked.map((l) => l.lineId), ['line-2']);
+  assert.equal(ReimbursementsCleanup.parse(f['reimbursements-cleanup.json']).rows[0]!.transaction.id, 'txn-10');
   Spending.parse(f['spending.json']);
   NetWorthHistory.parse(f['net-worth.json']);
   Investments.parse(f['investments.json']);

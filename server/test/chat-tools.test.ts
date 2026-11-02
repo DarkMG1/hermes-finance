@@ -7,7 +7,7 @@ import { getNetWorth, localDay } from '../src/networth.ts';
 import { getInvestments } from '../src/investments.ts';
 import { getRecurring } from '../src/recurring.ts';
 import { listAccounts, listTransactions } from '../src/ledger.ts';
-import { listPeople } from '../src/people.ts';
+import { getPerson, listPeople } from '../src/people.ts';
 import { makeTestDeps, seedAccount, seedCategory, seedPerson, seedTxn } from './helpers.ts';
 
 function setup() {
@@ -167,4 +167,19 @@ test('show_chart validates its input and returns only shown; its label names the
     assert.equal(runTool(deps, 'show_chart', bad).isError, true, JSON.stringify(bad).slice(0, 80));
   }
   assert.equal(toolLabel('show_chart', chart), 'Chart · March spending by category');
+});
+
+test('open_items matches the person screen and lists only people with something open', () => {
+  const { deps, db } = setup();
+  seedPerson(db, { id: 'p2', name: 'Synthetic Wren' });
+  seedTxn(db, { id: 'owed', accountId: 'a1', date: '2026-03-06', amountCents: -2000, personId: 'p1', payee: 'SYNTHETIC CONCERT' });
+  seedTxn(db, { id: 'lent', accountId: 'a1', date: '2026-03-06', amountCents: -1000, personId: 'p2' });
+  seedTxn(db, { id: 'repaid', accountId: 'a1', date: '2026-03-07', amountCents: 1000, personId: 'p2' });
+  assert.deepEqual(call(deps, 'open_items', {}), [{ personId: 'p1', name: 'Synthetic Quill', items: getPerson(db, 'p1')!.openItems }]);
+  seedPerson(db, { id: 'p3', name: 'Synthetic Moss', archived: true });
+  seedTxn(db, { id: 'old', accountId: 'a1', date: '2026-03-04', amountCents: -700, personId: 'p3', payee: 'SYNTHETIC LUNCH' });
+  assert.deepEqual(call(deps, 'open_items', { personId: 'p1' }), [{ personId: 'p1', name: 'Synthetic Quill', items: getPerson(db, 'p1')!.openItems }]);
+  assert.deepEqual(call(deps, 'open_items', {}).map((p: { personId: string }) => p.personId), ['p1', 'p3']);
+  assert.deepEqual(call(deps, 'open_items', { personId: 'p2' }), []);
+  assert.equal(toolLabel('open_items', {}), 'Open IOUs');
 });

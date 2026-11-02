@@ -434,3 +434,15 @@ for (const edit of ['shares', 'remove', 'forgive']) test(`restoration never resu
   assert.equal(getPerson(db, 'p1')!.person.balanceCents, 0);
   if (edit !== 'forgive') assert.deepEqual(getTransaction(db, 'new', '2026-03-15')!.splitLines, []);
 });
+
+test('linking a For-person receipt to a charge tagged to someone else drops its payback links (R6)', () => {
+  const { deps, db, snap, charge } = setup();
+  snap('r1');
+  db.prepare("UPDATE inbox_receipts SET for_person_id = 'p1' WHERE id = 'r1'").run();
+  charge('c1', '2026-03-11', -1050, { personId: 'p2', categoryId: null });
+  seedTxn(db, { id: 'back', accountId: 'card', date: '2026-03-12', amountCents: 1050, personId: 'p2' });
+  db.prepare(`INSERT INTO iou_links (id, payback_transaction_id, payback_line_id, item_transaction_id, item_line_id, amount_cents, created_at)
+    VALUES ('k1', 'back', NULL, 'c1', NULL, 1050, '2026-04-01T00:00:00Z')`).run();
+  linkInbox(deps, 'r1', 'c1');
+  assert.equal(db.prepare('SELECT COUNT(*) FROM iou_links').pluck().get(), 0);
+});
