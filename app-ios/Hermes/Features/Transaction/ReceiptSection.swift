@@ -171,10 +171,15 @@ struct CameraPicker: UIViewControllerRepresentable {
 }
 
 struct DocumentScanner: UIViewControllerRepresentable {
-    /// One image: several pages are stitched top to bottom. Nil when cancelled or failed.
-    let onFinish: (UIImage?) -> Void
+    /// Each page; none when cancelled or failed.
+    let onPages: ([UIImage]) -> Void
 
-    func makeCoordinator() -> Coordinator { Coordinator(onFinish: onFinish) }
+    init(onPages: @escaping ([UIImage]) -> Void) { self.onPages = onPages }
+
+    /// One image: several pages are stitched top to bottom. Nil when cancelled or failed.
+    init(onFinish: @escaping (UIImage?) -> Void) { onPages = { onFinish(Coordinator.stitched($0)) } }
+
+    func makeCoordinator() -> Coordinator { Coordinator(onFinish: onPages) }
 
     func makeUIViewController(context: Context) -> VNDocumentCameraViewController {
         let controller = VNDocumentCameraViewController()
@@ -186,16 +191,16 @@ struct DocumentScanner: UIViewControllerRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, @preconcurrency VNDocumentCameraViewControllerDelegate {
-        let onFinish: (UIImage?) -> Void
-        init(onFinish: @escaping (UIImage?) -> Void) { self.onFinish = onFinish }
+        let onFinish: ([UIImage]) -> Void
+        init(onFinish: @escaping ([UIImage]) -> Void) { self.onFinish = onFinish }
 
         func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
-            onFinish(Self.stitched((0..<scan.pageCount).map { scan.imageOfPage(at: $0) }))
+            onFinish((0..<scan.pageCount).map { scan.imageOfPage(at: $0) })
         }
 
-        func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) { onFinish(nil) }
+        func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) { onFinish([]) }
 
-        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) { onFinish(nil) }
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) { onFinish([]) }
 
         static func stitched(_ pages: [UIImage]) -> UIImage? {
             guard pages.count > 1 else { return pages.first }
