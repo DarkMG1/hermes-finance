@@ -29,7 +29,7 @@ struct AddTransactionSheet: View {
                 .pickerStyle(.segmented)
                 Field(label: "Amount", error: amountError) { TextField("0.00", text: $amountText).keyboardType(.decimalPad) }
                 Field(label: "Payee") { TextField("Payee", text: $payee) }
-                DatePicker("Date", selection: $date, displayedComponents: .date)
+                DatePicker("Date", selection: $date, in: DateBounds.range(), displayedComponents: .date)
                 NavigationLink { CategoryPicker(selection: $categoryId) } label: {
                     LabeledContent("Category", value: model.categoryName(categoryId))
                 }

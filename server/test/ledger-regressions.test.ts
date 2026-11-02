@@ -110,9 +110,8 @@ test('date inputs leave room for a valid exclusive year boundary', async () => {
   const app = buildApp(deps);
   const create = (date: string) => app.inject({ method: 'POST', url: '/v1/transactions', headers: w(date), payload: { date, amountCents: -1234, payee: 'Synthetic Lamp' } });
   assert.equal((await create('9999-12-31')).statusCode, 400);
-  const last = await create('9998-12-31');
-  assert.equal(last.statusCode, 201);
-  assert.equal((await app.inject({ method: 'PATCH', url: `/v1/transactions/${last.json().id}`, headers: w('date'), payload: { date: '9999-01-01' } })).statusCode, 400);
+  seedTxn(deps.db, { id: 'last', accountId: 'manual', date: '9998-12-31', amountCents: -1234, payee: 'Synthetic Lamp' });
+  assert.equal((await app.inject({ method: 'PATCH', url: '/v1/transactions/last', headers: w('date'), payload: { date: '9999-01-01' } })).statusCode, 400);
   for (const query of ['period=month&date=9998-12', 'period=year&date=9998']) {
     const r = await app.inject({ method: 'GET', url: `/v1/spending?${query}`, headers: AUTH });
     assert.equal(r.statusCode, 200);

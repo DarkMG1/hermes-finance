@@ -141,3 +141,11 @@ private func itemJSON() throws -> Data {
     json["amountCents"] = 600
     #expect(try !eligible())
 }
+
+@Test func deletingAnAlreadyDeletedRecurringItemIsNotAnError() async throws {
+    let body = Data(#"{"error":{"code":"NOT_FOUND","message":"recurring item not found"}}"#.utf8)
+    let transport = FakeTransport([.success(HTTPResponse(status: 404, body: body))])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    try await client.deleteRecurring(id: "r1")
+    #expect(transport.requests.first?.method == "DELETE")
+}

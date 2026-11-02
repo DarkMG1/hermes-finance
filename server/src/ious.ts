@@ -126,8 +126,9 @@ export function captureLinks(db: Db, txnId: string): Captured[] {
 
 /** Retarget each captured link: to the row if it is unsplit and has that person, else (from an unsplit row) their first line with that sign.
  * Split → split: while that person's count of same-sign lines is unchanged, the one at the same rank among them (other lines may move);
- * else the line at the same position if it still has that person and sign; else the line's person changed and the link drops (R6). */
-export function restoreLinks(db: Db, txnId: string, captured: Captured[]): void {
+ * else the line at the same position if it still has that person and sign; else the line's person changed and the link drops (R6).
+ * moved (old line id → new, from a save that sent line ids): a link follows its own line, and drops if that line went or changed person. */
+export function restoreLinks(db: Db, txnId: string, captured: Captured[], moved = new Map<string, string>()): void {
   const row = db.prepare('SELECT person_id AS p, amount_cents AS a FROM transactions WHERE id = ?').get(txnId) as { p: string | null; a: number } | undefined;
   const lines = linesOf(db, txnId);
   const del = db.prepare('DELETE FROM iou_links WHERE id = ?');
@@ -138,7 +139,9 @@ export function restoreLinks(db: Db, txnId: string, captured: Captured[]): void 
     if (!c.personId) continue;
     const same = alike({ p: c.personId, a: c.sign });
     const peers = lines.filter(same);
-    const target = !lines.length ? (same(row) ? null : undefined)
+    const oldLine = c.side === 'payback' ? c.link.payback_line_id : c.link.item_line_id;
+    const target = moved.size ? (oldLine === null ? undefined : lines.find((l) => l.id === moved.get(oldLine) && same(l))?.id)
+      : !lines.length ? (same(row) ? null : undefined)
       : c.pos === null ? peers[0]?.id : peers.length === c.peers ? peers[c.rank]?.id : same(lines[c.pos]) ? lines[c.pos]!.id : undefined;
     if (target === undefined) continue;
     const k = c.link;

@@ -69,6 +69,8 @@ public struct LedgerTransaction: Codable, Sendable, Identifiable, Hashable {
     public let recurring: TransactionRecurring?
     /// What a person-tagged charge still has left, or what a payback paid; nil when none, and from servers before 2.1.0.
     public let iou: TransactionIOU?
+    /// The bank's own date under an owner-set one; nil on manual rows and from servers before 2.1.1.
+    public let bankDate: String?
 }
 
 public struct TransactionIOU: Codable, Sendable, Hashable {

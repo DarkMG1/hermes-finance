@@ -131,7 +131,6 @@ struct ActivityView: View {
     /// Re-reads one edited row in place: reloading from the first page drops the later pages and jumps the list.
     private func refresh(_ id: String) async {
         guard let reader = model.reader else { return }
-        if !query.trimmingCharacters(in: .whitespaces).isEmpty { await load(reset: true); return }
         let requested = filters
         let gen = generation
         do {

@@ -4,7 +4,7 @@ import { CreatePersonBody, ForgiveBody, ListPeopleQuery, PatchPersonBody, Paybac
 import type { Deps } from '../deps.ts';
 import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
-import { parseBody } from '../validate.ts';
+import { assertOwnerDate, parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { REIMBURSEMENT } from '../cashflow.ts';
 import { memberships } from '../recurring.ts';
@@ -43,6 +43,7 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
 
   app.post<{ Params: { id: string } }>('/v1/people/:id/forgive', async (req, reply) => {
     const body = parseBody(ForgiveBody, req.body);
+    assertOwnerDate(body.date, localDay(deps.now()));
     const r = idempotentWrite(deps, req, () => {
       const detail = getPerson(db, req.params.id);
       if (!detail) throw new ApiError(404, 'NOT_FOUND', 'person not found');

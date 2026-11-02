@@ -410,3 +410,30 @@ test('PATCH date works on a split row and 404s on a removed row', async () => {
   seedTxn(deps.db, { id: 'gone', accountId: 'a1', date: '2026-03-01', amountCents: -1, removedAt: 'x' });
   assert.equal((await app.inject({ method: 'PATCH', url: '/v1/transactions/gone', headers: w('ds-2'), payload: { date: '2026-04-01' } })).statusCode, 404);
 });
+
+test('Use bank date on a row without a bank date is a 409 and changes nothing', async () => {
+  const { deps, app } = setup();
+  seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-01', amountCents: -100 });
+  const r = await app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: w('nb-1'), payload: { date: null } });
+  assert.deepEqual([r.statusCode, r.json().code, r.json().field], [409, 'NO_BANK_DATE', 'date']);
+  assert.equal((deps.db.prepare("SELECT date FROM transactions WHERE id = 't1'").get() as { date: string }).date, '2026-03-01');
+});
+
+test('owner dates run from 2000-01-01 to a year after today', async () => {
+  const { deps, app } = setup();
+  seedPerson(deps.db, { id: 'p1', name: 'Synthetic Wren' });
+  seedTxn(deps.db, { id: 't1', accountId: 'a1', date: '2026-03-01', amountCents: -100, source: 'plaid', sourceId: 'p1' });
+  const patch = (date: string) => app.inject({ method: 'PATCH', url: '/v1/transactions/t1', headers: w(`bp-${date}`), payload: { date } });
+  const create = (date: string, extra = {}) => app.inject({ method: 'POST', url: '/v1/transactions', headers: w(`bc-${date}-${Object.keys(extra).length}`),
+    payload: { date, amountCents: -100, payee: 'Synthetic Lamp', ...extra } });
+  for (const send of [patch, create, (d: string) => create(d, { paidByPersonId: 'p1' })]) {
+    for (const date of ['1999-12-31', '2027-03-16']) {
+      const r = await send(date);
+      assert.deepEqual([r.statusCode, r.json().field], [400, 'date'], date);
+    }
+    for (const date of ['2000-01-01', '2027-03-15']) assert.ok([200, 201].includes((await send(date)).statusCode), date);
+  }
+  assert.equal((await app.inject({ method: 'GET', url: '/v1/transactions?from=1999-01-01&to=1999-12-31', headers: AUTH })).statusCode, 200, 'filters are not bounded');
+  const missing = await app.inject({ method: 'PATCH', url: '/v1/transactions/nope', headers: w('bp-missing'), payload: { date: '1999-12-31' } });
+  assert.equal(missing.statusCode, 404, 'a missing row is a 404 before its date is checked');
+});

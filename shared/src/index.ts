@@ -36,6 +36,8 @@ const PaidBack = z.object({ transactionId: Id, lineId: Id.nullable(), amountCent
 
 export const Transaction = z.object({
   id: Id, accountId: Id, source: z.enum(['plaid', 'manual', 'actual', 'applecard']), date: DateStr,
+  /** The bank's own date, even under an owner-set date; null on manual and Actual rows and on rows the owner re-dated before 2.1.1. */
+  bankDate: DateStr.nullable(),
   amountCents: Cents, payee: z.string(), bankDescription: z.string(), merchantName: z.string().nullable(),
   pending: z.boolean(), categoryId: Id.nullable(), notes: z.string().nullable(), personId: Id.nullable(), paidByPersonId: Id.nullable(), repaymentDismissed: z.boolean(), splitLines: z.array(SplitLine),
   /** Marked reconciled and the bank amount unchanged since. */
@@ -64,8 +66,8 @@ export type ListTransactionsQuery = z.infer<typeof ListTransactionsQuery>;
 export const PatchTransactionBody = z.object({
   categoryId: Id.nullable().optional(), payee: z.string().min(1).max(200).nullable().optional(), notes: z.string().max(2000).nullable().optional(),
   personId: Id.nullable().optional(), paidByPersonId: Id.nullable().optional(), repaymentDismissed: z.boolean().optional(),
-  /** The owner's date; bank sync and Apple Card re-import keep it from then on. */
-  date: DateInput.optional(),
+  /** The owner's date; bank sync and Apple Card re-import keep it from then on. null: back to the bank's date. */
+  date: DateInput.nullable().optional(),
 }).strict()
   .refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' })
   .refine((b) => !(b.categoryId && b.personId), { message: 'categoryId and personId cannot both be set', path: ['personId'] })
@@ -79,6 +81,8 @@ export type PatchAccountBody = z.infer<typeof PatchAccountBody>;
  * Send personId and payee explicitly (null to clear); omitting either on an annotated split returns APP_OUTDATED. */
 export const PutSplitsBody = z.object({
   lines: z.array(z.object({
+    /** A current line of this transaction: its IOU links stay on this line. Absent on new lines and from older apps. */
+    id: Id.optional(),
     amountCents: LedgerCents.refine((n) => n !== 0, 'amount must not be zero'), categoryId: Id.nullable(), notes: z.string().max(2000).nullable().optional(),
     personId: Id.nullable().optional(),
     /** The line's own name; blank or missing shows the transaction's payee. */

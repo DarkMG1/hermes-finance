@@ -306,7 +306,7 @@ test('read again clears the tags; tags saved while it reads win with 409 CHANGED
   assert.deepEqual(JSON.parse(getInboxRow(db, ID)!.items!), items);
 });
 
-test('deleting a linked receipt from its transaction is a real delete: the row stays linked and does not re-link', async () => {
+test('deleting a linked receipt from its transaction is a real delete: the inbox row drops its link and does not come back', async () => {
   const { put, post, get, app, db, deps } = setup();
   await put(ID);
   await settle();
@@ -315,7 +315,7 @@ test('deleting a linked receipt from its transaction is a real delete: the row s
   assert.equal((await app.inject({ method: 'DELETE', url: '/v1/transactions/c1/receipt', headers: AUTH })).statusCode, 204);
   const list = (await get('/v1/receipts/inbox')).json();
   assert.deepEqual([list.waiting.length, list.recentlyLinked.length], [0, 0]);
-  assert.equal(getInboxRow(db, ID)!.linked_transaction_id, 'c1');
+  assert.equal(getInboxRow(db, ID)!.linked_transaction_id, null);
   assert.equal(matchInbox(deps), 0);
 });
 

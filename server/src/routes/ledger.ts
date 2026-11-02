@@ -4,7 +4,7 @@ import { CreateTransactionBody, ExpensesQuery, HistoryExclusionBody, ListTransac
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { writeSplit } from '../splits.ts';
-import { parseBody } from '../validate.ts';
+import { assertOwnerDate, parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { assertPersonTaggable, homePeople } from '../people.ts';
 import { excludedBy, getExpenses, getPayeeHistory, getReimbursements, getSpending } from '../cashflow.ts';
@@ -70,6 +70,9 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
     const r = idempotentWrite(deps, req, () => {
       const current = getTransaction(db, req.params.id, localDay(deps.now()));
       if (!current) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      assertOwnerDate(body.date, localDay(deps.now()));
+      const date = body.date === null ? current.bankDate : body.date;
+      if (date === null) throw new ApiError(409, 'NO_BANK_DATE', 'this transaction has no bank date to go back to', 'date');
       if (current.forgiven && (body.categoryId !== undefined || body.personId !== undefined || body.paidByPersonId !== undefined)) {
         throw new ApiError(409, 'FORGIVENESS_LOCKED', 'delete the forgiveness to change it');
       }
@@ -110,12 +113,12 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       if (body.notes !== undefined) { sets.push('notes = ?'); args.push(body.notes); }
       if (body.paidByPersonId !== undefined) { sets.push('paid_by_person_id = ?'); args.push(body.paidByPersonId); }
       if (body.repaymentDismissed !== undefined) { sets.push('repayment_dismissed = ?'); args.push(body.repaymentDismissed ? 1 : 0); }
-      if (body.date !== undefined) { sets.push('date = ?', 'date_owner_set = 1'); args.push(body.date); }
+      if (date !== undefined) { sets.push('date = ?', 'date_owner_set = ?'); args.push(date, date === current.bankDate ? 0 : 1); }
       const now = deps.now().toISOString();
       db.prepare(`UPDATE transactions SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...args, now, req.params.id);
       if (personAfter !== current.personId) dropLinks(db, current.id, null);
       if (body.categoryId) learnCategory(db, req.params.id, body.categoryId, now);
-      if (body.date !== undefined) reconcileIfMovedIntoClosedMonth(db, req.params.id, current.date, body.date, now);
+      if (date !== undefined) reconcileIfMovedIntoClosedMonth(db, req.params.id, current.date, date, now);
       return { status: 200, body: getTransaction(db, req.params.id, localDay(deps.now())) };
     });
     return reply.code(r.status).send(r.body);
@@ -174,6 +177,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
 
   app.post('/v1/transactions', async (req, reply) => {
     const body = parseBody(CreateTransactionBody, req.body);
+    assertOwnerDate(body.date, localDay(deps.now()));
     const r = idempotentWrite(deps, req, () => {
       assertCategoryExists(db, body.categoryId, 'categoryId');
       const id = randomUUID();

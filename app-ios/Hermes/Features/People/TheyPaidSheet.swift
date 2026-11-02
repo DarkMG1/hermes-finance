@@ -33,7 +33,7 @@ struct TheyPaidSheet: View {
         ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
                 Field(label: "What for") { TextField("Payee", text: $payee) }
-                DatePicker("Date", selection: $date, displayedComponents: .date)
+                DatePicker("Date", selection: $date, in: DateBounds.range(), displayedComponents: .date)
                 Field(label: "Total") { TextField("0.00", text: $totalText).keyboardType(.decimalPad) }
                 Field(label: "Just mine") { TextField("0.00", text: $justMineText).keyboardType(.decimalPad) }
                 Field(label: "Just theirs") { TextField("0.00", text: $justTheirsText).keyboardType(.decimalPad) }
