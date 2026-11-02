@@ -183,22 +183,18 @@ test('re-import fills an uncategorized row from merchant memory learned since, n
 
 const statement = (clearing: string) => `${HEADER}\n09/30/2026,${clearing},SYNTHETIC COFFEE,Synthetic Coffee,Restaurants,Purchase,5.00,Synthetic Person`;
 
-test('identical same-day purchases in separate imports stay separate when they clear on different days', async () => {
+test('a lone re-exported row whose clearing date changed updates the stored row', async () => {
   const { deps } = makeTestDeps();
   const app = buildApp(deps);
-  const csvA = statement('09/30/2026');
-  const csvB = statement('10/01/2026');
-  const importCsv = async (csv: string, key: string) => (await post(app, csv, key)).json() as { accountId: string; added: number; updated: number };
-  const a = await importCsv(csvA, 'ac-a');
-  const b = await importCsv(csvB, 'ac-b');
-  assert.deepEqual([a.added, a.updated, b.added, b.updated], [1, 0, 1, 0]);
-  const count = () => (deps.db.prepare("SELECT COUNT(*) AS n FROM transactions WHERE source = 'applecard'").get() as { n: number }).n;
-  assert.equal(count(), 2);
-  const balanceCents = () => (deps.db.prepare('SELECT balance_current_cents AS b FROM accounts WHERE id = ?').get(a.accountId) as { b: number }).b;
-  assert.equal(balanceCents(), 1000, 'both purchases count');
-  const again = [await importCsv(csvA, 'ac-a2'), await importCsv(csvB, 'ac-b2')];
-  assert.deepEqual(again.map((r) => [r.added, r.updated]), [[0, 1], [0, 1]], 'either statement re-imported updates, never duplicates');
-  assert.equal(count(), 2);
+  const a = (await post(app, statement('09/30/2026'), 'ac-a')).json() as { accountId: string };
+  const id = deps.db.prepare("SELECT id FROM transactions WHERE source = 'applecard'").pluck().get();
+  const b = (await post(app, statement('10/01/2026'), 'ac-b')).json() as { added: number; updated: number };
+  assert.deepEqual([b.added, b.updated], [0, 1]);
+  assert.deepEqual(deps.db.prepare("SELECT id, clearing_date FROM transactions WHERE source = 'applecard'").all(), [{ id, clearing_date: '2026-10-01' }]);
+  assert.equal(deps.db.prepare('SELECT balance_current_cents FROM accounts WHERE id = ?').pluck().get(a.accountId), 500);
+  const again = (await post(app, statement('10/01/2026'), 'ac-b2')).json() as { added: number; updated: number };
+  assert.deepEqual([again.added, again.updated], [0, 1]);
+  assert.equal(deps.db.prepare("SELECT COUNT(*) FROM transactions WHERE source = 'applecard'").pluck().get(), 1);
 });
 
 test('rows imported before clearing dates were stored update on re-import instead of duplicating', async () => {
@@ -350,14 +346,79 @@ test('corrections never merge an ambiguous stored pair, a file pair, or another 
   }
 });
 
-test('equal-amount counterparts still make a clearing-date correction ambiguous', async () => {
+test('an equal-amount counterpart takes a clearing-date change instead of an amount correction', async () => {
   const { deps } = makeTestDeps();
   const app = buildApp(deps);
   await post(app, [HEADER, coffee('09/30/2026'), coffee('10/01/2026').replace('5.00', '7.50')].join('\n'), 'first');
-  const before = deps.db.prepare("SELECT id, amount_cents, clearing_date FROM transactions ORDER BY clearing_date").all();
+  const before = deps.db.prepare("SELECT id, amount_cents AS a, clearing_date AS c FROM transactions ORDER BY amount_cents").all() as { id: string; a: number; c: string }[];
   const r = await post(app, [HEADER, coffee('10/02/2026').replace('5.00', '7.50')].join('\n'), 'next');
-  assert.deepEqual([r.statusCode, r.json().added, r.json().updated], [200, 1, 0]);
-  assert.deepEqual(deps.db.prepare("SELECT id, amount_cents, clearing_date FROM transactions WHERE clearing_date < '2026-10-02' ORDER BY clearing_date").all(), before);
+  assert.deepEqual([r.statusCode, r.json().added, r.json().updated], [200, 0, 1]);
+  assert.deepEqual(deps.db.prepare("SELECT id, amount_cents AS a, clearing_date AS c FROM transactions ORDER BY amount_cents").all(),
+    [{ ...before[0]!, c: '2026-10-02' }, before[1]]);
+});
+
+const cup = (amount: string, clearing = '09/30/2026') => coffee(clearing).replace('5.00', amount);
+const csv = (...rows: string[]) => [HEADER, ...rows].join('\n');
+const coffees = (db: ReturnType<typeof makeTestDeps>['deps']['db']) =>
+  db.prepare("SELECT id, amount_cents AS a, clearing_date AS c FROM transactions WHERE bank_description = 'SYNTHETIC COFFEE' ORDER BY amount_cents, clearing_date").all() as { id: string; a: number; c: string }[];
+
+test('a correction counts only unpaired file rows and unclaimed stored rows', async () => {
+  const cases: [string[], string[], number[]][] = [
+    [[cup('5.00'), cup('3.00')], [cup('7.50'), cup('3.00')], [-750, -300]],
+    [[cup('5.00'), cup('5.00')], [cup('5.00'), cup('7.50')], [-750, -500]],
+    [[cup('5.00'), cup('5.00', '10/01/2026')], [cup('5.00', '10/01/2026'), cup('7.50', '10/02/2026')], [-750, -500]],
+  ];
+  for (const [first, next, amounts] of cases) {
+    const { deps } = makeTestDeps();
+    const app = buildApp(deps);
+    await post(app, csv(...first), 'first');
+    const ids = new Set(coffees(deps.db).map((t) => t.id));
+    const r = (await post(app, csv(...next), 'next')).json() as { added: number; updated: number };
+    assert.deepEqual([r.added, r.updated], [0, 2], next.join());
+    assert.deepEqual(coffees(deps.db).map((t) => t.a), amounts, next.join());
+    assert.deepEqual(new Set(coffees(deps.db).map((t) => t.id)), ids, 'every stored row keeps its identity');
+    const again = (await post(app, csv(...next), 'again')).json() as { added: number; updated: number };
+    assert.deepEqual([again.added, again.updated], [0, 2], `re-import ${next.join()}`);
+    assert.deepEqual(coffees(deps.db).map((t) => t.a), amounts);
+  }
+});
+
+test('identical same-day purchases never merge when either side has two', async () => {
+  const cases: [string[], string[], number][] = [
+    [[coffee('09/30/2026'), coffee('10/01/2026')], [coffee('10/02/2026'), coffee('10/03/2026')], 4],
+    [[coffee('09/30/2026')], [coffee('10/02/2026'), coffee('10/03/2026')], 3],
+    [[coffee('09/30/2026'), coffee('10/01/2026')], [coffee('10/02/2026')], 3],
+  ];
+  for (const [first, next, count] of cases) {
+    const { deps } = makeTestDeps();
+    const app = buildApp(deps);
+    await post(app, csv(...first), 'first');
+    const before = coffees(deps.db);
+    await post(app, csv(...next), 'next');
+    assert.equal(coffees(deps.db).length, count, next.join());
+    for (const row of before) assert.ok(coffees(deps.db).some((t) => t.id === row.id && t.c === row.c), 'stored rows keep their clearing dates');
+  }
+});
+
+test('each import stamps its newest transaction date and an older statement never overwrites a newer one', async () => {
+  const later = '10/05/2026,10/06/2026,SYNTHETIC BOOKS,Synthetic Books,Shopping,Purchase,8.00,Synthetic Person';
+  for (const newer of [cup('7.50', '10/01/2026'), coffee('10/01/2026')]) {
+    const { deps } = makeTestDeps();
+    const app = buildApp(deps);
+    const old = statement('09/30/2026');
+    await post(app, old, 'old');
+    assert.deepEqual(deps.db.prepare('SELECT source_file_date FROM transactions').pluck().all(), ['2026-09-30']);
+    await post(app, csv(newer, later), 'new');
+    assert.deepEqual(deps.db.prepare('SELECT source_file_date FROM transactions').pluck().all(), ['2026-10-05', '2026-10-05']);
+    const snapshot = deps.db.prepare('SELECT * FROM transactions ORDER BY id').all();
+    const r = (await post(app, old, 'old-again')).json() as { added: number; updated: number };
+    assert.deepEqual([r.added, r.updated], [0, 1], newer);
+    assert.deepEqual(deps.db.prepare('SELECT * FROM transactions ORDER BY id').all(), snapshot, 'older statement re-import changes nothing');
+    // rows imported before statements were stamped stay updatable
+    deps.db.prepare('UPDATE transactions SET source_file_date = NULL').run();
+    await post(app, old, 'legacy');
+    assert.deepEqual(coffees(deps.db).map((t) => [t.a, t.c]), [[-500, '2026-09-30']], newer);
+  }
 });
 
 test('import stores the bank date under an owner date, and old or far dates are never bounded', async () => {

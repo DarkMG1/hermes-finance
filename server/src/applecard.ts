@@ -97,21 +97,23 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
   // only a per-account cutover applies: Actual never held this card, so the global migration cutover is irrelevant here
   const cutover = (db.prepare('SELECT cutover_date FROM accounts WHERE id = ?').get(accountId) as { cutover_date: string | null }).cutover_date;
   const upsert = db.prepare(`
-    INSERT INTO transactions (id, account_id, source, source_id, date, bank_date, authorized_date, clearing_date, amount_cents, bank_description, merchant_name, plaid_category, category_id, created_at, updated_at)
+    INSERT INTO transactions (id, account_id, source, source_id, date, bank_date, authorized_date, clearing_date, amount_cents, bank_description, merchant_name, plaid_category, category_id, source_file_date, created_at, updated_at)
     VALUES (@id, @accountId, 'applecard', @sourceId, @date, @date, @date, @clearing, @amount, @desc, @merchant, @plaidCategory,
-      COALESCE(@remembered, (SELECT category_id FROM plaid_category_map WHERE plaid_category = @plaidCategory)), @now, @now)
+      COALESCE(@remembered, (SELECT category_id FROM plaid_category_map WHERE plaid_category = @plaidCategory)), @fileDate, @now, @now)
     ON CONFLICT (source, source_id) DO UPDATE SET
       date = CASE WHEN transactions.date_owner_set = 1 THEN transactions.date ELSE excluded.date END, bank_date = excluded.bank_date,
       date_owner_set = CASE WHEN transactions.date = excluded.bank_date THEN 0 ELSE transactions.date_owner_set END, authorized_date = excluded.authorized_date, clearing_date = COALESCE(excluded.clearing_date, transactions.clearing_date),
-      amount_cents = excluded.amount_cents,
+      amount_cents = excluded.amount_cents, source_file_date = excluded.source_file_date,
       bank_description = excluded.bank_description, merchant_name = excluded.merchant_name, plaid_category = excluded.plaid_category,
       category_id = COALESCE(transactions.category_id, CASE WHEN transactions.category_owner_set = 0 THEN excluded.category_id END),
       updated_at = excluded.updated_at`);
   const remembered = merchantMemory(db);
   const result: AppleCardImportResult = { accountId, rows: rows.length, added: 0, updated: 0, skippedBeforeCutover: 0 };
-  const stored = db.prepare("SELECT id, source_id AS sourceId, clearing_date AS c, amount_cents AS amount FROM transactions WHERE source = 'applecard' AND source_id = ?");
+  const fileDate = rows.reduce((max, r) => (r.transactionDate > max ? r.transactionDate : max), '');
+  const cols = 'id, source_id AS sourceId, clearing_date AS c, amount_cents AS amount, source_file_date AS fileDate';
+  const stored = db.prepare(`SELECT ${cols} FROM transactions WHERE source = 'applecard' AND source_id = ?`);
   const taken = new Set<string>();
-  type Stored = { id: string; sourceId: string; c: string | null; amount: number } | undefined;
+  type Stored = { id: string; sourceId: string; c: string | null; amount: number; fileDate: string | null } | undefined;
   type Slot = { sourceId: string; row: NonNullable<Stored>; n: number };
   const groups = new Map<string, { all: Slot[]; dates: Map<string | null, Slot[]>; sourceIds: Set<string>; next: number; nextId: string }>();
   const groupFor = (base: string) => {
@@ -165,38 +167,45 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
     ids[i] = sourceId;
     found[i] = slot?.row;
   });
-  // Only a lone file row with one unclaimed stored counterpart can be a correction.
+  // Only a lone unpaired file row with one unclaimed stored counterpart can be a correction (amount) or a re-export (clearing date).
+  const unpaired = new Map<string, number>();
   const correctionKey = (r: AppleCardRow) => JSON.stringify([r.transactionDate, r.description, r.type]);
-  const counts = new Map<string, number>();
-  for (const r of rows) counts.set(correctionKey(r), (counts.get(correctionKey(r)) ?? 0) + 1);
-  const counterparts = db.prepare(`SELECT id, source_id AS sourceId, clearing_date AS c, amount_cents AS amount FROM transactions
+  for (const k of rows.flatMap((r, i) => (found[i] ? [] : [correctionKey(r), baseOf(r)]))) unpaired.set(k, (unpaired.get(k) ?? 0) + 1);
+  const counterparts = db.prepare(`SELECT ${cols} FROM transactions
     WHERE source = 'applecard' AND removed_at IS NULL AND account_id = ? AND COALESCE(authorized_date, date) = ? AND bank_description = ?`);
   rows.forEach((r, i) => {
-    if (found[i] || counts.get(correctionKey(r)) !== 1) return;
-    const candidates = (counterparts.all(accountId, r.transactionDate, r.description) as NonNullable<Stored>[]).filter((s) => {
-      if (taken.has(s.sourceId)) return false;
-      // The source hash retains Apple's type; the ledger has no separate type column.
-      const base = baseOf({ ...r, amountCents: s.amount });
-      return groupFor(base).sourceIds.has(s.sourceId);
-    });
-    // A clearing-date-only change is indistinguishable from a separate identical purchase.
-    if (candidates.length !== 1 || candidates[0]!.amount === r.amountCents) return;
-    const row = candidates[0]!;
-    if (cutover && r.transactionDate < cutover) return;
-    db.prepare('UPDATE transactions SET source_id = ? WHERE id = ?').run(ids[i]!, row.id);
+    if (found[i] || unpaired.get(baseOf(r)) !== 1 || (cutover && r.transactionDate < cutover)) return;
+    // The source hash retains Apple's type; the ledger has no separate type column.
+    const candidates = (counterparts.all(accountId, r.transactionDate, r.description) as NonNullable<Stored>[])
+      .filter((s) => !taken.has(s.sourceId) && groupFor(baseOf({ ...r, amountCents: s.amount })).sourceIds.has(s.sourceId));
+    const same = candidates.filter((s) => s.amount === r.amountCents);
+    const row = same.length ? (same.length === 1 ? same[0] : undefined)
+      : candidates.length === 1 && unpaired.get(correctionKey(r)) === 1 ? candidates[0] : undefined;
+    if (!row) return;
     taken.add(row.sourceId);
     found[i] = row;
+    if (row.fileDate && row.fileDate > fileDate) return;
+    if (same.length) { ids[i] = row.sourceId; return; }
+    db.prepare('UPDATE transactions SET source_id = ? WHERE id = ?').run(ids[i]!, row.id);
+    // keep the old amount's occurrences contiguous: its last one fills the vacated slot
+    const oldBase = baseOf({ ...r, amountCents: row.amount });
+    const lastId = idFor(oldBase, groupFor(oldBase).sourceIds.size - 1);
+    if (lastId === row.sourceId) return;
+    db.prepare("UPDATE transactions SET source_id = ? WHERE source = 'applecard' AND source_id = ?").run(row.sourceId, lastId);
+    const j = ids.indexOf(lastId);
+    if (j >= 0) ids[j] = row.sourceId; else taken.delete(row.sourceId);
   });
   rows.forEach((r, i) => {
     const sourceId = ids[i];
     const row = found[i];
     if (cutover && r.transactionDate < cutover) { result.skippedBeforeCutover += 1; return; }
     if (row) result.updated += 1; else result.added += 1;
+    if (row?.fileDate && row.fileDate > fileDate) return; // newest statement wins
     // payments must never count as spending (so never take a remembered category); other rows keep Apple's category so refunds net against purchases
     const plaidCategory = r.type.toLowerCase() === 'payment' ? 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' : r.category;
     upsert.run({ id: randomUUID(), accountId, sourceId, date: r.transactionDate, clearing: r.clearingDate, amount: r.amountCents, desc: r.description,
       merchant: r.merchant, plaidCategory,
-      remembered: plaidCategory === 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' ? null : remembered(r.merchant, r.description), now: nowIso });
+      remembered: plaidCategory === 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' ? null : remembered(r.merchant, r.description), fileDate, now: nowIso });
     if (row && row.amount !== r.amountCents) fitSplitToAmount(db, row.id, nowIso);
   });
   const sum = (db.prepare("SELECT COALESCE(SUM(amount_cents), 0) AS s FROM transactions WHERE account_id = ? AND source = 'applecard' AND removed_at IS NULL")
