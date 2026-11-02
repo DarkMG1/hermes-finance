@@ -444,3 +444,58 @@ export const SendChatBody = z.object({ clientId: z.string().min(1).max(200), tex
 export type SendChatBody = z.infer<typeof SendChatBody>;
 export const AiUsage = z.object({ month: z.string(), costCents: Cents, backupActive: z.boolean() });
 export type AiUsage = z.infer<typeof AiUsage>;
+
+const FilingStatus = z.enum(['single', 'married_joint', 'married_separate', 'head_of_household']);
+const Money = Cents.min(0).max(MAX_AMOUNT_CENTS);
+const AboutMe = z.object({
+  state: z.string().regex(/^[A-Z]{2}$/, 'expected a 2-letter state code').nullable(), filingStatus: FilingStatus.nullable(),
+  birthYear: z.number().int().min(1900).nullable(), dependents: z.number().int().min(0).max(20).nullable(),
+  retirementPct: z.number().min(0).max(100).nullable(), retirementKind: z.enum(['pre_tax', 'roth', 'mixed']).nullable(),
+  /** has a health savings account */
+  hsa: z.boolean().nullable(), note: z.string().max(2000).nullable(),
+});
+export const Profile = AboutMe.extend({ updatedAt: z.string().nullable() });
+export type Profile = z.infer<typeof Profile>;
+/** Left-out fields keep their value; null clears. birthYear is at most the owner's current year. */
+export const PutProfileBody = AboutMe.partial().strict();
+export type PutProfileBody = z.infer<typeof PutProfileBody>;
+
+const JobFields = z.object({
+  employer: z.string().trim().min(1).max(200), title: z.string().trim().max(200).nullable(),
+  status: z.enum(['offered', 'accepted', 'declined', 'current', 'past']), startDate: DateInput.nullable(), endDate: DateInput.nullable(),
+  /** annual base pay */
+  baseCents: Money.nullable(), bonusTargetPct: z.number().min(0).max(1000).nullable(),
+  signingBonusCents: Money.nullable(), relocationCents: Money.nullable(), note: z.string().max(2000).nullable(),
+});
+const datesInOrder = (j: { startDate?: string | null; endDate?: string | null }) => !j.startDate || !j.endDate || j.startDate <= j.endDate;
+export const Job = JobFields.extend({ id: Id, createdAt: z.string(), updatedAt: z.string() });
+export type Job = z.infer<typeof Job>;
+export const CreateJobBody = JobFields.partial().required({ employer: true, status: true }).strict()
+  .refine(datesInOrder, { message: 'must be on or after startDate', path: ['endDate'] });
+export type CreateJobBody = z.infer<typeof CreateJobBody>;
+export const PatchJobBody = JobFields.partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+export type PatchJobBody = z.infer<typeof PatchJobBody>;
+
+const GrantFields = z.object({
+  kind: z.enum(['rsu', 'option']), shares: z.number().positive().max(1e12).nullable(), valueCents: Money.nullable(),
+  /** options only: the price per share */
+  strikeCents: Money.nullable(), grantDate: DateInput,
+  cliffMonths: z.number().int().min(0).max(240), vestMonths: z.number().int().min(1).max(240), vestEveryMonths: z.number().int().min(1).max(240),
+});
+export const EquityGrant = GrantFields.extend({ id: Id, jobId: Id });
+export type EquityGrant = z.infer<typeof EquityGrant>;
+/** POST takes every field (shares, valueCents and strikeCents may be left out as null); PATCH takes any of them and checks the result. */
+export const GrantBody = GrantFields.partial({ shares: true, valueCents: true, strikeCents: true, cliffMonths: true }).strict()
+  .refine((g) => g.shares != null || g.valueCents != null, { message: 'shares or valueCents is required', path: ['shares'] })
+  .refine((g) => g.kind !== 'option' || g.strikeCents != null, { message: 'an option needs a strike price', path: ['strikeCents'] })
+  .refine((g) => (g.cliffMonths ?? 0) <= g.vestMonths, { message: 'must be at most vestMonths', path: ['cliffMonths'] })
+  .refine((g) => g.vestEveryMonths <= g.vestMonths, { message: 'must be at most vestMonths', path: ['vestEveryMonths'] });
+export type GrantBody = z.infer<typeof GrantBody>;
+export const PatchGrantBody = GrantFields.partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+export type PatchGrantBody = z.infer<typeof PatchGrantBody>;
+export const VestEvent = z.object({ date: DateStr, shares: z.number().nullable(), valueCents: Cents.nullable(), grantId: Id });
+export type VestEvent = z.infer<typeof VestEvent>;
+export const JobDetail = Job.extend({
+  grants: z.array(EquityGrant), nextVests: z.array(VestEvent), stubs: z.array(z.unknown()), forms: z.array(z.unknown()),
+});
+export type JobDetail = z.infer<typeof JobDetail>;

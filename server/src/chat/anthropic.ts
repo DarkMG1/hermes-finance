@@ -2,7 +2,7 @@ import type { Db } from '../db.ts';
 import type { Config } from '../config.ts';
 import { localDay } from '../days.ts';
 
-export type Feature = 'chat' | 'receipt';
+export type Feature = 'chat' | 'receipt' | 'profile';
 export type Usage = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
 type Key = 'main' | 'backup';
 type Event = { type: string; [k: string]: unknown };
