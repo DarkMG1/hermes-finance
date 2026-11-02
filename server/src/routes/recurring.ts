@@ -78,7 +78,7 @@ export function recurringRoutes(app: FastifyInstance, deps: Deps): void {
     if (db.prepare('SELECT 1 FROM recurring_streams WHERE stream_id = ?').get(req.params.id)) {
       throw new ApiError(409, 'PLAID_RECURRING', 'hide a recurring item Plaid found instead of deleting it');
     }
-    db.prepare('DELETE FROM recurring_manual WHERE id = ?').run(req.params.id);
+    if (!db.prepare('DELETE FROM recurring_manual WHERE id = ?').run(req.params.id).changes) throw new ApiError(404, 'NOT_FOUND', 'recurring item not found');
     return reply.code(204).send();
   });
 }

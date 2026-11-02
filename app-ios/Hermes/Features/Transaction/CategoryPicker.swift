@@ -7,12 +7,14 @@ struct CategoryPicker: View {
     @Binding var selection: String?
     /// The top row, which clears the selection.
     var noneTitle = "Uncategorized"
+    var spendingOnly = false
     @State private var query = ""
 
     var body: some View {
+        let categories = model.categories.filter { !spendingOnly || (!$0.isIncome && !$0.isTransfer) }
         List {
             Button { choose(nil) } label: { SelectionRow(title: noneTitle, selected: selection == nil) }
-            ForEach(CategoryGrouping.group(model.categories, matching: query), id: \.name) { group in
+            ForEach(CategoryGrouping.group(categories, matching: query), id: \.name) { group in
                 Section(group.name) {
                     ForEach(group.items) { category in
                         Button { choose(category.id) } label: { SelectionRow(title: category.name, selected: selection == category.id) }

@@ -39,6 +39,7 @@ test('mark as recurring, rename, change interval, hide, show again, delete', asy
   assert.equal((await send('PATCH', '/v1/recurring/s-tv', { hidden: false })).statusCode, 200);
   assert.equal((await send('DELETE', '/v1/recurring/s-tv')).statusCode, 409);
   assert.equal((await send('DELETE', `/v1/recurring/${id}`)).statusCode, 204);
+  assert.equal((await send('DELETE', `/v1/recurring/${id}`)).statusCode, 404);
   assert.equal((await send('PATCH', '/v1/recurring/nope', { hidden: true })).statusCode, 404);
   // a stream Plaid stopped is still there, ended; a tombstoned one is gone
   assert.deepEqual([(await send('PATCH', '/v1/recurring/s-off', { hidden: true })).json().ended], [true]);

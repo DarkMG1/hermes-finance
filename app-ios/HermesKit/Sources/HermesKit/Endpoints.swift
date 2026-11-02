@@ -157,7 +157,8 @@ extension APIClient {
         try await send("PUT", "/v1/payee-history/exclusions", body: body, idempotencyKey: nil, timeout: 20)
     }
 
+    /// A 404 means it is already gone.
     public func deleteRecurring(id: String) async throws {
-        try await send("DELETE", "/v1/recurring/\(id)", body: nil, idempotencyKey: nil, timeout: 20)
+        do { try await send("DELETE", "/v1/recurring/\(id)", body: nil, idempotencyKey: nil, timeout: 20) } catch ClientError.api(status: 404, _) {}
     }
 }

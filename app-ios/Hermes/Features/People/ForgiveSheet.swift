@@ -29,7 +29,7 @@ struct ForgiveSheet: View {
                     }
                 }
                 DatePicker("Date", selection: $date, in: DateBounds.range(), displayedComponents: .date)
-                NavigationLink { CategoryPicker(selection: $categoryId, noneTitle: "Gifts") } label: {
+                NavigationLink { CategoryPicker(selection: $categoryId, noneTitle: "Gifts", spendingOnly: true) } label: {
                     LabeledContent("Category", value: categoryId == nil ? "Gifts" : model.categoryName(categoryId))
                 }
                 NotesField(text: $notes, error: error)
