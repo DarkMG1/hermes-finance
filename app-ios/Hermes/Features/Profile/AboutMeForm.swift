@@ -46,6 +46,23 @@ struct EditForm<B: Equatable>: View {
     }
 }
 
+/// A row that opens its saved fields in an edit form.
+struct EditRow<B: Equatable, Row: View>: View {
+    let title: String
+    let fields: [DraftField<B>]
+    let original: B
+    let row: Row
+    let save: @MainActor (B, String) async throws -> Void
+    @State private var editing = false
+
+    var body: some View {
+        // plain: a link or unlink button beside it in the row keeps its own taps
+        Button { editing = true } label: { row }
+            .buttonStyle(.plain)
+            .sheet(isPresented: $editing) { EditForm(title: title, fields: fields, original: original, save: save) }
+    }
+}
+
 /// About me: a fixed short list and a note.
 struct AboutMeForm: View {
     @Environment(AppModel.self) private var model

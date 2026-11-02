@@ -12,7 +12,7 @@ import Testing
     let years = try decode(TaxYears.self, "tax-years")
     #expect(years.years.first?.effectiveRate == 0.0997 && years.years.first?.returns.first?.jurisdiction == "federal")
     let linked = try decode(LedgerTransaction.self, "transaction-pay-stub")
-    #expect(linked.payStub?.grossCents == 420000 && linked.payStub?.otherDeductionsCents == 1870)
+    #expect(linked.payStub?.id == job.stubs.first?.id)
     #expect(try decode(LedgerTransaction.self, "transaction").payStub == nil)
 }
 

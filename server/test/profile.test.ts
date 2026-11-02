@@ -213,7 +213,9 @@ test('stub matches: exact net within 3 days, deposits only, closest then newest,
   assert.equal((await send('PUT', `/v1/pay-stubs/${s.id}/link`, { transactionId: 'c' }, 'link')).statusCode, 200);
   assert.deepEqual(await ids(s.id), ['a', 'c', 'b', 'early'], 'its own deposit stays listed');
   const t = (await get('/v1/transactions/c')).json();
-  assert.deepEqual(t.payStub, { id: s.id, grossCents: 400000, federalCents: 50000, stateCents: 15000, socialSecurityCents: 24800, medicareCents: 5800, retirementCents: 24000, otherDeductionsCents: 400 });
+  assert.deepEqual(t.payStub, { id: s.id }, 'a deposit carries only the stub id');
+  assert.deepEqual((await get(`/v1/pay-stubs/${s.id}`)).json(), linked.json());
+  assert.equal((await get('/v1/pay-stubs/missing')).statusCode, 404);
   assert.equal((await get('/v1/transactions/a')).json().payStub, null);
   assert.deepEqual((await get('/v1/transactions?limit=10')).json().transactions.filter((x: { payStub: unknown }) => x.payStub).map((x: { id: string }) => x.id), ['c']);
   const twin = (await send('POST', '/v1/pay-stubs', stub)).json();

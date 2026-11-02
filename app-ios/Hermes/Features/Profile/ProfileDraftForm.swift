@@ -18,6 +18,8 @@ struct DraftField<B> {
     let key: String
     let label: String
     let kind: Kind
+    /// a choice the server needs: no "None"
+    var required = false
 
     func text(_ body: B) -> String {
         switch kind {
@@ -102,7 +104,7 @@ struct DraftFields<B>: View {
             Group {
                 if let options = field.options {
                     Picker(field.label, selection: text) {
-                        Text("None").tag("")
+                        if !field.required { Text("None").tag("") }
                         ForEach(options, id: \.value) { Text($0.label).tag($0.value) }
                     }
                 } else {
@@ -318,7 +320,7 @@ struct ProfileDraftForm: View {
         ("head_of_household", "Head of household"),
     ]
 
-    private static let returnFields: [DraftField<TaxReturnBody>] = [
+    static let returnFields: [DraftField<TaxReturnBody>] = [
         .init(key: "year", label: "Tax year", kind: .whole(\.year)),
         .init(key: "jurisdiction", label: "Federal or state code", kind: .code(\.jurisdiction)),
         .init(key: "filingStatus", label: "Filing status", kind: .choice(\.filingStatus, filingStatuses)),
@@ -341,8 +343,8 @@ struct ProfileDraftForm: View {
         ("other", "Other"),
     ]
 
-    private static let formFields: [DraftField<TaxFormBody>] = [
-        .init(key: "kind", label: "Form", kind: .choice(\.kind, formKinds)),
+    static let formFields: [DraftField<TaxFormBody>] = [
+        .init(key: "kind", label: "Form", kind: .choice(\.kind, formKinds), required: true),
         .init(key: "year", label: "Tax year", kind: .whole(\.year)),
         .init(key: "payer", label: "Employer or payer", kind: .text(\.payer)),
         .init(key: "amountCents", label: "Wages (W-2 box 1) or amount", kind: .money(\.amountCents)),
@@ -353,7 +355,7 @@ struct ProfileDraftForm: View {
         .init(key: "medicareWagesCents", label: "Medicare wages", kind: .money(\.medicareWagesCents)),
     ]
 
-    private static let stubFields: [DraftField<PayStubBody>] = [
+    static let stubFields: [DraftField<PayStubBody>] = [
         .init(key: "payDate", label: "Pay date", kind: .date(\.payDate)),
         .init(key: "periodStart", label: "Period start", kind: .date(\.periodStart)),
         .init(key: "periodEnd", label: "Period end", kind: .date(\.periodEnd)),
@@ -380,8 +382,8 @@ struct ProfileDraftForm: View {
         .init(key: "note", label: "Note", kind: .text(\.note)),
     ]
 
-    private static let grantFields: [DraftField<GrantBody>] = [
-        .init(key: "kind", label: "Kind", kind: .choice(\.kind, [("rsu", "RSU"), ("option", "Option")])),
+    static let grantFields: [DraftField<GrantBody>] = [
+        .init(key: "kind", label: "Kind", kind: .choice(\.kind, [("rsu", "RSU"), ("option", "Option")]), required: true),
         .init(key: "shares", label: "Shares", kind: .number(\.shares)),
         .init(key: "valueCents", label: "Value", kind: .money(\.valueCents)),
         .init(key: "strikeCents", label: "Strike price (options)", kind: .money(\.strikeCents)),

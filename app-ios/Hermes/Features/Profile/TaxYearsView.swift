@@ -19,11 +19,17 @@ struct TaxYearsView: View {
                             LabeledContent("Effective rate", value: rate.formatted(.percent.precision(.fractionLength(1))))
                         }
                         ForEach(year.returns) { r in
-                            ListRow(title: r.jurisdiction == "federal" ? "Federal" : r.jurisdiction ?? "Return", subtitle: Self.summary(r.fields)) {
-                                if let refund = r.refundCents {
-                                    Text(refund < 0 ? "Owed \(Money.format(-refund))" : "Refund \(Money.format(refund))")
-                                        .textStyle(.subhead, color: refund < 0 ? Palette.loss : Palette.gain)
-                                }
+                            let place = r.jurisdiction == "federal" ? "Federal" : r.jurisdiction ?? "Return"
+                            // year and jurisdiction pick the return (PUT upserts by them), so they're in the title, not editable
+                            EditRow(title: "\(year.year) \(place)", fields: Self.fields, original: r.fields,
+                                    row: ListRow(title: place, subtitle: Self.summary(r.fields)) {
+                                        if let refund = r.refundCents {
+                                            Text(refund < 0 ? "Owed \(Money.format(-refund))" : "Refund \(Money.format(refund))")
+                                                .textStyle(.subhead, color: refund < 0 ? Palette.loss : Palette.gain)
+                                        }
+                                    }) { body, key in
+                                _ = try await model.client?.putTaxReturn(body, from: r.fields, idempotencyKey: key)
+                                await load()
                             }
                             .deleteSwipe("Delete this return?") { client, key in
                                 try await client.deleteTaxReturn(id: r.id, idempotencyKey: key)
@@ -53,6 +59,8 @@ struct TaxYearsView: View {
             self.error = errorMessage(error)
         }
     }
+
+    private static let fields = ProfileDraftForm.returnFields.filter { $0.key != "year" && $0.key != "jurisdiction" }
 
     private static func summary(_ r: TaxReturnBody) -> String? {
         let parts = [r.totalIncomeCents.map { "Income \(Money.format($0))" }, r.totalTaxCents.map { "tax \(Money.format($0))" }].compactMap { $0 }

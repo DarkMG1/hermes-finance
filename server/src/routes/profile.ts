@@ -173,6 +173,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
     return reply.code(r.status).send(r.body);
   });
 
+  app.get<{ Params: { id: string } }>('/v1/pay-stubs/:id', async (req) => stub(req.params.id));
   app.delete('/v1/pay-stubs/:id', del('pay_stubs', 'pay stub'));
   app.get<{ Params: { id: string } }>('/v1/pay-stubs/:id/matches', async (req) => stubMatches(db, stub(req.params.id), today()));
 

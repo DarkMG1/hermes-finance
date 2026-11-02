@@ -9,6 +9,7 @@ struct JobDetailView: View {
     @State private var detail: JobDetail?
     @State private var error: String?
     @State private var editing = false
+    @State private var addingGrant = false
     @State private var linking: PayStub?
 
     var body: some View {
@@ -16,16 +17,21 @@ struct JobDetailView: View {
             InlineError(message: error)
             if let detail {
                 Section("Pay") { pay(detail.job.fields) }
-                if !detail.grants.isEmpty {
-                    Section("Grants") {
-                        ForEach(detail.grants) { grant in
-                            ListRow(title: Self.grantTitle(grant.fields), subtitle: Self.schedule(grant.fields))
-                                .deleteSwipe("Delete this grant?") { client, key in
-                                    try await client.deleteGrant(jobId: id, id: grant.id, idempotencyKey: key)
-                                    await load()
-                                }
+                Section("Grants") {
+                    ForEach(detail.grants) { grant in
+                        EditRow(title: "Grant", fields: ProfileDraftForm.grantFields, original: grant.fields,
+                                row: ListRow(title: Self.grantTitle(grant.fields), subtitle: Self.schedule(grant.fields))) { body, key in
+                            _ = try await model.client?.patchGrant(jobId: id, id: grant.id, body: body, from: grant.fields, idempotencyKey: key)
+                            await load()
+                        }
+                        .deleteSwipe("Delete this grant?") { client, key in
+                            try await client.deleteGrant(jobId: id, id: grant.id, idempotencyKey: key)
+                            await load()
                         }
                     }
+                    Button("Add grant") { addingGrant = true }
+                }
+                if !detail.grants.isEmpty {
                     Section("Next vests") {
                         if detail.nextVests.isEmpty { Text("Fully vested").textStyle(.subhead, color: Palette.secondaryText) }
                         ForEach(detail.nextVests, id: \.self) { vest in
@@ -36,9 +42,16 @@ struct JobDetailView: View {
                 if !detail.stubs.isEmpty {
                     Section("Pay stubs") {
                         ForEach(detail.stubs) { stub in
-                            ListRow(title: stub.payDate.map(DayText.display) ?? "Pay stub", subtitle: stub.netCents.map { "Net \(Money.format($0))" }) {
+                            HStack {
+                                EditRow(title: "Pay stub", fields: ProfileDraftForm.stubFields, original: stub.fields,
+                                        row: ListRow(title: stub.payDate.map(DayText.display) ?? "Pay stub",
+                                                     subtitle: [stub.netCents.map { "Net \(Money.format($0))" }, stub.transactionId.map { _ in "Linked" }]
+                                                        .compactMap { $0 }.joined(separator: " · "))) { body, key in
+                                    _ = try await model.client?.patchPayStub(id: stub.id, body: body, from: stub.fields, idempotencyKey: key)
+                                    await load()
+                                }
                                 if stub.transactionId != nil {
-                                    Text("Linked").textStyle(.subhead, color: Palette.secondaryText)
+                                    UnlinkButton(stub: stub) { await load() }
                                 } else {
                                     Button("Link…") { linking = stub }.buttonStyle(.borderless)
                                 }
@@ -73,6 +86,12 @@ struct JobDetailView: View {
                 }
             }
         }
+        .sheet(isPresented: $addingGrant) {
+            EditForm(title: "New grant", fields: ProfileDraftForm.grantFields, original: Self.newGrant) { body, key in
+                _ = try await model.client?.createGrant(jobId: id, body: body, idempotencyKey: key)
+                await load()
+            }
+        }
         .sheet(item: $linking, onDismiss: { Task { await load() } }, content: { PayStubLinkSheet(stub: $0) })
         .task { await load() }
         .refreshable { await load() }
@@ -100,8 +119,10 @@ struct JobDetailView: View {
         }
     }
 
-    private static let fields: [DraftField<CreateJobBody>] =
-        [.init(key: "status", label: "Status", kind: .choice(\.status, ProfileView.statuses))] + ProfileDraftForm.jobFields
+    static let fields: [DraftField<CreateJobBody>] =
+        [.init(key: "status", label: "Status", kind: .choice(\.status, ProfileView.statuses), required: true)] + ProfileDraftForm.jobFields
+
+    private static let newGrant = { var g = GrantBody(); g.kind = "rsu"; return g }()
 
     static func amount(shares: Double?, valueCents: Int?) -> String {
         [shares.map { "\($0.formatted()) shares" }, valueCents.map { Money.format($0) }].compactMap { $0 }.joined(separator: " · ")
@@ -124,19 +145,55 @@ struct JobDetailView: View {
     }
 }
 
-/// A W-2 or 1099, swipe to delete.
+/// A W-2 or 1099: tap to edit, swipe to delete.
 struct TaxFormRow: View {
+    @Environment(AppModel.self) private var model
     let form: TaxForm
-    let onDeleted: () async -> Void
+    let onChange: () async -> Void
 
     var body: some View {
         let kind = ProfileDraftForm.formKinds.first { $0.value == form.kind }?.label ?? "Form"
-        ListRow(title: [kind, form.year.map(String.init)].compactMap { $0 }.joined(separator: " "), subtitle: form.payer) {
-            if let amount = form.amountCents { MoneyText(cents: amount, colored: false) }
+        EditRow(title: kind, fields: ProfileDraftForm.formFields, original: form.fields,
+                row: ListRow(title: [kind, form.year.map(String.init)].compactMap { $0 }.joined(separator: " "), subtitle: form.payer) {
+                    if let amount = form.amountCents { MoneyText(cents: amount, colored: false) }
+                }) { body, key in
+            _ = try await model.client?.patchTaxForm(id: form.id, body: body, from: form.fields, idempotencyKey: key)
+            await onChange()
         }
         .deleteSwipe("Delete this form?") { client, key in
             try await client.deleteTaxForm(id: form.id, idempotencyKey: key)
-            await onDeleted()
+            await onChange()
+        }
+    }
+}
+
+/// Unlinks a stub's deposit after a confirmation.
+private struct UnlinkButton: View {
+    @Environment(AppModel.self) private var model
+    let stub: PayStub
+    let onUnlinked: () async -> Void
+    @State private var confirming = false
+    @State private var writes = WriteGuard()
+    @State private var error: String?
+
+    var body: some View {
+        Button("Unlink") { confirming = true }
+            .buttonStyle(.borderless)
+            .confirmationDialog("Unlink this paycheck's deposit?", isPresented: $confirming, titleVisibility: .visible) {
+                Button("Unlink", role: .destructive) { Task { await unlink() } }
+            }
+            .alert(error ?? "", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {}
+    }
+
+    private func unlink() async {
+        guard let client = model.client else { return }
+        do {
+            _ = try await client.linkPayStub(id: stub.id, transactionId: nil, idempotencyKey: writes.key)
+            writes.didSucceed()
+            await onUnlinked()
+        } catch {
+            writes.didFail(error)
+            self.error = writes.unresolved ? "Couldn't confirm the unlink. Unlink again to retry; it won't be applied twice." : errorMessage(error)
         }
     }
 }

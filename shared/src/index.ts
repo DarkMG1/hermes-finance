@@ -50,9 +50,8 @@ export const Transaction = z.object({
   recurring: z.object({ id: z.string(), name: z.string(), frequency: RecurringFrequency }).nullable(),
   /** Unsplit person-tagged rows: an item's leftCents (null on a payback) and what a payback paid. */
   iou: z.object({ leftCents: Cents.nullable(), paidBack: z.array(PaidBack.extend({ payee: z.string() })) }).nullable(),
-  /** The pay stub linked to this deposit. */
-  payStub: z.object({ id: Id, grossCents: Cents, federalCents: Cents, stateCents: Cents, socialSecurityCents: Cents, medicareCents: Cents,
-    retirementCents: Cents, otherDeductionsCents: Cents }).nullable().optional(),
+  /** The pay stub linked to this deposit; only its id, so its figures stay behind Face ID (GET /v1/pay-stubs/:id). */
+  payStub: z.object({ id: Id }).nullable().optional(),
 });
 export type Transaction = z.infer<typeof Transaction>;
 

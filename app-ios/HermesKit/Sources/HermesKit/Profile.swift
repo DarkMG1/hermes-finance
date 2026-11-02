@@ -189,16 +189,9 @@ public struct TaxYears: Codable, Sendable, Equatable {
     public let years: [Year]
 }
 
-/// The pay stub linked to a deposit.
+/// The pay stub linked to a deposit: only its id, its figures are read behind Face ID.
 public struct PayStubSummary: Codable, Sendable, Hashable {
     public let id: String
-    public let grossCents: Int
-    public let federalCents: Int
-    public let stateCents: Int
-    public let socialSecurityCents: Int
-    public let medicareCents: Int
-    public let retirementCents: Int
-    public let otherDeductionsCents: Int
 }
 
 public enum ProfileKind: String, Codable, Sendable, CaseIterable {

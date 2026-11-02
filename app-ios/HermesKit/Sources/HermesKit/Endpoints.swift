@@ -222,6 +222,8 @@ extension APIClient {
         try await write("PATCH", "/v1/pay-stubs/\(id)", body: edit(body, from: original, keepUnchanged: false), key: idempotencyKey)
     }
 
+    public func payStub(id: String) async throws -> PayStub { try decode(try await getData("/v1/pay-stubs/\(id)")) }
+
     public func deletePayStub(id: String, idempotencyKey: String) async throws {
         try await send("DELETE", "/v1/pay-stubs/\(id)", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
     }

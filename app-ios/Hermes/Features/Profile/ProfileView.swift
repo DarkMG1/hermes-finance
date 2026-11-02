@@ -56,6 +56,7 @@ struct ProfileView: View {
     @State private var error: String?
     @State private var editingAboutMe = false
     @State private var adding: ProfileKind?
+    @State private var addingJob = false
 
     var body: some View {
         List {
@@ -103,11 +104,19 @@ struct ProfileView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     ForEach(ProfileKind.allCases, id: \.self) { kind in Button(kind.title) { adding = kind } }
+                    Divider()
+                    Button("Job, entered by hand") { addingJob = true }
                 } label: { Image(systemName: "plus") }
                     .accessibilityLabel("Add document")
             }
         }
         .profileCapture(kind: $adding) { await load() }
+        .sheet(isPresented: $addingJob) {
+            EditForm(title: "New job", fields: JobDetailView.fields, original: Self.newJob) { body, key in
+                _ = try await model.client?.createJob(body, idempotencyKey: key)
+                await load()
+            }
+        }
         .sheet(isPresented: $editingAboutMe) {
             if let profile { AboutMeForm(profile: profile) { await load() } }
         }
@@ -126,6 +135,8 @@ struct ProfileView: View {
             self.error = errorMessage(error)
         }
     }
+
+    private static let newJob = { var j = CreateJobBody(); j.status = "current"; return j }()
 
     static let statuses: [(value: String, label: String)] = [
         ("current", "Current"), ("accepted", "Accepted"), ("offered", "Offers"), ("past", "Past"), ("declined", "Declined"),
