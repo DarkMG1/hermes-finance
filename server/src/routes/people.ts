@@ -23,7 +23,7 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
     const rows = db.prepare(`SELECT ${TXN_COLS} FROM transactions t WHERE removed_at IS NULL AND (
         EXISTS (SELECT 1 FROM categories c WHERE c.id = t.category_id AND ${REIMBURSEMENT})
         OR EXISTS (SELECT 1 FROM split_lines sl JOIN categories c ON c.id = sl.category_id WHERE sl.transaction_id = t.id AND ${REIMBURSEMENT}))
-      ORDER BY date DESC, created_at DESC, rowid DESC LIMIT 500`).all() as TxnRow[];
+      ORDER BY date DESC, created_at DESC, rowid DESC`).all() as TxnRow[];
     const l = lookups(db, rows, memberships(db, localDay(deps.now())));
     return { rows: rows.map((r) => rowToTransaction(r, l)) };
   });
@@ -138,7 +138,7 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
     const q = parseBody(PaybackQuery, req.query);
     const t = paybackTarget(req.params.id, q.lineId);
     const key = entryKey(t.txn.id, t.lineId);
-        const linked = (db.prepare('SELECT item_transaction_id AS transactionId, item_line_id AS lineId, amount_cents AS amountCents FROM iou_links WHERE payback_transaction_id = ? AND payback_line_id IS ? ORDER BY created_at, id')
+    const linked = (db.prepare('SELECT item_transaction_id AS transactionId, item_line_id AS lineId, amount_cents AS amountCents FROM iou_links WHERE payback_transaction_id = ? AND payback_line_id IS ? ORDER BY created_at, id')
       .all(t.txn.id, t.lineId) as PaybackChoices['linked']);
     return { items: openItems(settlePerson(db, q.personId, key), receiptIds(db)), linked: (t.txn.personId ?? t.txn.splitLines.find((l) => l.id === t.lineId)?.personId) === q.personId ? linked : [] };
   });

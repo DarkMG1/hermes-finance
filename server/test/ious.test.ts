@@ -312,6 +312,8 @@ test('cleanup lists live rows in the Reimbursement category, unsplit or by a spl
   seedSplit(deps.db, { id: 'S1', transactionId: 'sp', amountCents: -1000, categoryId: 'c-r' });
   seedSplit(deps.db, { id: 'S2', transactionId: 'sp', amountCents: -1000, categoryId: 'c-food' });
   seedTxn(deps.db, { id: 'food', accountId: 'a1', date: '2026-02-02', amountCents: -500, categoryId: 'c-food' });
+  seedCategory(deps.db, { id: 'c-fake', name: 'Reimbursements' });
+  seedTxn(deps.db, { id: 'fake', accountId: 'a1', date: '2026-02-04', amountCents: -500, categoryId: 'c-fake' });
   seedTxn(deps.db, { id: 'gone', accountId: 'a1', date: '2026-02-03', amountCents: -500, categoryId: 'c-r', removedAt: '2026-02-04T00:00:00Z' });
   assert.deepEqual((await get('/v1/people/reimbursements-cleanup')).rows.map((t: { id: string }) => t.id), ['new', 'sp', 'old']);
 });
