@@ -1,0 +1,11 @@
+{
+  "state": "MI",
+  "filingStatus": "single",
+  "birthYear": 2000,
+  "dependents": 0,
+  "retirementPct": 6,
+  "retirementKind": "pre_tax",
+  "hsa": true,
+  "note": null,
+  "updatedAt": "2026-03-15T12:00:00.000Z"
+}
