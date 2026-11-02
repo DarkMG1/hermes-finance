@@ -17,13 +17,20 @@ const grantValues = (g: GrantBody) => [g.kind, g.shares ?? null, g.valueCents ??
 const assign = (cols: string[]) => cols.map((c) => `${c} = ?`).join(', ');
 const pick = (o: object, keys: string[]) => Object.fromEntries(keys.map((k) => [k, (o as Record<string, unknown>)[k]]));
 const notFound = (what: string) => new ApiError(404, 'NOT_FOUND', `${what} not found`);
-const snake = (k: string) => k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
-const insertSql = (table: string, keys: string[]) => `INSERT INTO ${table} (id, ${keys.map(snake).join(', ')}, created_at) VALUES (?, ${keys.map(() => '?').join(', ')}, ?)`;
-const values = (keys: string[], o: object) => keys.map((k) => (o as Record<string, unknown>)[k] ?? null);
-const STUB_KEYS = Object.keys(PayStubBody.shape);
-const FORM_KEYS = Object.keys(TaxFormBody.shape);
-const RETURN_KEYS = Object.keys(TaxReturnBody.shape);
-const NO_DEDUCTIONS = { federalCents: 0, stateCents: 0, socialSecurityCents: 0, medicareCents: 0, retirementCents: 0, otherDeductionsCents: 0 };
+const STUB_COLS = ['job_id', 'pay_date', 'period_start', 'period_end', 'gross_cents', 'federal_cents', 'state_cents', 'social_security_cents', 'medicare_cents',
+  'retirement_cents', 'other_deductions_cents', 'net_cents', 'ytd_gross_cents'];
+const FORM_COLS = ['job_id', 'year', 'kind', 'payer', 'amount_cents', 'federal_withheld_cents', 'state', 'state_withheld_cents', 'ss_wages_cents', 'medicare_wages_cents'];
+const RETURN_COLS = ['year', 'jurisdiction', 'filing_status', 'wages_cents', 'total_income_cents', 'agi_cents', 'deduction_kind', 'deduction_cents',
+  'taxable_income_cents', 'total_tax_cents', 'credits_cents', 'withholding_cents', 'refund_cents', 'capital_gains_cents', 'capital_loss_carryover_cents'];
+// left-out deduction lines are 0
+const stubValues = (s: PayStubBody) => [s.jobId ?? null, s.payDate, s.periodStart ?? null, s.periodEnd ?? null, s.grossCents, s.federalCents ?? 0, s.stateCents ?? 0,
+  s.socialSecurityCents ?? 0, s.medicareCents ?? 0, s.retirementCents ?? 0, s.otherDeductionsCents ?? 0, s.netCents, s.ytdGrossCents ?? null];
+const formValues = (f: TaxFormBody) => [f.jobId ?? null, f.year, f.kind, f.payer, f.amountCents, f.federalWithheldCents ?? null, f.state ?? null,
+  f.stateWithheldCents ?? null, f.ssWagesCents ?? null, f.medicareWagesCents ?? null];
+const returnValues = (t: TaxReturnBody) => [t.year, t.jurisdiction, t.filingStatus ?? null, t.wagesCents ?? null, t.totalIncomeCents ?? null, t.agiCents ?? null,
+  t.deductionKind ?? null, t.deductionCents ?? null, t.taxableIncomeCents ?? null, t.totalTaxCents ?? null, t.creditsCents ?? null, t.withholdingCents ?? null,
+  t.refundCents ?? null, t.capitalGainsCents ?? null, t.capitalLossCarryoverCents ?? null];
+const marks = (cols: string[]) => cols.map(() => '?').join(', ');
 
 export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   const { db } = deps;
@@ -133,22 +140,22 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
     const r = idempotentWrite(deps, req, () => {
       assertJob(body.jobId);
       const id = randomUUID();
-      db.prepare(insertSql('pay_stubs', STUB_KEYS)).run(id, ...values(STUB_KEYS, { ...NO_DEDUCTIONS, ...body }), deps.now().toISOString());
+      db.prepare(`INSERT INTO pay_stubs (id, ${STUB_COLS.join(', ')}, created_at) VALUES (?, ${marks(STUB_COLS)}, ?)`).run(id, ...stubValues(body), deps.now().toISOString());
       return { status: 201, body: stub(id) };
     });
     return reply.code(r.status).send(r.body);
   });
 
-  // an edit the linked deposit no longer matches drops the link
+  // an edit to net or pay date that the linked deposit no longer matches drops the link
   app.patch<{ Params: { id: string } }>('/v1/pay-stubs/:id', async (req, reply) => {
     const patch = parseBody(PatchPayStubBody, req.body);
     const r = idempotentWrite(deps, req, () => {
       const current = stub(req.params.id);
-      const merged = parseBody(PayStubBody, { ...pick(current, STUB_KEYS), ...patch });
+      const merged = parseBody(PayStubBody, { ...pick(current, Object.keys(PayStubBody.shape)), ...patch });
       assertJob(merged.jobId);
-      db.prepare(`UPDATE pay_stubs SET ${assign(STUB_KEYS.map(snake))} WHERE id = ?`).run(...values(STUB_KEYS, merged), current.id);
+      db.prepare(`UPDATE pay_stubs SET ${assign(STUB_COLS)} WHERE id = ?`).run(...stubValues(merged), current.id);
       const s = stub(current.id);
-      if (s.transactionId && !stubMatches(db, s, today()).some((t) => t.id === s.transactionId)) {
+      if (s.transactionId && (patch.netCents !== undefined || patch.payDate !== undefined) && !stubMatches(db, s, today()).some((t) => t.id === s.transactionId)) {
         db.prepare('UPDATE pay_stubs SET transaction_id = NULL WHERE id = ?').run(s.id);
       }
       return { status: 200, body: stub(s.id) };
@@ -163,6 +170,9 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
     const { transactionId } = parseBody(LinkPayStubBody, req.body);
     const r = idempotentWrite(deps, req, () => {
       const s = stub(req.params.id);
+      if (transactionId && !db.prepare('SELECT 1 FROM transactions WHERE id = ? AND removed_at IS NULL').get(transactionId)) {
+        throw new ApiError(400, 'INVALID_REQUEST', 'transactionId: not a matching deposit', 'transactionId');
+      }
       if (transactionId && db.prepare('SELECT 1 FROM pay_stubs WHERE transaction_id = ? AND id <> ?').get(transactionId, s.id)) {
         throw new ApiError(409, 'ALREADY_LINKED', 'that deposit is linked to another pay stub');
       }
@@ -177,11 +187,11 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
 
   app.post('/v1/tax-forms', async (req, reply) => {
     const body = parseBody(TaxFormBody, req.body);
-    assertYear(body.year);
     const r = idempotentWrite(deps, req, () => {
+      assertYear(body.year);
       assertJob(body.jobId);
       const id = randomUUID();
-      db.prepare(insertSql('tax_forms', FORM_KEYS)).run(id, ...values(FORM_KEYS, body), deps.now().toISOString());
+      db.prepare(`INSERT INTO tax_forms (id, ${FORM_COLS.join(', ')}, created_at) VALUES (?, ${marks(FORM_COLS)}, ?)`).run(id, ...formValues(body), deps.now().toISOString());
       return { status: 201, body: getForm(db, id) };
     });
     return reply.code(r.status).send(r.body);
@@ -192,10 +202,10 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
     const r = idempotentWrite(deps, req, () => {
       const current = getForm(db, req.params.id);
       if (!current) throw notFound('tax form');
-      const merged = parseBody(TaxFormBody, { ...pick(current, FORM_KEYS), ...patch });
+      const merged = parseBody(TaxFormBody, { ...pick(current, Object.keys(TaxFormBody.shape)), ...patch });
       assertYear(merged.year);
       assertJob(merged.jobId);
-      db.prepare(`UPDATE tax_forms SET ${assign(FORM_KEYS.map(snake))} WHERE id = ?`).run(...values(FORM_KEYS, merged), current.id);
+      db.prepare(`UPDATE tax_forms SET ${assign(FORM_COLS)} WHERE id = ?`).run(...formValues(merged), current.id);
       return { status: 200, body: getForm(db, current.id) };
     });
     return reply.code(r.status).send(r.body);
@@ -206,13 +216,12 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
 
   app.put('/v1/tax-returns', async (req, reply) => {
     const body = parseBody(TaxReturnBody, req.body);
-    assertYear(body.year);
     const r = idempotentWrite(deps, req, () => {
+      assertYear(body.year);
       const now = deps.now().toISOString();
-      const cols = RETURN_KEYS.map(snake);
-      db.prepare(`INSERT INTO tax_returns (id, ${cols.join(', ')}, created_at, updated_at) VALUES (?, ${cols.map(() => '?').join(', ')}, ?, ?)
-        ON CONFLICT (year, jurisdiction) DO UPDATE SET ${cols.map((c) => `${c} = excluded.${c}`).join(', ')}, updated_at = excluded.updated_at`)
-        .run(randomUUID(), ...values(RETURN_KEYS, { ...getReturn(db, body.year, body.jurisdiction), ...body }), now, now);
+      db.prepare(`INSERT INTO tax_returns (id, ${RETURN_COLS.join(', ')}, created_at, updated_at) VALUES (?, ${marks(RETURN_COLS)}, ?, ?)
+        ON CONFLICT (year, jurisdiction) DO UPDATE SET ${RETURN_COLS.map((c) => `${c} = excluded.${c}`).join(', ')}, updated_at = excluded.updated_at`)
+        .run(randomUUID(), ...returnValues({ ...getReturn(db, body.year, body.jurisdiction), ...body }), now, now);
       return { status: 200, body: getReturn(db, body.year, body.jurisdiction) };
     });
     return reply.code(r.status).send(r.body);

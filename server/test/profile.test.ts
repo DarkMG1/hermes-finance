@@ -217,6 +217,9 @@ test('stub matches: exact net within 3 days, deposits only, closest then newest,
   const taken = await send('PUT', `/v1/pay-stubs/${twin.id}/link`, { transactionId: 'c' });
   assert.deepEqual([taken.statusCode, taken.json().code], [409, 'ALREADY_LINKED']);
   assert.equal((await send('PATCH', `/v1/pay-stubs/${s.id}`, { otherDeductionsCents: 300, retirementCents: 24100 })).json().transactionId, 'c', 'an edit that still matches keeps the link');
+  db.prepare("UPDATE transactions SET date = '2026-03-19' WHERE id = 'c'").run();
+  assert.equal((await send('PATCH', `/v1/pay-stubs/${s.id}`, { ytdGrossCents: 100 })).json().transactionId, 'c', 'only an edit to net or pay date re-checks the link');
+  db.prepare("UPDATE transactions SET date = '2026-03-14' WHERE id = 'c'").run();
   assert.equal((await send('PATCH', `/v1/pay-stubs/${s.id}`, { payDate: '2026-03-01', periodStart: '2026-02-14', periodEnd: '2026-02-27' })).json().transactionId, null,
     'an edit the deposit no longer matches drops the link');
   await send('PUT', `/v1/pay-stubs/${twin.id}/link`, { transactionId: 'c' });
@@ -226,6 +229,12 @@ test('stub matches: exact net within 3 days, deposits only, closest then newest,
   await send('DELETE', `/v1/pay-stubs/${twin.id}`);
   assert.equal((await get('/v1/transactions/a')).json().payStub, null, 'deleting the stub frees the deposit');
   assert.deepEqual(await ids(s.id), [], 'none near its new date');
+  const third = (await send('POST', '/v1/pay-stubs', stub)).json();
+  await send('PUT', `/v1/pay-stubs/${third.id}/link`, { transactionId: 'b' });
+  db.prepare("UPDATE transactions SET removed_at = '2026-03-15T00:00:00Z' WHERE id = 'b'").run();
+  assert.equal((await send('PATCH', `/v1/pay-stubs/${third.id}`, { ytdGrossCents: 1 })).json().transactionId, null, 'a deposit Plaid removed is not linked');
+  const gone = await send('PUT', `/v1/pay-stubs/${(await send('POST', '/v1/pay-stubs', stub)).json().id}/link`, { transactionId: 'b' });
+  assert.deepEqual([gone.statusCode, gone.json().field], [400, 'transactionId'], 'a removed deposit is not a match, even while another stub holds it');
   assert.equal((await send('PUT', `/v1/pay-stubs/${s.id}/link`, { transactionId: 'a', extra: 1 })).statusCode, 400);
 });
 
