@@ -567,7 +567,8 @@ export const ProfileDrafts = {
   tax_return: draft(TaxReturnFields),
   tax_form: draft(TaxFormFields.omit({ jobId: true })),
   pay_stub: draft(PayStubFields.omit({ jobId: true }).extend({ employer: JobFields.shape.employer })),
-  offer: draft(JobFields.omit({ status: true })).extend({ grants: z.array(draft(GrantFields)).max(20).default([]).catch([]) }),
+  offer: draft(JobFields.omit({ status: true })).extend({ grants: z.array(draft(GrantFields).nullable().catch(null)).default([]).catch([])
+    .transform((g) => g.filter((x) => x !== null).slice(0, 20)) }),
 };
 export const ProfileKind = z.enum(['tax_return', 'tax_form', 'pay_stub', 'offer']);
 export type ProfileKind = z.infer<typeof ProfileKind>;

@@ -22,7 +22,7 @@ const counts = (db: ReturnType<typeof setup>['deps']['db']) => Object.fromEntrie
 
 test('a read returns the draft with identifiers blanked and stores nothing', async () => {
   const { deps, read, profileReader } = setup();
-  profileReader.next = { kind: 'tax_form', model: 'fake-model', uncertain: ['stateWithheldCents'],
+  profileReader.next = { kind: 'tax_form', model: 'fake-model', uncertain: ['stateWithheldCents', 'not a field', '000-00-0000'],
     draft: ProfileDrafts.tax_form.parse({ year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER 00-0000000', amountCents: 6500000, state: 'MI' }) };
   const before = counts(deps.db);
   for (let i = 0; i < 2; i += 1) {
@@ -97,6 +97,10 @@ test('scrubIdentifiers blanks SSN, ITIN and EIN shaped strings anywhere and keep
     date: '2026-03-14', zip: '00000', phone: '(000) 000-0000', grants: [{ note: 'EIN 00-0000000', shares: 10 }], empty: null };
   assert.deepEqual(scrubIdentifiers(draft), { payer: 'SYNTHETIC EMPLOYER', note: null, itin: null, bare: null, ein: null, amountCents: 123456789,
     date: '2026-03-14', zip: '00000', phone: '(000) 000-0000', grants: [{ note: null, shares: 10 }], empty: null });
+  for (const s of ['000\u201300\u20130000', '000\u201400\u20140000', '000.00.0000', '000  00   0000', '00\u20130000000', '00\u20140000000', '00.0000000', '00   0000000']) {
+    assert.equal(scrubIdentifiers(s), null, s);
+  }
+  for (const s of ['$1,234.56', '000.000.0000', '000-000-0000', '2026.03.14', '00000-0000']) assert.equal(scrubIdentifiers(s), s, s);
 });
 
 const makeReader = (fetchFn: typeof fetch) => {
@@ -109,7 +113,8 @@ test('the Anthropic reader sends every page and one tool per kind, without forci
   for (const kind of ['tax_return', 'tax_form', 'pay_stub', 'offer'] as const) {
     const sent: { model: string; tool_choice?: unknown; tools: { name: string; input_schema: { properties: Record<string, unknown> } }[];
       messages: { content: { type: string; text?: string; source?: { type: string; media_type: string; data: string } }[] }[] }[] = [];
-    const input = { offer: { employer: 'SYNTHETIC EMPLOYER', baseCents: 12000000, grants: [{ kind: 'rsu', shares: 400, grantDate: '2026-01-15', vestMonths: 48 }] },
+    const input = { offer: { employer: 'SYNTHETIC EMPLOYER', baseCents: 12000000,
+      grants: [{ kind: 'rsu', shares: 400, grantDate: '2026-01-15', vestMonths: 48 }, 'junk', ...Array.from({ length: 20 }, (_, i) => ({ shares: i + 1 }))] },
       pay_stub: { employer: 'SYNTHETIC EMPLOYER', payDate: '2026-03-13', grossCents: 420000, netCents: 'lots' },
       tax_form: { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER' }, tax_return: { year: 2025, jurisdiction: 'federal', refundCents: -5000 } }[kind];
     const { deps, reader } = makeReader(async (_url, init) => {
@@ -131,7 +136,9 @@ test('the Anthropic reader sends every page and one tool per kind, without forci
     assert.deepEqual([r.kind, r.uncertain, r.model], [kind, ['grossCents'], 'claude-sonnet-5-5']);
     assert.equal((r.draft as Record<string, unknown>).extra, undefined);
     assert.deepEqual(deps.db.prepare('SELECT feature, model FROM ai_usage').all(), [{ feature: 'profile', model: 'claude-sonnet-5-5' }]);
-    if (r.kind === 'offer') assert.deepEqual([r.draft.baseCents, r.draft.grants[0]!.shares, r.draft.grants[0]!.cliffMonths], [12000000, 400, null]);
+    // a malformed grant is dropped, not the whole list, and the list stops at 20
+    if (r.kind === 'offer') assert.deepEqual([r.draft.baseCents, r.draft.grants.length, r.draft.grants[0]!.shares, r.draft.grants[0]!.cliffMonths, r.draft.grants[19]!.shares],
+      [12000000, 20, 400, null, 19]);
     // a value that doesn't fit becomes null for the owner to fill in
     if (r.kind === 'pay_stub') assert.deepEqual([r.draft.grossCents, r.draft.netCents, r.draft.employer], [420000, null, 'SYNTHETIC EMPLOYER']);
     if (r.kind === 'tax_return') assert.deepEqual([r.draft.refundCents, r.draft.agiCents], [-5000, null]);
@@ -143,5 +150,7 @@ test('no tool call, the wrong tool or a non-object input is INVALID_OUTPUT; cred
   assert.equal(await code(reply([{ type: 'text', text: 'no' }])), 'INVALID_OUTPUT');
   assert.equal(await code(reply([{ type: 'tool_use', name: 'record_offer', input: {} }])), 'INVALID_OUTPUT');
   assert.equal(await code(reply([{ type: 'tool_use', name: 'record_pay_stub', input: 'x' }])), 'INVALID_OUTPUT');
+  // an answer that isn't JSON is a transport fault (502), not an unreadable document (422)
+  assert.equal(await code(async () => new Response('<html>', { status: 200 })), 'BAD_REPLY');
   assert.equal(await code(async () => new Response(JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API.' } }), { status: 400 })), 'AI_CREDITS_EXHAUSTED');
 });

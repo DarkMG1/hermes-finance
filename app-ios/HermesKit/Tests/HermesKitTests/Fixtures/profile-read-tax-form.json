@@ -12,6 +12,6 @@
     "medicareWagesCents": null
   },
   "uncertain": [
-    "grossCents"
+    "state"
   ]
 }

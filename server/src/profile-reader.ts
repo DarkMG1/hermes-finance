@@ -10,7 +10,8 @@ export type ProfileReadOutput = ProfileReadResult & { model: string };
 export interface ProfileReader { read(kind: ProfileKind, pages: Buffer[]): Promise<ProfileReadOutput> }
 
 // SSN/ITIN or EIN shaped; the app redacts the photo first, this catches what Claude still read
-const IDENTIFIER = /\b\d{3}[- ]?\d{2}[- ]?\d{4}\b|\b\d{2}-\d{7}\b/;
+// separators: hyphen, en or em dash, dot, or a run of spaces; an SSN has both or neither, so a ZIP+4 (00000-0000) is kept
+const IDENTIFIER = /\b\d{3}(?:(?:[-\u2013\u2014.]| +)\d{2}(?:[-\u2013\u2014.]| +)|\d{2})\d{4}\b|\b\d{2}(?:[-\u2013\u2014.]| +)\d{7}\b/;
 export const scrubIdentifiers = <T>(v: T): T => (typeof v === 'string' ? (IDENTIFIER.test(v) ? null : v)
   : Array.isArray(v) ? v.map(scrubIdentifiers)
     : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scrubIdentifiers(x)])) : v) as T;
@@ -24,7 +25,7 @@ export async function readProfile(deps: Deps, kind: ProfileKind, pages: Buffer[]
   active.add(deps.db);
   try {
     const r = await deps.profileReader.read(kind, pages);
-    return scrubIdentifiers({ kind: r.kind, draft: r.draft, uncertain: r.uncertain } as ProfileReadResult);
+    return { kind: r.kind, draft: scrubIdentifiers(r.draft), uncertain: r.uncertain.filter((k) => k in r.draft) } as ProfileReadResult;
   } catch (e) {
     const code = e instanceof ReaderError ? e.code : 'UNKNOWN';
     if (code === 'AI_CREDITS_EXHAUSTED') throw new ApiError(402, 'AI_CREDITS_EXHAUSTED', 'the Anthropic API keys are out of credit');
@@ -64,7 +65,8 @@ Never return SSNs, ITINs, EINs or account numbers. List field names you are unsu
           ] }],
         })).reply as MessagesReply;
       } catch (e) {
-        throw e instanceof ClaudeError ? new ReaderError(e.code) : e;
+        // a reply that isn't JSON is a transport fault, not an unreadable document
+        throw e instanceof ClaudeError ? new ReaderError(e.code === 'INVALID_OUTPUT' ? 'BAD_REPLY' : e.code) : e;
       }
       const content = reply.content;
       const call = Array.isArray(content) ? content.find((c) => c.type === 'tool_use' && c.name === name) : undefined;

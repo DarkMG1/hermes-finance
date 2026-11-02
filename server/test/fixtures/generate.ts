@@ -171,13 +171,13 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   out['tax-years'] = await get('/v1/tax-years');
   out['transaction-pay-stub'] = await get('/v1/transactions/txn-2');
   const page = Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString('base64');
-  for (const [kind, draft] of Object.entries({
-    tax_return: { year: 2025, jurisdiction: 'federal', filingStatus: 'single', totalIncomeCents: 6520000, totalTaxCents: 650000, refundCents: 150000 },
-    tax_form: { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 6500000, federalWithheldCents: 800000, state: 'MI' },
-    pay_stub: { employer: 'SYNTHETIC EMPLOYER', payDate: '2026-03-13', grossCents: 420000, federalCents: 50000, netCents: 370000 },
-    offer: { employer: 'SYNTHETIC EMPLOYER', title: 'Synthetic Engineer', baseCents: 12000000, grants: [{ kind: 'rsu', shares: 400, grantDate: '2026-06-01', cliffMonths: 12, vestMonths: 48, vestEveryMonths: 3 }] },
+  for (const [kind, [draft, uncertain]] of Object.entries({
+    tax_return: [{ year: 2025, jurisdiction: 'federal', filingStatus: 'single', totalIncomeCents: 6520000, totalTaxCents: 650000, refundCents: 150000 }, ['agiCents']],
+    tax_form: [{ year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 6500000, federalWithheldCents: 800000, state: 'MI' }, ['state']],
+    pay_stub: [{ employer: 'SYNTHETIC EMPLOYER', payDate: '2026-03-13', grossCents: 420000, federalCents: 50000, netCents: 370000 }, ['grossCents']],
+    offer: [{ employer: 'SYNTHETIC EMPLOYER', title: 'Synthetic Engineer', baseCents: 12000000, grants: [{ kind: 'rsu', shares: 400, grantDate: '2026-06-01', cliffMonths: 12, vestMonths: 48, vestEveryMonths: 3 }] }, ['baseCents']],
   } as const)) {
-    profileReader.next = ProfileReadResult.parse({ kind, draft, uncertain: ['grossCents'] }) as ProfileReadOutput;
+    profileReader.next = ProfileReadResult.parse({ kind, draft, uncertain }) as ProfileReadOutput;
     out[`profile-read-${kind.replace('_', '-')}`] = await post('/v1/profile/read', { kind, pages: [page] });
   }
   // ids minted at runtime are replaced so the files are stable
