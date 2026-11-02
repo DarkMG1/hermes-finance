@@ -139,7 +139,8 @@ export function restoreLinks(db: Db, txnId: string, captured: Captured[], moved 
     if (!c.personId) continue;
     const same = alike({ p: c.personId, a: c.sign });
     const peers = lines.filter(same);
-    const target = moved.size ? lines.find((l) => l.id === moved.get(c.side === 'payback' ? c.link.payback_line_id! : c.link.item_line_id!) && same(l))?.id
+    const oldLine = c.side === 'payback' ? c.link.payback_line_id : c.link.item_line_id;
+    const target = moved.size ? (oldLine === null ? undefined : lines.find((l) => l.id === moved.get(oldLine) && same(l))?.id)
       : !lines.length ? (same(row) ? null : undefined)
       : c.pos === null ? peers[0]?.id : peers.length === c.peers ? peers[c.rank]?.id : same(lines[c.pos]) ? lines[c.pos]!.id : undefined;
     if (target === undefined) continue;
