@@ -67,10 +67,10 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
 
   app.patch<{ Params: { id: string } }>('/v1/transactions/:id', async (req, reply) => {
     const body = parseBody(PatchTransactionBody, req.body);
-    assertOwnerDate(body.date, localDay(deps.now()));
     const r = idempotentWrite(deps, req, () => {
       const current = getTransaction(db, req.params.id, localDay(deps.now()));
       if (!current) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+      assertOwnerDate(body.date, localDay(deps.now()));
       const date = body.date === null ? current.bankDate : body.date;
       if (date === null) throw new ApiError(409, 'NO_BANK_DATE', 'this transaction has no bank date to go back to', 'date');
       if (current.forgiven && (body.categoryId !== undefined || body.personId !== undefined || body.paidByPersonId !== undefined)) {
