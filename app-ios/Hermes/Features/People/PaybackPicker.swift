@@ -10,16 +10,29 @@ struct PaybackTarget: Identifiable, Hashable {
     var id: String { "\(transactionId)|\(lineId ?? "")|\(personId)" }
 }
 
+/// The open-items read before a payback is tagged failed: nothing was written.
+struct PaybackChoicesUnavailable: LocalizedError {
+    var errorDescription: String? { "Couldn't load open items. Try again." }
+}
+
 extension AppModel {
-    /// Tags a payback to a person. True when there are open items to choose from: show `PaybackPicker` instead, it tags on save.
-    /// A server before 1.8.3 has no payback route (404), so it is tagged as before.
-    func tagPayback(_ target: PaybackTarget, idempotencyKey: String) async throws -> Bool {
-        guard let reader, let client else { return false }
+    /// nil from a server before 1.8.3, which has no payback route.
+    func paybackChoices(_ target: PaybackTarget) async throws -> PaybackChoices? {
+        guard let reader else { return nil }
         do {
-            let choices = try await reader.read(PaybackPicker.path(target.transactionId), query: PaybackPicker.query(target),
-                                                as: PaybackChoices.self).value
-            if !choices.items.isEmpty || !choices.linked.isEmpty { return true }
-        } catch ClientError.api(status: 404, _) {}
+            return try await reader.read(PaybackPicker.path(target.transactionId), query: PaybackPicker.query(target), as: PaybackChoices.self).value
+        } catch ClientError.api(status: 404, _) {
+            return nil
+        }
+    }
+
+    /// Tags a payback to a person. True when there are open items to choose from: show `PaybackPicker` instead, it tags on save.
+    /// Throws `PaybackChoicesUnavailable` when the read fails, so callers don't treat it as a write.
+    func tagPayback(_ target: PaybackTarget, idempotencyKey: String) async throws -> Bool {
+        guard let client else { return false }
+        let choices: PaybackChoices?
+        do { choices = try await paybackChoices(target) } catch { throw PaybackChoicesUnavailable() }
+        if let choices, !choices.items.isEmpty || !choices.linked.isEmpty { return true }
         if let lineId = target.lineId {
             _ = try await client.patchSplitLine(transactionId: target.transactionId, lineId: lineId,
                                                 body: PatchSplitLineBody(personId: .set(target.personId)), idempotencyKey: idempotencyKey)
@@ -92,8 +105,9 @@ struct PaybackPicker: View {
         do {
             let loaded = try await reader.read(Self.path(target.transactionId), query: Self.query(target), as: PaybackChoices.self).value
             choices = loaded
-            selected = loaded.linked.isEmpty ? PaybackFill.preselected(loaded.items, paybackCents: target.paybackCents)
-                : Set(loaded.linked.map { "\($0.transactionId)|\($0.lineId ?? "")" })
+            // a linked charge that was untagged or deleted since is no longer an item to tick
+            let linked = Set(loaded.linked.map { "\($0.transactionId)|\($0.lineId ?? "")" }).intersection(loaded.items.map(\.id))
+            selected = linked.isEmpty ? PaybackFill.preselected(loaded.items, paybackCents: target.paybackCents) : linked
             error = nil
         } catch {
             self.error = errorMessage(error)
@@ -101,11 +115,12 @@ struct PaybackPicker: View {
     }
 
     private func save() async {
-        guard let client = model.client, let choices else { return }
+        guard !busy, let client = model.client, let choices else { return }
         busy = true
         defer { busy = false }
         let slot = slot
         var writeGuard = writes[slot] ?? WriteGuard()
+        writes[slot] = writeGuard
         do {
             let items = PaybackFill.amounts(choices.items, selected: selected, paybackCents: target.paybackCents)
             _ = try await client.putPayback(transactionId: target.transactionId,

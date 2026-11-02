@@ -77,6 +77,8 @@ struct ReimbursementsCleanupView: View {
             }
             writeGuard.didSucceed()
             error = nil
+        } catch let error as PaybackChoicesUnavailable {
+            self.error = error.localizedDescription
         } catch {
             writeGuard.didFail(error)
             self.error = writeGuard.unresolved ? "Couldn't confirm. Try again." : errorMessage(error)
@@ -88,6 +90,12 @@ struct ReimbursementsCleanupView: View {
         guard let reader = model.reader else { return }
         do {
             let rows = try await reader.read("/v1/people/reimbursements-cleanup", as: ReimbursementsCleanup.self).value.rows
+            if model.categories.isEmpty { await model.refreshReferenceData() }
+            // without categories every split row would drop out and the screen would wrongly read empty
+            guard !model.categories.isEmpty || rows.allSatisfy(\.splitLines.isEmpty) else {
+                error = "Couldn't load categories. Pull to refresh."
+                return
+            }
             // the server's rule: a transfer category named Reimburs…
             let reimbursement = Set(model.categories.filter { $0.isTransfer && $0.name.lowercased().hasPrefix("reimburs") }.map(\.id))
             entries = rows.flatMap { row in

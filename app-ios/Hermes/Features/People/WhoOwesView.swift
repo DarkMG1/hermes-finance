@@ -150,6 +150,8 @@ struct WhoOwesView: View {
         do {
             try await write(client, writeGuard.key)
             writeGuard.didSucceed()
+        } catch let error as PaybackChoicesUnavailable {
+            errors.write = error.localizedDescription
         } catch {
             writeGuard.didFail(error)
             errors.write = writeGuard.unresolved ? "Couldn't confirm. Try again." : errorMessage(error)

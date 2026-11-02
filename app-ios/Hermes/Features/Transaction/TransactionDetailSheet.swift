@@ -47,7 +47,9 @@ struct TransactionDetailSheet: View {
     @State private var loaded = false
     /// Reloaded after the payback picker saves, so the row shows the new links without reopening.
     @State private var iou: TransactionIOU?
-    @State private var payingBack = false
+    @State private var paying: PaybackTarget?
+    /// The picker opened right after Save tagged this deposit: the sheet closes with it.
+    @State private var closeAfterPaying = false
 
     var body: some View {
         Sheet(
@@ -96,12 +98,8 @@ struct TransactionDetailSheet: View {
                         }
                         // the saved person's links; hidden while another person is picked but not saved
                         if transaction.amountCents > 0, let saved = transaction.personId, personId == saved, let iou {
-                            Button { payingBack = true } label: { LabeledContent("Paying back", value: paybackLabel(iou)) }
+                            Button { paying = paybackTarget(saved) } label: { LabeledContent("Paying back", value: paybackLabel(iou)) }
                                 .foregroundStyle(Palette.text)
-                                .sheet(isPresented: $payingBack) {
-                                    PaybackPicker(transactionId: transaction.id, lineId: nil, personId: saved,
-                                                  paybackCents: transaction.amountCents) { await reloadIOU() }
-                                }
                         }
                     }
                     // someone else paid this manual expense: it stays your spending, and counts as their credit
@@ -222,6 +220,10 @@ struct TransactionDetailSheet: View {
                 dismiss()
             }
         })
+        .sheet(item: $paying, onDismiss: { if closeAfterPaying { dismiss() } }, content: { target in
+            PaybackPicker(transactionId: target.transactionId, lineId: nil, personId: target.personId,
+                          paybackCents: target.paybackCents) { await reloadIOU() }
+        })
         .sheet(isPresented: $itemizing, onDismiss: {
             // the items save rewrote the split or the amount: this sheet's copy is stale, so close it
             if savedFromItems {
@@ -264,10 +266,18 @@ struct TransactionDetailSheet: View {
         }
     }
 
+    private func paybackTarget(_ personId: String) -> PaybackTarget {
+        PaybackTarget(transactionId: transaction.id, lineId: nil, personId: personId, paybackCents: transaction.amountCents)
+    }
+
     private func reloadIOU() async {
         savedOutside = true
         guard let reader = model.reader else { return }
-        if let fresh = try? await reader.read("/v1/transactions/\(transaction.id)", as: LedgerTransaction.self).value { iou = fresh.iou }
+        do {
+            iou = try await reader.read("/v1/transactions/\(transaction.id)", as: LedgerTransaction.self).value.iou
+        } catch {
+            self.error = "Couldn't refresh what this pays back: \(errorMessage(error))"
+        }
     }
 
     private var noneTitle: String { transaction.amountCents < 0 ? "Me" : "Nobody" }
@@ -278,11 +288,19 @@ struct TransactionDetailSheet: View {
         guard let client = model.client else { return }
         busy = true
         defer { busy = false }
+        // a deposit newly tagged to someone goes on to what it paid back, like a confirmed repayment suggestion
+        let paidBy = transaction.amountCents > 0 && transaction.splitLines.isEmpty && personId != transaction.personId ? personId : nil
         do {
             _ = try await client.patchTransaction(id: transaction.id, body: patch, idempotencyKey: writes.key)
             writes.didSucceed()
             await onChange()
-            dismiss()
+            // a failed read skips the picker: the tag is saved, and the Paying back row can link it later
+            if let target = paidBy.map(paybackTarget), let choices = try? await model.paybackChoices(target), !choices.items.isEmpty {
+                closeAfterPaying = true
+                paying = target
+            } else {
+                dismiss()
+            }
         } catch {
             writes.didFail(error)
             self.error = writes.unresolved ? "Couldn't confirm the save. Tap Save to retry." : errorMessage(error)
