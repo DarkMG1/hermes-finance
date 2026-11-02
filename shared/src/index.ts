@@ -120,6 +120,9 @@ export type OpenItem = z.infer<typeof OpenItem>;
 export const PersonDetail = z.object({ person: Person, history: z.array(HistoryEntry), spentOnThemCents: Cents, forgivenCents: Cents, openItems: z.array(OpenItem) });
 export type PersonDetail = z.infer<typeof PersonDetail>;
 
+export const ReimbursementsCleanup = z.object({ rows: z.array(Transaction) });
+export type ReimbursementsCleanup = z.infer<typeof ReimbursementsCleanup>;
+
 export const PaybackQuery = z.object({ personId: Id, lineId: Id.optional() }).strict();
 export const PaybackBody = z.object({
   personId: Id, lineId: Id.nullable().optional(),

@@ -6,8 +6,10 @@ import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
-import { assertCategoryExists, getTransaction } from '../ledger.ts';
-import { entryKey, openItems, settlePerson } from '../ious.ts';
+import { REIMBURSEMENT } from '../cashflow.ts';
+import { memberships } from '../recurring.ts';
+import { TXN_COLS, assertCategoryExists, getTransaction, lookups, rowToTransaction, type TxnRow } from '../ledger.ts';
+import { entryKey, openItems, receiptIds, settlePerson } from '../ious.ts';
 import { assertPersonTaggable, getPerson, listPeople, peopleSettings, suggestions } from '../people.ts';
 
 export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
@@ -16,6 +18,15 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
   app.get('/v1/people', async (req) => listPeople(db, parseBody(ListPeopleQuery, req.query).all === '1'));
 
   app.get('/v1/people/suggestions', async () => suggestions(db, deps.now()));
+
+  app.get('/v1/people/reimbursements-cleanup', async () => {
+    const rows = db.prepare(`SELECT ${TXN_COLS} FROM transactions t WHERE removed_at IS NULL AND (
+        EXISTS (SELECT 1 FROM categories c WHERE c.id = t.category_id AND ${REIMBURSEMENT})
+        OR EXISTS (SELECT 1 FROM split_lines sl JOIN categories c ON c.id = sl.category_id WHERE sl.transaction_id = t.id AND ${REIMBURSEMENT}))
+      ORDER BY date DESC, created_at DESC, rowid DESC LIMIT 500`).all() as TxnRow[];
+    const l = lookups(db, rows, memberships(db, localDay(deps.now())));
+    return { rows: rows.map((r) => rowToTransaction(r, l)) };
+  });
 
   app.post<{ Params: { id: string } }>('/v1/people/suggestions/:id/dismiss', async (req, reply) => {
     const r = idempotentWrite(deps, req, () => {
@@ -127,10 +138,9 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
     const q = parseBody(PaybackQuery, req.query);
     const t = paybackTarget(req.params.id, q.lineId);
     const key = entryKey(t.txn.id, t.lineId);
-    const receipts = new Set((db.prepare('SELECT transaction_id AS id FROM receipts').all() as { id: string }[]).map((r) => r.id));
-    const linked = (db.prepare('SELECT item_transaction_id AS transactionId, item_line_id AS lineId, amount_cents AS amountCents FROM iou_links WHERE payback_transaction_id = ? AND payback_line_id IS ? ORDER BY created_at, id')
+        const linked = (db.prepare('SELECT item_transaction_id AS transactionId, item_line_id AS lineId, amount_cents AS amountCents FROM iou_links WHERE payback_transaction_id = ? AND payback_line_id IS ? ORDER BY created_at, id')
       .all(t.txn.id, t.lineId) as PaybackChoices['linked']);
-    return { items: openItems(settlePerson(db, q.personId, key), receipts), linked: (t.txn.personId ?? t.txn.splitLines.find((l) => l.id === t.lineId)?.personId) === q.personId ? linked : [] };
+    return { items: openItems(settlePerson(db, q.personId, key), receiptIds(db)), linked: (t.txn.personId ?? t.txn.splitLines.find((l) => l.id === t.lineId)?.personId) === q.personId ? linked : [] };
   });
 
   app.put<{ Params: { id: string } }>('/v1/transactions/:id/payback', async (req, reply) => {

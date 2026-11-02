@@ -3,7 +3,7 @@ import type { Db } from './db.ts';
 import { localDay } from './days.ts';
 import { memberships } from './recurring.ts';
 import { ApiError } from './errors.ts';
-import { TAGGED, entryKey, openItems, personEntries, personLinks, settle } from './ious.ts';
+import { TAGGED, entryKey, openItems, personEntries, personLinks, receiptIds, settle } from './ious.ts';
 import { TXN_COLS, lookups, rowToTransaction, type TxnRow } from './ledger.ts';
 
 type PersonRow = { id: string; name: string; match_text: string | null; archived: number };
@@ -30,7 +30,7 @@ export function getPerson(db: Db, id: string): PersonDetail | null {
   // same-day entries in the order they were recorded (rowid when one sync gave them the same created_at); ids are random
   const items = personEntries(db, id);
   const s = settle(items, personLinks(db, items));
-  const withReceipt = new Set((db.prepare('SELECT transaction_id AS id FROM receipts').all() as { id: string }[]).map((r) => r.id));
+  const withReceipt = receiptIds(db);
   let balance = 0;
   // computed on every read, so bank edits and removals rewrite the feed
   const history: HistoryEntry[] = items.map((t) => {

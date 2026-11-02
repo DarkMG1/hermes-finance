@@ -301,3 +301,17 @@ test('payback on a split line: GET lists its links, a person change replaces the
   assert.equal(r.json().splitLines.find((l: { id: string }) => l.id === 'S1').personId, 'p2');
   assert.deepEqual(deps.db.prepare('SELECT payback_line_id AS l, item_transaction_id AS i FROM iou_links').all(), [{ l: 'S1', i: 'theirs' }]);
 });
+
+test('cleanup lists live rows in the Reimbursement category, unsplit or by a split line, newest first', async () => {
+  const { deps, get } = app();
+  seedCategory(deps.db, { id: 'c-r', name: 'Reimbursement', isTransfer: true });
+  seedCategory(deps.db, { id: 'c-food', name: 'Food' });
+  seedTxn(deps.db, { id: 'old', accountId: 'a1', date: '2026-01-01', amountCents: -1000, categoryId: 'c-r' });
+  seedTxn(deps.db, { id: 'new', accountId: 'a1', date: '2026-02-01', amountCents: 1000, categoryId: 'c-r' });
+  seedTxn(deps.db, { id: 'sp', accountId: 'a1', date: '2026-01-15', amountCents: -2000 });
+  seedSplit(deps.db, { id: 'S1', transactionId: 'sp', amountCents: -1000, categoryId: 'c-r' });
+  seedSplit(deps.db, { id: 'S2', transactionId: 'sp', amountCents: -1000, categoryId: 'c-food' });
+  seedTxn(deps.db, { id: 'food', accountId: 'a1', date: '2026-02-02', amountCents: -500, categoryId: 'c-food' });
+  seedTxn(deps.db, { id: 'gone', accountId: 'a1', date: '2026-02-03', amountCents: -500, categoryId: 'c-r', removedAt: '2026-02-04T00:00:00Z' });
+  assert.deepEqual((await get('/v1/people/reimbursements-cleanup')).rows.map((t: { id: string }) => t.id), ['new', 'sp', 'old']);
+});

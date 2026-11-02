@@ -6,6 +6,7 @@ import { getExpenses, getPayeeHistory, getReimbursements, getSpending } from '..
 import { getTransaction, listAccounts, listCategories, listTransactions } from '../ledger.ts';
 import { getRecurring } from '../recurring.ts';
 import { getPerson, listPeople } from '../people.ts';
+import { openItems, receiptIds, settlePerson } from '../ious.ts';
 import { getNetWorth } from '../networth.ts';
 import { localDay } from '../days.ts';
 import { getHoldingHistory, getInvestments } from '../investments.ts';
@@ -51,6 +52,11 @@ const MONEY: [string, Entry][] = [
   entry('reimbursements', 'Reimbursement money out and back in per month, with the unpaid amount and the rows.', Empty, (d, _q, today) => getReimbursements(d.db, today)),
   entry('people', 'People the owner shares money with and each running balance (positive: they owe the owner); give id for one person with their history.', z.object({ id: z.string().min(1).optional() }).strict(),
     (d, q) => (q.id ? getPerson(d.db, q.id) : listPeople(d.db, true))),
+  entry('open_items', 'Charges each person still owes the owner for, oldest first, with what is left and the paybacks linked to each; give personId for one person.',
+    z.object({ personId: z.string().min(1).optional() }).strict(),
+    (d, q) => listPeople(d.db, true).filter((p) => !q.personId || p.id === q.personId)
+      .map((p) => ({ personId: p.id, name: p.name, items: openItems(settlePerson(d.db, p.id), receiptIds(d.db)) }))
+      .filter((p) => p.items.length)),
   entry('net_worth', 'Daily net worth history over a range with the current value and the change, hidden accounts left out; give accountIds (from accounts) and/or type for those accounts\' daily balance alone, e.g. to find which account moved.',
     NetWorthQuery.extend({ accountIds: z.array(z.string().min(1)).min(1).max(50).optional(), type: z.enum(['depository', 'credit', 'loan', 'investment', 'other']).optional() }).strict(),
     (d, { range, ...filter }, today) => getNetWorth(d.db, range, today, filter)),

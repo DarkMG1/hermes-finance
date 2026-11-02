@@ -79,6 +79,9 @@ export function settlePerson(db: Db, personId: string, without?: string): Settle
   return settle(entries, personLinks(db, entries));
 }
 
+export const receiptIds = (db: Db): Set<string> =>
+  new Set((db.prepare('SELECT transaction_id AS id FROM receipts').all() as { id: string }[]).map((r) => r.id));
+
 export function openItems(s: Settled, receipts: Set<string>): OpenItem[] {
   return [...s.items.values()].filter((i) => i.leftCents > 0).map(({ entry: t, leftCents, paybacks }) => ({
     transactionId: t.transaction_id, lineId: t.line_id, date: t.date, payee: t.payee, totalCents: -t.amount, leftCents,

@@ -40,7 +40,7 @@ const OUT = `((lines.category_id IS NOT NULL AND c.is_transfer = 0 AND c.is_inco
 // Reimbursed charges (work pays them back) are money movement, not spending, but they still belong in a payee's History: an unsplit
 // charge only, never the payback deposit or a split line fronted for someone else.
 // ponytail: found by category name, add a category flag if the owner ever renames it
-const REIMBURSEMENT = "(c.is_transfer = 1 AND lower(c.name) LIKE 'reimburs%')";
+export const REIMBURSEMENT = "(c.is_transfer = 1 AND lower(c.name) LIKE 'reimburs%')";
 const REIMBURSED = `(${REIMBURSEMENT} AND lines.is_split = 0 AND lines.amount < 0)`;
 
 // A bill's History counts every charge for it, whatever the category (a monthly investment transfer, an uncategorized Plaid TRANSFER_OUT)
