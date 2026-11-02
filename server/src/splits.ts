@@ -4,6 +4,7 @@ import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
 import { assertCategoryExists } from './ledger.ts';
 import { assertPersonTaggable } from './people.ts';
+import { captureLinks, restoreLinks } from './ious.ts';
 
 /** Checks split lines against a transaction's amount and makes them its split; the row's own category and person move onto the lines. */
 export function writeSplit(db: Db, txnId: string, amountCents: number, lines: PutSplitsBody['lines'], field: string, nowIso: string): void {
@@ -17,6 +18,7 @@ export function writeSplit(db: Db, txnId: string, amountCents: number, lines: Pu
   if (lines.length && lines.reduce((s, l) => s + l.amountCents, 0) !== amountCents) {
     throw new ApiError(400, 'INVALID_REQUEST', `${field}: must add up to the transaction amount`, field);
   }
+  const kept = captureLinks(db, txnId);
   db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(txnId);
   // ids sort in entry order (lines are read back ORDER BY id)
   const insert = db.prepare('INSERT INTO split_lines (id, transaction_id, amount_cents, category_id, notes, person_id, payee) VALUES (?, ?, ?, ?, ?, ?, ?)');
@@ -24,4 +26,5 @@ export function writeSplit(db: Db, txnId: string, amountCents: number, lines: Pu
     l.payee || null));
   // a split transaction's category lives on its lines; the owner decided, so learned mappings leave it alone
   db.prepare('UPDATE transactions SET category_id = NULL, person_id = NULL, category_owner_set = 1, updated_at = ? WHERE id = ?').run(nowIso, txnId);
+  restoreLinks(db, txnId, kept);
 }

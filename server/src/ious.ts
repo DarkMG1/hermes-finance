@@ -85,3 +85,42 @@ export function openItems(s: Settled, receipts: Set<string>): OpenItem[] {
     hasReceipt: receipts.has(t.transaction_id), paybacks,
   }));
 }
+
+/** R6: a row's person changed, so it no longer pays or is paid by its old links. */
+export function dropLinks(db: Db, txnId: string, lineId: string | null): void {
+  db.prepare(`DELETE FROM iou_links WHERE (payback_transaction_id = ? AND payback_line_id IS ?) OR (item_transaction_id = ? AND item_line_id IS ?)`)
+    .run(txnId, lineId, txnId, lineId);
+}
+
+export type Captured = { link: Link; side: 'payback' | 'item'; personId: string | null; sign: number };
+
+/** R3: split rewrites delete and recreate lines; remember which person each link on this transaction belonged to. */
+export function captureLinks(db: Db, txnId: string): Captured[] {
+  const person = (line: string | null) => (line
+    ? db.prepare('SELECT person_id AS p, amount_cents AS a FROM split_lines WHERE id = ?').get(line)
+    : db.prepare('SELECT person_id AS p, amount_cents AS a FROM transactions WHERE id = ?').get(txnId)) as { p: string | null; a: number } | undefined;
+  return (db.prepare('SELECT * FROM iou_links WHERE payback_transaction_id = ? OR item_transaction_id = ?').all(txnId, txnId) as Link[]).flatMap((link) => {
+    const side = link.payback_transaction_id === txnId ? 'payback' : 'item';
+    const at = person(side === 'payback' ? link.payback_line_id : link.item_line_id);
+    return at ? [{ link, side, personId: at.p, sign: Math.sign(at.a) }] : [];
+  });
+}
+
+/** Retarget each captured link to the unsplit row if it now has that person, else the first line with that person and sign; else drop it. */
+export function restoreLinks(db: Db, txnId: string, captured: Captured[]): void {
+  const row = db.prepare('SELECT person_id AS p, amount_cents AS a FROM transactions WHERE id = ?').get(txnId) as { p: string | null; a: number } | undefined;
+  const lines = db.prepare('SELECT id, person_id AS p, amount_cents AS a FROM split_lines WHERE transaction_id = ? ORDER BY id').all(txnId) as { id: string; p: string | null; a: number }[];
+  const del = db.prepare('DELETE FROM iou_links WHERE id = ?');
+  const ins = db.prepare(`INSERT INTO iou_links (id, payback_transaction_id, payback_line_id, item_transaction_id, item_line_id, amount_cents, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  for (const c of captured) {
+    del.run(c.link.id);
+    if (!c.personId) continue;
+    const target = !lines.length && row?.p === c.personId && Math.sign(row.a) === c.sign ? null
+      : lines.find((l) => l.p === c.personId && Math.sign(l.a) === c.sign)?.id;
+    if (target === undefined) continue;
+    const k = c.link;
+    ins.run(k.id, k.payback_transaction_id, c.side === 'payback' ? target : k.payback_line_id, k.item_transaction_id,
+      c.side === 'item' ? target : k.item_line_id, k.amount_cents, k.created_at);
+  }
+}

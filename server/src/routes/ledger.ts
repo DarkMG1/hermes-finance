@@ -9,6 +9,7 @@ import { idempotentWrite } from '../idempotency.ts';
 import { assertPersonTaggable, homePeople } from '../people.ts';
 import { excludedBy, getExpenses, getPayeeHistory, getReimbursements, getSpending } from '../cashflow.ts';
 import { linkInbox, restoreToInbox } from '../inbox.ts';
+import { dropLinks } from '../ious.ts';
 import { normalizeName } from '../recurring.ts';
 import { getNetWorth, localDay } from '../networth.ts';
 import { oldestOpenBefore, reconcileIfMovedIntoClosedMonth } from '../reconcile.ts';
@@ -112,6 +113,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       if (body.date !== undefined) { sets.push('date = ?', 'date_owner_set = 1'); args.push(body.date); }
       const now = deps.now().toISOString();
       db.prepare(`UPDATE transactions SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...args, now, req.params.id);
+      if (personAfter !== current.personId) dropLinks(db, current.id, null);
       if (body.categoryId) learnCategory(db, req.params.id, body.categoryId, now);
       if (body.date !== undefined) reconcileIfMovedIntoClosedMonth(db, req.params.id, current.date, body.date, now);
       return { status: 200, body: getTransaction(db, req.params.id, localDay(deps.now())) };
@@ -162,6 +164,8 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       if (body.payee !== undefined) { sets.push('payee = ?'); args.push(body.payee || null); }
       if (body.notes !== undefined) { sets.push('notes = ?'); args.push(body.notes); }
       db.prepare(`UPDATE split_lines SET ${sets.join(', ')} WHERE id = ?`).run(...args, req.params.lineId);
+      const was = txn.splitLines.find((l) => l.id === req.params.lineId)!.personId;
+      if ((body.personId !== undefined ? body.personId : body.categoryId ? null : was) !== was) dropLinks(db, txn.id, req.params.lineId);
       db.prepare('UPDATE transactions SET updated_at = ? WHERE id = ?').run(deps.now().toISOString(), txn.id);
       return { status: 200, body: getTransaction(db, txn.id, localDay(deps.now())) };
     });

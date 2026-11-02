@@ -2,7 +2,7 @@ import type { Account, Category, Home, ListTransactionsQuery, SplitLine, Transac
 import type { Db } from './db.ts';
 import { historyLines } from './cashflow.ts';
 import { ApiError } from './errors.ts';
-import { entryKey, settlePerson } from './ious.ts';
+import { captureLinks, entryKey, restoreLinks, settlePerson } from './ious.ts';
 import { bankText, memberships, normalizeName } from './recurring.ts';
 
 export { periodRange } from './days.ts';
@@ -230,10 +230,12 @@ export function fitSplitToAmount(db: Db, transactionId: string, nowIso: string):
   const bySize = [...lines].sort((x, y) => Math.abs(y.a) - Math.abs(x.a));
   const kept = bySize.filter((l) => l.a !== 0);
   if (!sameSign || kept.length < 2) {
+    const links = captureLinks(db, transactionId);
     db.prepare('DELETE FROM split_lines WHERE transaction_id = ?').run(transactionId);
     const winner = kept[0] ?? bySize[0]!;
     db.prepare('UPDATE transactions SET category_id = ?, person_id = ?, payee = COALESCE(?, payee), updated_at = ? WHERE id = ?')
       .run(winner.c, winner.p, winner.n, nowIso, transactionId);
+    restoreLinks(db, transactionId, links);
     return;
   }
   const update = db.prepare('UPDATE split_lines SET amount_cents = ? WHERE id = ?');

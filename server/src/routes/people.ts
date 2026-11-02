@@ -1,13 +1,14 @@
 import type { FastifyInstance } from 'fastify';
 import { randomUUID } from 'node:crypto';
-import { CreatePersonBody, ForgiveBody, ListPeopleQuery, PatchPersonBody, PeopleSettings } from '@hermes/shared';
+import { CreatePersonBody, ForgiveBody, ListPeopleQuery, PatchPersonBody, PaybackBody, PaybackQuery, PeopleSettings, type PaybackChoices } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { assertCategoryExists, getTransaction } from '../ledger.ts';
-import { getPerson, listPeople, peopleSettings, suggestions } from '../people.ts';
+import { dropLinks, entryKey, openItems, settlePerson } from '../ious.ts';
+import { assertPersonTaggable, getPerson, listPeople, peopleSettings, suggestions } from '../people.ts';
 
 export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
   const { db } = deps;
@@ -106,6 +107,62 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
       if (body.archived !== undefined) { sets.push('archived = ?'); args.push(body.archived ? 1 : 0); }
       db.prepare(`UPDATE people SET ${sets.join(', ')} WHERE id = ?`).run(...args, req.params.id);
       return { status: 200, body: getPerson(db, req.params.id)!.person };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+
+  /** The deposit (or one positive split line) as a payback: what it must be, and its entry key. */
+  const paybackTarget = (id: string, lineId: string | null | undefined) => {
+    const txn = getTransaction(db, id, localDay(deps.now()));
+    if (!txn) throw new ApiError(404, 'NOT_FOUND', 'transaction not found');
+    if (txn.forgiven) throw new ApiError(409, 'FORGIVENESS_LOCKED', 'delete the forgiveness to change it');
+    if (txn.splitLines.length && !lineId) throw new ApiError(409, 'SPLIT_TRANSACTION', 'tag a split transaction through its lines', 'lineId');
+    const line = lineId ? txn.splitLines.find((l) => l.id === lineId) : undefined;
+    if (lineId && !line) throw new ApiError(404, 'NOT_FOUND', 'split line not found');
+    if ((line?.amountCents ?? txn.amountCents) <= 0 || txn.paidByPersonId) throw new ApiError(400, 'INVALID_REQUEST', 'personId: a payback is money in', 'personId');
+    return { txn, lineId: line?.id ?? null, cents: line?.amountCents ?? txn.amountCents };
+  };
+
+  app.get<{ Params: { id: string } }>('/v1/transactions/:id/payback', async (req) => {
+    const q = parseBody(PaybackQuery, req.query);
+    const t = paybackTarget(req.params.id, q.lineId);
+    const key = entryKey(t.txn.id, t.lineId);
+    const receipts = new Set((db.prepare('SELECT transaction_id AS id FROM receipts').all() as { id: string }[]).map((r) => r.id));
+    const linked = (db.prepare('SELECT item_transaction_id AS transactionId, item_line_id AS lineId, amount_cents AS amountCents FROM iou_links WHERE payback_transaction_id = ? AND payback_line_id IS ? ORDER BY created_at, id')
+      .all(t.txn.id, t.lineId) as PaybackChoices['linked']);
+    return { items: openItems(settlePerson(db, q.personId, key), receipts), linked: (t.txn.personId ?? t.txn.splitLines.find((l) => l.id === t.lineId)?.personId) === q.personId ? linked : [] };
+  });
+
+  app.put<{ Params: { id: string } }>('/v1/transactions/:id/payback', async (req, reply) => {
+    const body = parseBody(PaybackBody, req.body);
+    const r = idempotentWrite(deps, req, () => {
+      const t = paybackTarget(req.params.id, body.lineId);
+      assertPersonTaggable(db, body.personId, 'personId', t.txn.id);
+      const open = new Map(openItems(settlePerson(db, body.personId, entryKey(t.txn.id, t.lineId)), new Set()).map((i) => [entryKey(i.transactionId, i.lineId), i]));
+      const seen = new Set<string>();
+      body.items.forEach((it, i) => {
+        const k = entryKey(it.transactionId, it.lineId ?? null);
+        if (!open.has(k) || seen.has(k)) throw new ApiError(400, 'INVALID_REQUEST', `items.${i}.transactionId: not an open item of this person`, `items.${i}.transactionId`);
+        seen.add(k);
+        if (it.amountCents > open.get(k)!.leftCents) throw new ApiError(400, 'INVALID_REQUEST', `items.${i}.amountCents: more than is left`, `items.${i}.amountCents`);
+      });
+      if (body.items.reduce((s, it) => s + it.amountCents, 0) > t.cents) throw new ApiError(400, 'INVALID_REQUEST', 'items: more than the payback', 'items');
+      const now = deps.now().toISOString();
+      // tag exactly like the person PATCH: the person clears the category and the owner decided
+      if (t.lineId) {
+        const was = t.txn.splitLines.find((l) => l.id === t.lineId)!.personId;
+        db.prepare('UPDATE split_lines SET person_id = ?, category_id = NULL WHERE id = ?').run(body.personId, t.lineId);
+        if (was !== body.personId) dropLinks(db, t.txn.id, t.lineId);
+      } else {
+        db.prepare('UPDATE transactions SET person_id = ?, category_id = NULL, category_owner_set = 1 WHERE id = ?').run(body.personId, t.txn.id);
+        if (t.txn.personId !== body.personId) dropLinks(db, t.txn.id, null);
+      }
+      db.prepare('DELETE FROM iou_links WHERE payback_transaction_id = ? AND payback_line_id IS ?').run(t.txn.id, t.lineId);
+      const ins = db.prepare(`INSERT INTO iou_links (id, payback_transaction_id, payback_line_id, item_transaction_id, item_line_id, amount_cents, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`);
+      body.items.forEach((it, i) => ins.run(randomUUID(), t.txn.id, t.lineId, it.transactionId, it.lineId ?? null, it.amountCents, `${now}#${String(i).padStart(2, '0')}`));
+      db.prepare('UPDATE transactions SET updated_at = ? WHERE id = ?').run(now, t.txn.id);
+      return { status: 200, body: getTransaction(db, t.txn.id, localDay(deps.now())) };
     });
     return reply.code(r.status).send(r.body);
   });
