@@ -45,7 +45,8 @@ export function settle(entries: Tagged[], links: Link[]): Settled {
       item.leftCents -= cents;
       credit.set(pk, credit.get(pk)! - cents);
       item.paybacks.push({ transactionId: p.transaction_id, lineId: p.line_id, date: p.date, amountCents: cents });
-      paidBack.set(pk, [...(paidBack.get(pk) ?? []), { transactionId: item.entry.transaction_id, lineId: item.entry.line_id, amountCents: cents }]);
+      if (!paidBack.has(pk)) paidBack.set(pk, []);
+      paidBack.get(pk)!.push({ transactionId: item.entry.transaction_id, lineId: item.entry.line_id, amountCents: cents });
     }
   }
   const open = [...items.values()];

@@ -63,6 +63,13 @@ test('split lines are keyed by line', () => {
   assert.equal(s.items.get(entryKey('t1', 'L1'))!.leftCents, 0);
 });
 
+test('two paybacks linked to one item: the earlier is applied first, the later is capped and its rest settles the oldest other item', () => {
+  const es = [e('old', -2000), e('item', -3000), e('b1', 2000), e('b2', 2000)];
+  const s = settle(es, [l('b1', 'item', 2000), l('b2', 'item', 2000)]);
+  assert.deepEqual(left(s), { old: 1000, item: 0 });
+  assert.deepEqual(s.items.get(entryKey('item', null))!.paybacks.map((p) => [p.transactionId, p.amountCents]), [['b1', 2000], ['b2', 1000]]);
+});
+
 test('invariant on random synthetic ledgers: sum of left = max(balance, 0), never negative', () => {
   let seed = 7;
   const rnd = (k: number) => { seed = (seed * 1103515245 + 12345) % 2 ** 31; return seed % k; };
