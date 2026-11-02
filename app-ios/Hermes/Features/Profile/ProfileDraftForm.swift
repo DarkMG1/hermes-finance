@@ -12,6 +12,7 @@ struct DraftField<B> {
         /// "federal" or a state code
         case code(WritableKeyPath<B, String?>)
         case choice(WritableKeyPath<B, String?>, [(value: String, label: String)])
+        case flag(WritableKeyPath<B, Bool?>)
     }
 
     let key: String
@@ -24,6 +25,7 @@ struct DraftField<B> {
         case .whole(let p): body[keyPath: p].map(String.init) ?? ""
         case .number(let p): FieldText.number(body[keyPath: p])
         case .date(let p), .text(let p), .code(let p), .choice(let p, _): body[keyPath: p] ?? ""
+        case .flag(let p): body[keyPath: p].map { $0 ? "yes" : "no" } ?? ""
         }
     }
 
@@ -43,6 +45,7 @@ struct DraftField<B> {
         case .date(let p): return put(p, FieldText.date)
         case .text(let p), .choice(let p, _): return put(p) { $0 }
         case .code(let p): return put(p, FieldText.code)
+        case .flag(let p): return put(p) { $0 == "yes" }
         }
     }
 
@@ -55,7 +58,7 @@ struct DraftField<B> {
         case .whole: FieldText.whole(t) != nil
         case .number: FieldText.number(t) != nil
         case .date: FieldText.date(t) != nil
-        case .text, .code, .choice: true
+        case .text, .code, .choice, .flag: true
         }
     }
 
@@ -65,7 +68,15 @@ struct DraftField<B> {
         case .whole: "Enter a whole number"
         case .number: "Enter a number"
         case .date: "Enter a date like 2026-01-31"
-        case .text, .code, .choice: ""
+        case .text, .code, .choice, .flag: ""
+        }
+    }
+
+    var options: [(value: String, label: String)]? {
+        switch kind {
+        case .choice(_, let options): options
+        case .flag: [("yes", "Yes"), ("no", "No")]
+        default: nil
         }
     }
 
@@ -80,7 +91,7 @@ struct DraftField<B> {
     }
 }
 
-private struct DraftFields<B>: View {
+struct DraftFields<B>: View {
     let fields: [DraftField<B>]
     @Binding var texts: [String: String]
     let uncertain: Set<String>
@@ -89,7 +100,7 @@ private struct DraftFields<B>: View {
         ForEach(fields, id: \.key) { field in
             let text = Binding { texts[field.key] ?? "" } set: { texts[field.key] = $0 }
             Group {
-                if case .choice(_, let options) = field.kind {
+                if let options = field.options {
                     Picker(field.label, selection: text) {
                         Text("None").tag("")
                         ForEach(options, id: \.value) { Text($0.label).tag($0.value) }
@@ -117,7 +128,7 @@ private struct DraftFields<B>: View {
         case .whole: .numberPad
         case .number: .decimalPad
         case .date: .numbersAndPunctuation
-        case .text, .code, .choice: .default
+        case .text, .code, .choice, .flag: .default
         }
     }
 }
@@ -149,9 +160,6 @@ struct ProfileDraftForm: View {
     @State private var savedJobId: String?
     @State private var savedGrants = 0
     @State private var stub: PayStub?
-    @State private var matches: [LedgerTransaction]?
-    @State private var matchesError: String?
-    @State private var linking: String?
 
     init(kind: ProfileKind, draft: ProfileDraft, uncertain: Set<String>) {
         self.kind = kind
@@ -172,7 +180,7 @@ struct ProfileDraftForm: View {
     }
 
     var body: some View {
-        if let stub { linkSheet(stub) } else { form }
+        if let stub { PayStubLinkSheet(stub: stub, header: "Saved. Which deposit is this paycheck?", skippable: true) } else { form }
     }
 
     private var locked: Bool { writes.unresolved || busy }
@@ -228,36 +236,6 @@ struct ProfileDraftForm: View {
         .disabled(locked)
     }
 
-    private func linkSheet(_ stub: PayStub) -> some View {
-        Sheet(title: "Link deposit", saveTitle: "Skip", canSave: !busy, busy: busy, unresolved: writes.unresolved, dirty: false,
-              onCancel: { dismiss() }, onSave: { dismiss() }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
-            Section {
-                if let matches {
-                    if matches.isEmpty {
-                        Text("No deposit of \(Money.format(stub.netCents ?? 0)) within 3 days of the pay date yet. You can link it later.")
-                            .textStyle(.subhead, color: Palette.secondaryText)
-                    }
-                    ForEach(matches) { t in
-                        HStack {
-                            TransactionRow(transaction: t)
-                            Button("Link") { Task { await link(stub, t.id) } }
-                                .buttonStyle(.borderless)
-                                // after an unconfirmed link only the same deposit may be retried
-                                .disabled(busy || (writes.unresolved && linking != t.id))
-                        }
-                    }
-                } else if let matchesError {
-                    InlineError(message: matchesError)
-                    Button("Try again") { Task { await loadMatches(stub) } }
-                } else {
-                    ProgressView().frame(maxWidth: .infinity)
-                }
-            } header: { Text("Saved. Which deposit is this paycheck?") }
-            if let error { Section { InlineError(message: error) } }
-        }
-        .task { await loadMatches(stub) }
-    }
-
     /// Every field parses (the server checks what's required).
     private var built: Bool {
         switch kind {
@@ -279,12 +257,6 @@ struct ProfileDraftForm: View {
         } catch {
             jobsError = "Couldn't load your jobs: \(errorMessage(error))"
         }
-    }
-
-    private func loadMatches(_ stub: PayStub) async {
-        guard matches == nil, let client = model.client else { return }
-        matchesError = nil
-        do { matches = try await client.payStubMatches(id: stub.id) } catch { matchesError = errorMessage(error) }
     }
 
     private func save() async {
@@ -341,22 +313,6 @@ struct ProfileDraftForm: View {
         return true
     }
 
-    private func link(_ stub: PayStub, _ transactionId: String) async {
-        guard let client = model.client else { return }
-        busy = true
-        defer { busy = false }
-        linking = transactionId
-        error = nil
-        do {
-            _ = try await client.linkPayStub(id: stub.id, transactionId: transactionId, idempotencyKey: writes.key)
-            writes.didSucceed()
-            dismiss()
-        } catch {
-            writes.didFail(error)
-            self.error = writes.unresolved ? "Couldn't confirm the link. Tap Link to retry; it won't be applied twice." : errorMessage(error)
-        }
-    }
-
     static let filingStatuses: [(value: String, label: String)] = [
         ("single", "Single"), ("married_joint", "Married filing jointly"), ("married_separate", "Married filing separately"),
         ("head_of_household", "Head of household"),
@@ -380,9 +336,13 @@ struct ProfileDraftForm: View {
         .init(key: "capitalLossCarryoverCents", label: "Capital loss carryover", kind: .money(\.capitalLossCarryoverCents)),
     ]
 
+    static let formKinds: [(value: String, label: String)] = [
+        ("w2", "W-2"), ("1099_nec", "1099-NEC"), ("1099_int", "1099-INT"), ("1099_div", "1099-DIV"), ("1099_b", "1099-B"), ("1099_misc", "1099-MISC"),
+        ("other", "Other"),
+    ]
+
     private static let formFields: [DraftField<TaxFormBody>] = [
-        .init(key: "kind", label: "Form", kind: .choice(\.kind, [("w2", "W-2"), ("1099_nec", "1099-NEC"), ("1099_int", "1099-INT"), ("1099_div", "1099-DIV"),
-                                                               ("1099_b", "1099-B"), ("1099_misc", "1099-MISC"), ("other", "Other")])),
+        .init(key: "kind", label: "Form", kind: .choice(\.kind, formKinds)),
         .init(key: "year", label: "Tax year", kind: .whole(\.year)),
         .init(key: "payer", label: "Employer or payer", kind: .text(\.payer)),
         .init(key: "amountCents", label: "Wages (W-2 box 1) or amount", kind: .money(\.amountCents)),
@@ -408,7 +368,7 @@ struct ProfileDraftForm: View {
         .init(key: "ytdGrossCents", label: "Gross year to date", kind: .money(\.ytdGrossCents)),
     ]
 
-    private static let jobFields: [DraftField<CreateJobBody>] = [
+    static let jobFields: [DraftField<CreateJobBody>] = [
         .init(key: "employer", label: "Employer", kind: .text(\.employer)),
         .init(key: "title", label: "Title", kind: .text(\.title)),
         .init(key: "startDate", label: "Start date", kind: .date(\.startDate)),
@@ -430,4 +390,72 @@ struct ProfileDraftForm: View {
         .init(key: "vestMonths", label: "Vests over (months)", kind: .whole(\.vestMonths)),
         .init(key: "vestEveryMonths", label: "Vests every (months)", kind: .whole(\.vestEveryMonths)),
     ]
+}
+
+/// The deposits a saved pay stub matches, to link one; linking closes it.
+struct PayStubLinkSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let stub: PayStub
+    var header = "Which deposit is this paycheck?"
+    /// right after saving the stub: Skip leaves it unlinked
+    var skippable = false
+    @State private var matches: [LedgerTransaction]?
+    @State private var matchesError: String?
+    @State private var linking: String?
+    @State private var writes = WriteGuard()
+    @State private var busy = false
+    @State private var error: String?
+
+    var body: some View {
+        Sheet(title: "Link deposit", saveTitle: "Skip", canSave: !busy, busy: busy, unresolved: writes.unresolved, dirty: false,
+              onCancel: { dismiss() }, onSave: skippable ? { dismiss() } : nil) { // swiftlint:disable:this multiple_closures_with_trailing_closure
+            Section {
+                if let matches {
+                    if matches.isEmpty {
+                        Text("No deposit of \(Money.format(stub.netCents ?? 0)) within 3 days of the pay date yet. You can link it later.")
+                            .textStyle(.subhead, color: Palette.secondaryText)
+                    }
+                    ForEach(matches) { t in
+                        HStack {
+                            TransactionRow(transaction: t)
+                            Button("Link") { Task { await link(t.id) } }
+                                .buttonStyle(.borderless)
+                                // after an unconfirmed link only the same deposit may be retried
+                                .disabled(busy || (writes.unresolved && linking != t.id))
+                        }
+                    }
+                } else if let matchesError {
+                    InlineError(message: matchesError)
+                    Button("Try again") { Task { await loadMatches() } }
+                } else {
+                    ProgressView().frame(maxWidth: .infinity)
+                }
+            } header: { Text(header) }
+            if let error { Section { InlineError(message: error) } }
+        }
+        .task { await loadMatches() }
+    }
+
+    private func loadMatches() async {
+        guard matches == nil, let client = model.client else { return }
+        matchesError = nil
+        do { matches = try await client.payStubMatches(id: stub.id) } catch { matchesError = errorMessage(error) }
+    }
+
+    private func link(_ transactionId: String) async {
+        guard let client = model.client else { return }
+        busy = true
+        defer { busy = false }
+        linking = transactionId
+        error = nil
+        do {
+            _ = try await client.linkPayStub(id: stub.id, transactionId: transactionId, idempotencyKey: writes.key)
+            writes.didSucceed()
+            dismiss()
+        } catch {
+            writes.didFail(error)
+            self.error = writes.unresolved ? "Couldn't confirm the link. Tap Link to retry; it won't be applied twice." : errorMessage(error)
+        }
+    }
 }

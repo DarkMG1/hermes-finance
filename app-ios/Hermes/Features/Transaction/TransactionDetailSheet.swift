@@ -77,6 +77,16 @@ struct TransactionDetailSheet: View {
                 if current.pending { LabeledContent("Status", value: "Pending") }
                 if !current.bankDescription.isEmpty { LabeledContent("Bank description", value: current.bankDescription) }
             }
+            if let stub = current.payStub {
+                let deductions = [("Federal tax", stub.federalCents), ("State tax", stub.stateCents), ("Social Security", stub.socialSecurityCents),
+                                  ("Medicare", stub.medicareCents), ("Retirement", stub.retirementCents), ("Other deductions", stub.otherDeductionsCents)]
+                Section("Pay stub") {
+                    ForEach([("Gross pay", stub.grossCents)] + deductions.map { ($0.0, -$0.1) }
+                            + [("Net pay", stub.grossCents - deductions.reduce(0) { $0 + $1.1 })], id: \.0) { line in
+                        LabeledContent(line.0) { MoneyText(cents: line.1, colored: false) }
+                    }
+                }
+            }
             if !forgiven {
                 Section {
                     Toggle("Reconciled", isOn: Binding(get: { reconciled }, set: { on in Task { await setReconciled(on) } }))

@@ -17,6 +17,8 @@ struct SettingsView: View {
     @State private var confirmDisconnect = false
     @State private var serverSha: String?
     @State private var aiUsage: AiUsage?
+    @State private var hasProfile = false
+    @State private var openingProfile = false
 
     private var versionText: String {
         let info = Bundle.main.infoDictionary
@@ -66,6 +68,10 @@ struct SettingsView: View {
             }
             Section {
                 NavigationLink { ReconcileView() } label: { Label("Reconcile", systemImage: "checkmark.circle") }
+                if hasProfile {
+                    Button { openingProfile = true } label: { Label("Financial profile", systemImage: "person.text.rectangle") }
+                        .foregroundStyle(Palette.text)
+                }
             }
             Section {
                 Button { importing = true } label: {
@@ -141,7 +147,9 @@ struct SettingsView: View {
         .task { await loadBanks() }
         // an older server has no usage route: the row stays hidden
         .task { await loadAiUsage() }
-        .refreshable { await loadBanks(); await loadAiUsage() }
+        .task { await checkProfile() }
+        .refreshable { await loadBanks(); await loadAiUsage(); await checkProfile() }
+        .sheet(isPresented: $openingProfile) { ProfileGate() }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.commaSeparatedText]) { result in
             model.queueCSV(result)
         }
@@ -169,6 +177,18 @@ struct SettingsView: View {
         } catch ClientError.api(404, _) {
             aiUsage = nil
         } catch {}
+    }
+
+    /// Only an older server (404) hides the row; the reply itself is dropped, so nothing shows before Face ID.
+    private func checkProfile() async {
+        do {
+            _ = try await model.client?.profile()
+            hasProfile = true
+        } catch ClientError.api(404, _) {
+            hasProfile = false
+        } catch {
+            hasProfile = true
+        }
     }
 
     private func loadBanks() async {
