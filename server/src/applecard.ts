@@ -171,6 +171,9 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
   const unpaired = new Map<string, number>();
   const correctionKey = (r: AppleCardRow) => JSON.stringify([r.transactionDate, r.description, r.type]);
   for (const k of rows.flatMap((r, i) => (found[i] ? [] : [correctionKey(r), baseOf(r)]))) unpaired.set(k, (unpaired.get(k) ?? 0) + 1);
+  // a stored charge cleared inside this file's clearing range would be in it, so only then can a same-amount row be its re-export
+  const clearings = rows.flatMap((r) => r.clearingDate ?? []).sort();
+  const covers = (c: string | null) => c !== null && c >= clearings[0]! && c <= clearings.at(-1)!;
   const counterparts = db.prepare(`SELECT ${cols} FROM transactions
     WHERE source = 'applecard' AND removed_at IS NULL AND account_id = ? AND COALESCE(authorized_date, date) = ? AND bank_description = ?`);
   rows.forEach((r, i) => {
@@ -179,13 +182,12 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
     const candidates = (counterparts.all(accountId, r.transactionDate, r.description) as NonNullable<Stored>[])
       .filter((s) => !taken.has(s.sourceId) && groupFor(baseOf({ ...r, amountCents: s.amount })).sourceIds.has(s.sourceId));
     const same = candidates.filter((s) => s.amount === r.amountCents);
-    const row = same.length ? (same.length === 1 ? same[0] : undefined)
+    const row = same.length ? (same.length === 1 && covers(same[0]!.c) ? same[0] : undefined)
       : candidates.length === 1 && unpaired.get(correctionKey(r)) === 1 ? candidates[0] : undefined;
     if (!row) return;
     taken.add(row.sourceId);
     found[i] = row;
-    if (row.fileDate && row.fileDate > fileDate) return;
-    if (same.length) { ids[i] = row.sourceId; return; }
+    if (same.length || (row.fileDate && row.fileDate > fileDate)) { ids[i] = row.sourceId; return; }
     db.prepare('UPDATE transactions SET source_id = ? WHERE id = ?').run(ids[i]!, row.id);
     // keep the old amount's occurrences contiguous: its last one fills the vacated slot
     const oldBase = baseOf({ ...r, amountCents: row.amount });
@@ -199,8 +201,8 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
     const sourceId = ids[i];
     const row = found[i];
     if (cutover && r.transactionDate < cutover) { result.skippedBeforeCutover += 1; return; }
-    if (row) result.updated += 1; else result.added += 1;
     if (row?.fileDate && row.fileDate > fileDate) return; // newest statement wins
+    if (row) result.updated += 1; else result.added += 1;
     // payments must never count as spending (so never take a remembered category); other rows keep Apple's category so refunds net against purchases
     const plaidCategory = r.type.toLowerCase() === 'payment' ? 'LOAN_PAYMENTS_CREDIT_CARD_PAYMENT' : r.category;
     upsert.run({ id: randomUUID(), accountId, sourceId, date: r.transactionDate, clearing: r.clearingDate, amount: r.amountCents, desc: r.description,
