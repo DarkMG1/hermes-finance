@@ -82,6 +82,7 @@ test('grants: create under a job, validate, patch, delete; next vests across gra
   for (const [body, field] of [
     [{ ...base, shares: null }, 'shares'], [{ ...base, kind: 'option' }, 'strikeCents'], [{ ...base, cliffMonths: 49 }, 'cliffMonths'],
     [{ ...base, vestEveryMonths: 0 }, 'vestEveryMonths'], [{ ...base, kind: 'psu' }, 'kind'],
+    [{ ...base, strikeCents: 100 }, 'strikeCents'],
   ] as const) assert.equal((await send('POST', `/v1/jobs/${job.id}/grants`, body)).json().field, field, JSON.stringify(body));
   const opt = (await send('POST', `/v1/jobs/${job.id}/grants`, { kind: 'option', shares: 90, strikeCents: 150, grantDate: '2026-02-28', cliffMonths: 0, vestMonths: 3, vestEveryMonths: 1 })).json();
   assert.deepEqual((await get(`/v1/jobs/${job.id}`)).json().nextVests, [
@@ -91,8 +92,9 @@ test('grants: create under a job, validate, patch, delete; next vests across gra
     { date: '2026-06-15', shares: 25, valueCents: null, grantId: rsu.json().id },
   ], "the RSU's cliff vests today (2026-03-15), which is not after today");
   assert.equal((await send('PATCH', `/v1/jobs/${job.id}/grants/${opt.id}`, { strikeCents: null })).json().field, 'strikeCents', 'the merged grant is checked');
-  const p = await send('PATCH', `/v1/jobs/${job.id}/grants/${opt.id}`, { valueCents: 9000, shares: null, kind: 'rsu', strikeCents: null });
-  assert.deepEqual([p.statusCode, p.json().shares, p.json().valueCents], [200, null, 9000]);
+  assert.equal((await send('PATCH', `/v1/jobs/${job.id}/grants/${opt.id}`, { kind: 'rsu', strikeCents: 150 })).json().field, 'strikeCents', 'an RSU has no strike');
+  const p = await send('PATCH', `/v1/jobs/${job.id}/grants/${opt.id}`, { valueCents: 9000, shares: null, kind: 'rsu' });
+  assert.deepEqual([p.statusCode, p.json().shares, p.json().valueCents, p.json().strikeCents], [200, null, 9000, null], 'becoming an RSU clears the strike');
   assert.equal((await send('PATCH', `/v1/jobs/other/grants/${opt.id}`, { vestMonths: 6 })).statusCode, 404);
   assert.equal((await send('DELETE', `/v1/jobs/${job.id}/grants/${opt.id}`)).statusCode, 200);
   assert.deepEqual((await get(`/v1/jobs/${job.id}`)).json().grants.map((g: { id: string }) => g.id), [rsu.json().id]);
@@ -146,4 +148,12 @@ test('vesting: value-only grant splits cents with the remainder on the last even
 test('vesting: whole shares per event with the remainder last, and a schedule that does not divide ends at vestMonths', () => {
   const g = { id: 'g3', shares: 10.5, valueCents: 1000, grantDate: '2026-01-31', cliffMonths: 0, vestMonths: 5, vestEveryMonths: 2 };
   assert.deepEqual(vestEvents(g, '2000-01-01', 9).map((e) => [e.date, e.shares, e.valueCents]), [['2026-03-31', 4, 400], ['2026-05-31', 4, 400], ['2026-06-30', 2.5, 200]]);
+});
+
+test('vesting: each event vests what accrued so far, so monthly 1000 shares after a 12-month cliff end on 21 and sum to 1000', () => {
+  const g = { id: 'g4', shares: 1000, valueCents: null, grantDate: '2026-01-15', cliffMonths: 12, vestMonths: 48, vestEveryMonths: 1 };
+  const events = vestEvents(g, '2000-01-01', 100);
+  assert.equal(events.length, 37);
+  assert.deepEqual([events[0]!.shares, events[1]!.shares, events.at(-1)!.shares], [250, 20, 21]);
+  assert.equal(events.reduce((s, e) => s + e.shares!, 0), 1000);
 });

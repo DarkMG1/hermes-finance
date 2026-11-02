@@ -87,7 +87,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       const current = getGrant(db, req.params.id, req.params.grantId);
       if (!current) throw notFound('grant');
       const { id, jobId } = current;
-      const merged = parseBody(GrantBody, { ...pick(current, Object.keys(GrantBody.shape)), ...patch });
+      const merged = parseBody(GrantBody, { ...pick(current, Object.keys(GrantBody.shape)), ...(patch.kind === 'rsu' ? { strikeCents: null } : {}), ...patch });
       db.prepare(`UPDATE equity_grants SET ${assign(GRANT_COLS)} WHERE id = ?`).run(...grantValues(merged), id);
       return { status: 200, body: getGrant(db, jobId, id) };
     });

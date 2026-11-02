@@ -484,10 +484,12 @@ const GrantFields = z.object({
 });
 export const EquityGrant = GrantFields.extend({ id: Id, jobId: Id });
 export type EquityGrant = z.infer<typeof EquityGrant>;
-/** POST takes every field (shares, valueCents and strikeCents may be left out as null); PATCH takes any of them and checks the result. */
+/** POST takes every field (shares, valueCents and strikeCents may be left out as null); PATCH takes any of them and checks the result;
+ *  a PATCH to rsu without a strikeCents clears the strike. */
 export const GrantBody = GrantFields.partial({ shares: true, valueCents: true, strikeCents: true, cliffMonths: true }).strict()
   .refine((g) => g.shares != null || g.valueCents != null, { message: 'shares or valueCents is required', path: ['shares'] })
   .refine((g) => g.kind !== 'option' || g.strikeCents != null, { message: 'an option needs a strike price', path: ['strikeCents'] })
+  .refine((g) => g.kind === 'option' || g.strikeCents == null, { message: 'only an option has a strike price', path: ['strikeCents'] })
   .refine((g) => (g.cliffMonths ?? 0) <= g.vestMonths, { message: 'must be at most vestMonths', path: ['cliffMonths'] })
   .refine((g) => g.vestEveryMonths <= g.vestMonths, { message: 'must be at most vestMonths', path: ['vestEveryMonths'] });
 export type GrantBody = z.infer<typeof GrantBody>;

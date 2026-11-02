@@ -38,21 +38,20 @@ export function getJob(db: Db, id: string, today: string): JobDetail | null {
 }
 
 /** Vest events dated after `after`: the cliff vests everything accrued through it, then one event every vestEveryMonths, the last at
- *  vestMonths. Each event rounds down (whole shares, cents); the last takes the remainder. Month ends clamp (Jan 31 + 1 month = Feb 28). */
+ *  vestMonths. Each event vests what has accrued so far rounded down (whole shares, cents); the last takes the remainder. Month ends clamp (Jan 31 + 1 month = Feb 28). */
 export function vestEvents(g: Pick<EquityGrant, 'id' | 'shares' | 'valueCents' | 'grantDate' | 'cliffMonths' | 'vestMonths' | 'vestEveryMonths'>, after: string, limit: number): VestEvent[] {
   const months = new Set<number>();
   if (g.cliffMonths > 0) months.add(g.cliffMonths);
   for (let m = g.vestEveryMonths; m < g.vestMonths; m += g.vestEveryMonths) if (m > g.cliffMonths) months.add(m);
   months.add(g.vestMonths);
   const sorted = [...months].sort((a, b) => a - b);
-  const share = (total: number | null, prev: number, m: number, given: number) =>
-    total === null ? null : m === g.vestMonths ? total - given : Math.floor((total * (m - prev)) / g.vestMonths);
+  const share = (total: number | null, m: number, given: number) =>
+    total === null ? null : m === g.vestMonths ? total - given : Math.floor((total * m) / g.vestMonths) - given;
   const events: VestEvent[] = [];
   let shares = 0;
   let cents = 0;
-  sorted.forEach((m, i) => {
-    const prev = i === 0 ? 0 : sorted[i - 1]!;
-    const e = { date: addInterval(g.grantDate, 'monthly', m)!, shares: share(g.shares, prev, m, shares), valueCents: share(g.valueCents, prev, m, cents), grantId: g.id };
+  sorted.forEach((m) => {
+    const e = { date: addInterval(g.grantDate, 'monthly', m)!, shares: share(g.shares, m, shares), valueCents: share(g.valueCents, m, cents), grantId: g.id };
     shares += e.shares ?? 0;
     cents += e.valueCents ?? 0;
     if (e.date > after) events.push(e);
