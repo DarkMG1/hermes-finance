@@ -3,7 +3,7 @@ import type { Db } from './db.ts';
 import { localDay } from './days.ts';
 import { memberships } from './recurring.ts';
 import { ApiError } from './errors.ts';
-import { TAGGED, personEntries } from './ious.ts';
+import { TAGGED, entryKey, openItems, personEntries, personLinks, settle } from './ious.ts';
 import { TXN_COLS, lookups, rowToTransaction, type TxnRow } from './ledger.ts';
 
 type PersonRow = { id: string; name: string; match_text: string | null; archived: number };
@@ -29,20 +29,25 @@ export function getPerson(db: Db, id: string): PersonDetail | null {
   if (!row) return null;
   // same-day entries in the order they were recorded (rowid when one sync gave them the same created_at); ids are random
   const items = personEntries(db, id);
+  const s = settle(items, personLinks(db, items));
   const withReceipt = new Set((db.prepare('SELECT transaction_id AS id FROM receipts').all() as { id: string }[]).map((r) => r.id));
   let balance = 0;
   // computed on every read, so bank edits and removals rewrite the feed
   const history: HistoryEntry[] = items.map((t) => {
     balance -= t.amount;
+    const key = entryKey(t.transaction_id, t.line_id);
+    const item = s.items.get(key);
+    const paidBack = s.paidBack.get(key);
     return {
       transactionId: t.transaction_id, lineId: t.line_id, date: t.date, payee: t.payee,
       kind: t.forgiven ? 'forgiven' : t.paid_by ? 'paidByThem' : t.amount < 0 ? 'forThem' : 'fromThem', effectCents: -t.amount, balanceAfterCents: balance, settled: balance === 0,
       hasReceipt: withReceipt.has(t.transaction_id),
+      ...(item ? { leftCents: item.leftCents } : {}), ...(paidBack ? { paidBack } : {}),
     };
   });
   const spentOnThemCents = items.filter((t) => t.amount < 0 && !t.paid_by && !t.forgiven).reduce((s, t) => s - t.amount, 0);
   const forgivenCents = items.filter((t) => t.forgiven).reduce((s, t) => s + t.amount, 0);
-  return { person: toPerson(row, balance), history: history.reverse(), spentOnThemCents, forgivenCents };
+  return { person: toPerson(row, balance), history: history.reverse(), spentOnThemCents, forgivenCents, openItems: openItems(s, withReceipt) };
 }
 
 /** A new tag or payer must name a live person; an archived person stays valid in the same role on that transaction. */

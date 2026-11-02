@@ -20,7 +20,8 @@
       "forgiven": false,
       "hasReceipt": false,
       "hasHistory": false,
-      "recurring": null
+      "recurring": null,
+      "iou": null
     },
     "personId": "person-1"
   }

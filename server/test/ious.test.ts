@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { settle, entryKey, type Tagged, type Link } from '../src/ious.ts';
+import { buildApp } from '../src/app.ts';
+import { makeTestDeps, AUTH, seedAccount, seedPerson, seedSplit, seedTxn } from './helpers.ts';
 
 let n = 0;
 const e = (id: string, amount: number, o: Partial<Tagged> = {}): Tagged => ({
@@ -89,4 +91,51 @@ test('invariant on random synthetic ledgers: sum of left = max(balance, 0), neve
     assert.ok(lefts.every((x) => x >= 0));
     assert.equal(lefts.reduce((a, b) => a + b, 0), Math.max(balance(es), 0), `run ${run}`);
   }
+});
+
+function app() {
+  const { deps } = makeTestDeps();
+  seedAccount(deps.db, { id: 'a1', subtype: 'checking' });
+  seedPerson(deps.db, { id: 'p1', name: 'Synthetic Quill' });
+  const a = buildApp(deps);
+  const get = async (url: string) => (await a.inject({ method: 'GET', url, headers: AUTH })).json();
+  const link = (id: string, payback: string, item: string, cents: number, itemLine: string | null = null) => deps.db.prepare(
+    'INSERT INTO iou_links (id, payback_transaction_id, payback_line_id, item_transaction_id, item_line_id, amount_cents, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?)')
+    .run(id, payback, item, itemLine, cents, '2026-04-01T00:00:00Z');
+  return { deps, get, link, send: (method: 'PUT' | 'PATCH', url: string, key: string, payload: object) =>
+    a.inject({ method, url, headers: { ...AUTH, 'idempotency-key': key }, payload }) };
+}
+
+test('person detail lists open items oldest first, with left, totals and linked paybacks; history carries leftCents and paidBack', async () => {
+  const { deps, get, link } = app();
+  seedTxn(deps.db, { id: 'dinner', accountId: 'a1', date: '2026-03-01', amountCents: -3000, personId: 'p1', payee: 'SYNTHETIC DINNER' });
+  seedTxn(deps.db, { id: 'concert', accountId: 'a1', date: '2026-03-02', amountCents: -6000, personId: 'p1', payee: 'SYNTHETIC CONCERT' });
+  seedTxn(deps.db, { id: 'back', accountId: 'a1', date: '2026-03-05', amountCents: 2000, personId: 'p1' });
+  link('k1', 'back', 'concert', 2000);
+  const d = await get('/v1/people/p1');
+  assert.deepEqual(d.openItems.map((i: { transactionId: string; leftCents: number; totalCents: number }) => [i.transactionId, i.leftCents, i.totalCents]),
+    [['dinner', 3000, 3000], ['concert', 4000, 6000]]);
+  assert.deepEqual(d.openItems[1].paybacks, [{ transactionId: 'back', lineId: null, date: '2026-03-05', amountCents: 2000 }]);
+  const h = Object.fromEntries(d.history.map((x: { transactionId: string }) => [x.transactionId, x]));
+  assert.equal(h.concert.leftCents, 4000);
+  assert.deepEqual(h.back.paidBack, [{ transactionId: 'concert', lineId: null, amountCents: 2000 }]);
+  assert.equal(h.dinner.paidBack, undefined);
+  assert.equal(d.person.balanceCents, 7000, 'balance unchanged by links');
+});
+
+test('transaction iou: item left, payback paidBack with payees, null on split and untagged rows', async () => {
+  const { deps, get, link } = app();
+  seedTxn(deps.db, { id: 'concert', accountId: 'a1', date: '2026-03-02', amountCents: -6000, personId: 'p1', payee: 'SYNTHETIC CONCERT' });
+  seedTxn(deps.db, { id: 'back', accountId: 'a1', date: '2026-03-05', amountCents: 6000, personId: 'p1' });
+  seedTxn(deps.db, { id: 'split', accountId: 'a1', date: '2026-03-06', amountCents: -2000 });
+  seedSplit(deps.db, { id: 'L1', transactionId: 'split', amountCents: -1000, categoryId: null, personId: 'p1' });
+  seedSplit(deps.db, { id: 'L2', transactionId: 'split', amountCents: -1000, categoryId: null });
+  seedTxn(deps.db, { id: 'mine', accountId: 'a1', date: '2026-03-07', amountCents: -500 });
+  link('k1', 'back', 'concert', 6000);
+  assert.deepEqual((await get('/v1/transactions/concert')).iou, { leftCents: 0, paidBack: [] });
+  assert.deepEqual((await get('/v1/transactions/back')).iou, { leftCents: null, paidBack: [{ transactionId: 'concert', lineId: null, amountCents: 6000, payee: 'SYNTHETIC CONCERT' }] });
+  assert.equal((await get('/v1/transactions/split')).iou, null);
+  assert.equal((await get('/v1/transactions/mine')).iou, null);
+  const page = await get('/v1/transactions?personId=p1');
+  assert.deepEqual(page.transactions.find((t: { id: string }) => t.id === 'concert').iou, { leftCents: 0, paidBack: [] }, 'lists carry it too');
 });

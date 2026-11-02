@@ -2,6 +2,7 @@ import type { Account, Category, Home, ListTransactionsQuery, SplitLine, Transac
 import type { Db } from './db.ts';
 import { historyLines } from './cashflow.ts';
 import { ApiError } from './errors.ts';
+import { entryKey, settlePerson } from './ious.ts';
 import { bankText, memberships, normalizeName } from './recurring.ts';
 
 export { periodRange } from './days.ts';
@@ -30,11 +31,23 @@ export function lookups(db: Db, rows: TxnRow[], member: ReturnType<typeof member
   }
   const receipts = new Set((db.prepare('SELECT transaction_id AS id FROM receipts WHERE transaction_id IN (SELECT value FROM json_each(?))')
     .all(ids) as { id: string }[]).map((r) => r.id));
+  // only unsplit person-tagged rows carry iou; one settle per person in the list
+  const iou = new Map<string, Transaction['iou']>();
+  for (const pid of new Set(rows.filter((r) => r.person_id && !splits.has(r.id)).map((r) => r.person_id!))) {
+    const s = settlePerson(db, pid);
+    const payees = new Map([...s.items.values()].map((i) => [entryKey(i.entry.transaction_id, i.entry.line_id), i.entry.payee]));
+    for (const r of rows) {
+      if (r.person_id !== pid || splits.has(r.id)) continue;
+      const k = entryKey(r.id, null);
+      iou.set(r.id, { leftCents: s.items.get(k)?.leftCents ?? null,
+        paidBack: (s.paidBack.get(k) ?? []).map((p) => ({ ...p, payee: payees.get(entryKey(p.transactionId, p.lineId)) ?? '' })) });
+    }
+  }
   // a bill holds only the charges its History lists: owner money out (a refund or someone's IOU never opens the bill)
-  return { spending, splits, receipts, recurring: member(rows.filter((r) => r.amount_cents < 0 && r.person_id === null && r.forgiven === 0 && billable.has(r.id))) };
+  return { spending, splits, receipts, iou, recurring: member(rows.filter((r) => r.amount_cents < 0 && r.person_id === null && r.forgiven === 0 && billable.has(r.id))) };
 }
 
-export function rowToTransaction(r: TxnRow, { spending, recurring, splits, receipts }: ReturnType<typeof lookups>): Transaction {
+export function rowToTransaction(r: TxnRow, { spending, recurring, splits, receipts, iou }: ReturnType<typeof lookups>): Transaction {
   const splitLines = splits.get(r.id) ?? [];
   const payee = r.payee ?? r.merchant_name ?? r.bank_description;
   return {
@@ -48,6 +61,7 @@ export function rowToTransaction(r: TxnRow, { spending, recurring, splits, recei
     // a bill's charge always opens the bill's History
     hasHistory: (normalizeName(payee) !== '' && (r.payee !== null || r.merchant_name !== null) && spending.has(r.id)) || recurring.has(r.id),
     recurring: recurring.get(r.id) ?? null,
+    iou: iou.get(r.id) ?? null,
   };
 }
 

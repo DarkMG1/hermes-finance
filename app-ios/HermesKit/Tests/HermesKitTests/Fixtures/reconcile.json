@@ -23,7 +23,8 @@
       "forgiven": false,
       "hasReceipt": false,
       "hasHistory": true,
-      "recurring": null
+      "recurring": null,
+      "iou": null
     },
     {
       "id": "txn-1",
@@ -45,7 +46,8 @@
       "forgiven": false,
       "hasReceipt": false,
       "hasHistory": true,
-      "recurring": null
+      "recurring": null,
+      "iou": null
     }
   ]
 }

@@ -1,3 +1,4 @@
+import type { OpenItem } from '@hermes/shared';
 import type { Db } from './db.ts';
 
 // Every live amount between the owner and a person: split lines and unsplit transactions tagged with them, and manual rows they paid.
@@ -76,4 +77,11 @@ export function personLinks(db: Db, entries: Tagged[]): Link[] {
 export function settlePerson(db: Db, personId: string, without?: string): Settled {
   const entries = personEntries(db, personId).filter((t) => entryKey(t.transaction_id, t.line_id) !== without);
   return settle(entries, personLinks(db, entries));
+}
+
+export function openItems(s: Settled, receipts: Set<string>): OpenItem[] {
+  return [...s.items.values()].filter((i) => i.leftCents > 0).map(({ entry: t, leftCents, paybacks }) => ({
+    transactionId: t.transaction_id, lineId: t.line_id, date: t.date, payee: t.payee, totalCents: -t.amount, leftCents,
+    hasReceipt: receipts.has(t.transaction_id), paybacks,
+  }));
 }

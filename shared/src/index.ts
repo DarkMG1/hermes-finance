@@ -32,6 +32,8 @@ export type SplitLine = z.infer<typeof SplitLine>;
 
 export const RecurringFrequency = z.enum(['weekly', 'biweekly', 'semi_monthly', 'monthly', 'annually', 'unknown']);
 
+const PaidBack = z.object({ transactionId: Id, lineId: Id.nullable(), amountCents: Cents });
+
 export const Transaction = z.object({
   id: Id, accountId: Id, source: z.enum(['plaid', 'manual', 'actual', 'applecard']), date: DateStr,
   amountCents: Cents, payee: z.string(), bankDescription: z.string(), merchantName: z.string().nullable(),
@@ -44,6 +46,8 @@ export const Transaction = z.object({
   hasHistory: z.boolean(),
   /** The visible Recurring item this charge belongs to (ended ones too). */
   recurring: z.object({ id: z.string(), name: z.string(), frequency: RecurringFrequency }).nullable(),
+  /** Unsplit person-tagged rows: an item's leftCents (null on a payback) and what a payback paid. */
+  iou: z.object({ leftCents: Cents.nullable(), paidBack: z.array(PaidBack.extend({ payee: z.string() })) }).nullable(),
 });
 export type Transaction = z.infer<typeof Transaction>;
 
@@ -99,11 +103,31 @@ export type Person = z.infer<typeof Person>;
 export const HistoryEntry = z.object({
   transactionId: Id, lineId: Id.nullable(), date: DateStr, payee: z.string(), kind: z.enum(['forThem', 'fromThem', 'paidByThem', 'forgiven']),
   effectCents: Cents, balanceAfterCents: Cents, settled: z.boolean(), hasReceipt: z.boolean(),
+  /** Items only. */
+  leftCents: Cents.optional(),
+  /** Paybacks with links only. */
+  paidBack: z.array(PaidBack).optional(),
 });
 export type HistoryEntry = z.infer<typeof HistoryEntry>;
 
-export const PersonDetail = z.object({ person: Person, history: z.array(HistoryEntry), spentOnThemCents: Cents, forgivenCents: Cents });
+/** A charge for a person that isn't fully paid back yet; paybacks are the ones linked to it. */
+export const OpenItem = z.object({
+  transactionId: Id, lineId: Id.nullable(), date: DateStr, payee: z.string(), totalCents: Cents, leftCents: Cents, hasReceipt: z.boolean(),
+  paybacks: z.array(z.object({ transactionId: Id, lineId: Id.nullable(), date: DateStr, amountCents: Cents })),
+});
+export type OpenItem = z.infer<typeof OpenItem>;
+
+export const PersonDetail = z.object({ person: Person, history: z.array(HistoryEntry), spentOnThemCents: Cents, forgivenCents: Cents, openItems: z.array(OpenItem) });
 export type PersonDetail = z.infer<typeof PersonDetail>;
+
+export const PaybackQuery = z.object({ personId: Id, lineId: Id.optional() }).strict();
+export const PaybackBody = z.object({
+  personId: Id, lineId: Id.nullable().optional(),
+  items: z.array(z.object({ transactionId: Id, lineId: Id.nullable().optional(), amountCents: z.number().int().min(1).max(MAX_AMOUNT_CENTS) }).strict()).max(50),
+}).strict();
+export type PaybackBody = z.infer<typeof PaybackBody>;
+export const PaybackChoices = z.object({ items: z.array(OpenItem), linked: z.array(PaidBack) });
+export type PaybackChoices = z.infer<typeof PaybackChoices>;
 
 export const ForgiveBody = z.object({
   amountCents: z.number().int().min(1).max(10_000_000), date: DateInput, categoryId: Id.nullable().optional(), notes: z.string().max(2000).optional(),
