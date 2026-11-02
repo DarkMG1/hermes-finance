@@ -1,8 +1,15 @@
 /// Row wording shared by transactions and their split lines; the app resolves display dates and names.
 public enum TransactionLabel {
-    public static func tag(personName: String?, categoryName: String, amountCents: Int) -> String {
+    public static func tag(personName: String?, categoryName: String, amountCents: Int, iou: TransactionIOU? = nil) -> String {
         guard let personName else { return categoryName }
-        return "\(personName) \(amountCents < 0 ? "owes" : "repaid")"
+        guard amountCents < 0 else {
+            let paid = iou?.paidBack ?? []
+            if paid.count > 1 { return "\(personName) repaid · \(paid.count) items" }
+            return paid.first.map { "\(personName) repaid · \($0.payee ?? "")" } ?? "\(personName) repaid"
+        }
+        guard let left = iou?.leftCents else { return "\(personName) owes" }
+        if left == 0 { return "\(personName) repaid" }
+        return left < -amountCents ? "\(personName) owes · \(Money.format(left)) left" : "\(personName) owes"
     }
 
     public static func subtitle(_ transaction: LedgerTransaction, day: String, categoryName: String,
@@ -25,7 +32,7 @@ public enum TransactionLabel {
             if yours != transaction.amountCents { parts.append("yours \(Money.format(abs(yours)))") }
         } else {
             parts.append(tag(personName: transaction.personId.map(personName), categoryName: categoryName,
-                             amountCents: transaction.amountCents))
+                             amountCents: transaction.amountCents, iou: transaction.iou))
         }
         return parts.joined(separator: " · ")
     }

@@ -126,6 +126,49 @@ public struct PutSplitsBody: Encodable, Sendable, Equatable {
     public init(lines: [SplitLineBody]) { self.lines = lines }
 }
 
+/// Links a payback to the items it paid; `lineId` goes out as null when the payback is a whole transaction.
+public struct PaybackBody: Encodable, Sendable {
+    public let personId: String
+    public let lineId: String?
+    public let items: [PaybackItem]
+
+    public init(personId: String, lineId: String?, items: [PaybackItem]) {
+        self.personId = personId
+        self.lineId = lineId
+        self.items = items
+    }
+
+    private enum Keys: String, CodingKey { case personId, lineId, items }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encode(personId, forKey: .personId)
+        try c.encode(lineId, forKey: .lineId)
+        try c.encode(items, forKey: .items)
+    }
+}
+
+public struct PaybackItem: Encodable, Sendable, Hashable {
+    public let transactionId: String
+    public let lineId: String?
+    public let amountCents: Int
+
+    public init(transactionId: String, lineId: String?, amountCents: Int) {
+        self.transactionId = transactionId
+        self.lineId = lineId
+        self.amountCents = amountCents
+    }
+
+    private enum Keys: String, CodingKey { case transactionId, lineId, amountCents }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encode(transactionId, forKey: .transactionId)
+        try c.encode(lineId, forKey: .lineId)
+        try c.encode(amountCents, forKey: .amountCents)
+    }
+}
+
 /// Always lands in the server's hidden manual account; bank-fed accounts only change by sync or import.
 public struct CreateTransactionBody: Encodable, Sendable, Equatable {
     public let date: String

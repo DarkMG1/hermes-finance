@@ -67,6 +67,75 @@ public struct LedgerTransaction: Codable, Sendable, Identifiable, Hashable {
     public let hasHistory: Bool?
     /// The bill this charge belongs to; nil when none, and from servers before 1.8.1 (183).
     public let recurring: TransactionRecurring?
+    /// What a person-tagged charge still has left, or what a payback paid; nil when none, and from servers before 1.8.3.
+    public let iou: TransactionIOU?
+}
+
+public struct TransactionIOU: Codable, Sendable, Hashable {
+    /// nil for a payback
+    public let leftCents: Int?
+    public let paidBack: [PaidBack]
+
+    public init(leftCents: Int?, paidBack: [PaidBack]) {
+        self.leftCents = leftCents
+        self.paidBack = paidBack
+    }
+}
+
+/// payee is present only on `Transaction.iou`.
+public struct PaidBack: Codable, Sendable, Hashable {
+    public let transactionId: String
+    public let lineId: String?
+    public let amountCents: Int
+    public let payee: String?
+
+    public init(transactionId: String, lineId: String?, amountCents: Int, payee: String? = nil) {
+        self.transactionId = transactionId
+        self.lineId = lineId
+        self.amountCents = amountCents
+        self.payee = payee
+    }
+}
+
+public struct OpenItemPayback: Codable, Sendable, Hashable {
+    public let transactionId: String
+    public let lineId: String?
+    public let date: String
+    public let amountCents: Int
+}
+
+/// A charge or split line someone still owes part of; the server sends them oldest first.
+public struct OpenItem: Codable, Sendable, Hashable, Identifiable {
+    public let transactionId: String
+    public let lineId: String?
+    public let date: String
+    public let payee: String
+    public let totalCents: Int
+    public let leftCents: Int
+    public let hasReceipt: Bool
+    public let paybacks: [OpenItemPayback]
+    public var id: String { "\(transactionId)|\(lineId ?? "")" }
+
+    public init(transactionId: String, lineId: String?, date: String, payee: String, totalCents: Int, leftCents: Int,
+                hasReceipt: Bool, paybacks: [OpenItemPayback]) {
+        self.transactionId = transactionId
+        self.lineId = lineId
+        self.date = date
+        self.payee = payee
+        self.totalCents = totalCents
+        self.leftCents = leftCents
+        self.hasReceipt = hasReceipt
+        self.paybacks = paybacks
+    }
+}
+
+public struct PaybackChoices: Codable, Sendable {
+    public let items: [OpenItem]
+    public let linked: [PaidBack]
+}
+
+public struct ReimbursementsCleanup: Codable, Sendable {
+    public let rows: [LedgerTransaction]
 }
 
 public struct TransactionRecurring: Codable, Sendable, Hashable {
@@ -135,6 +204,9 @@ public struct HistoryEntry: Codable, Sendable, Identifiable, Hashable {
     public let balanceAfterCents: Int
     public let settled: Bool
     public let hasReceipt: Bool?
+    /// What is still owed on a For-them entry; nil from servers before 1.8.3.
+    public let leftCents: Int?
+    public let paidBack: [PaidBack]?
     public var id: String { "\(transactionId)|\(lineId ?? "")" }
 }
 
@@ -145,6 +217,8 @@ public struct PersonDetail: Codable, Sendable {
     /// nil from servers before v1.7.5
     public let spentOnThemCents: Int?
     public let forgivenCents: Int?
+    /// nil from servers before 1.8.3
+    public let openItems: [OpenItem]?
 }
 
 /// Where repayments land; nil means every checking account.
