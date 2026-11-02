@@ -48,6 +48,7 @@ export function receiptRoutes(app: FastifyInstance, deps: Deps): void {
     db.transaction(() => {
       db.prepare('DELETE FROM receipts WHERE transaction_id = ?').run(req.params.id);
       db.prepare('DELETE FROM receipt_items WHERE transaction_id = ?').run(req.params.id);
+      db.prepare('UPDATE inbox_receipts SET linked_transaction_id = NULL WHERE linked_transaction_id = ?').run(req.params.id);
     })();
     return reply.code(204).send();
   });

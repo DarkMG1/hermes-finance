@@ -611,16 +611,20 @@ test('an owner date the bank later agrees with follows the bank again, on update
   assert.equal(row('p1')?.date_owner_set, 0);
 });
 
-test('two inbox receipts linked to one pending row: the posted row takes exactly one', () => {
+test('a deleted receipt drops its inbox link, so pending to posted moves only the receipt linked after it', async () => {
   const { deps, apply, row } = setup();
+  const app = buildApp(deps);
   apply([page({ added: [txn({ transactionId: 'pend1', pending: true, amount: 20 })] })]);
   const pendingId = row('pend1')?.id as string;
-  for (const inbox of ['i-a', 'i-b']) {
-    deps.db.prepare("INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at, linked_transaction_id, linked_at) VALUES (?, NULL, 3, 'x', ?, 'x')").run(inbox, pendingId);
-  }
-  deps.db.prepare("INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES (?, x'FFD8FF', 3, 'x')").run(pendingId);
+  const link = (inbox: string) => {
+    deps.db.prepare("INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at) VALUES (?, x'FFD8FF', 3, 'x')").run(inbox);
+    return app.inject({ method: 'POST', url: `/v1/receipts/inbox/${inbox}/link`, headers: { ...AUTH, 'idempotency-key': inbox }, payload: { transactionId: pendingId } });
+  };
+  assert.equal((await link('i-a')).statusCode, 200);
+  assert.equal((await app.inject({ method: 'DELETE', url: `/v1/transactions/${pendingId}/receipt`, headers: AUTH })).statusCode, 204);
+  assert.equal((await link('i-b')).statusCode, 200);
   apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', amount: 20 })], removed: [{ transactionId: 'pend1' }] })]);
-  assert.deepEqual(deps.db.prepare('SELECT id FROM inbox_receipts WHERE linked_transaction_id = ?').pluck().all(row('post1')?.id), ['i-a']);
+  assert.deepEqual(deps.db.prepare('SELECT id, linked_transaction_id AS t FROM inbox_receipts ORDER BY id').all(), [{ id: 'i-a', t: null }, { id: 'i-b', t: row('post1')?.id }]);
 });
 
 test('an owner date that differs from the bank posted date survives pending to posted, with bank_date from the posted row', () => {
