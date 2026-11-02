@@ -7,7 +7,7 @@ import { ApiError } from '../errors.ts';
 import { parseBody } from '../validate.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { assertCategoryExists, getTransaction } from '../ledger.ts';
-import { dropLinks, entryKey, openItems, settlePerson } from '../ious.ts';
+import { entryKey, openItems, settlePerson } from '../ious.ts';
 import { assertPersonTaggable, getPerson, listPeople, peopleSettings, suggestions } from '../people.ts';
 
 export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
@@ -150,18 +150,15 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
       const now = deps.now().toISOString();
       // tag exactly like the person PATCH: the person clears the category and the owner decided
       if (t.lineId) {
-        const was = t.txn.splitLines.find((l) => l.id === t.lineId)!.personId;
         db.prepare('UPDATE split_lines SET person_id = ?, category_id = NULL WHERE id = ?').run(body.personId, t.lineId);
-        if (was !== body.personId) dropLinks(db, t.txn.id, t.lineId);
+        db.prepare('UPDATE transactions SET updated_at = ? WHERE id = ?').run(now, t.txn.id);
       } else {
-        db.prepare('UPDATE transactions SET person_id = ?, category_id = NULL, category_owner_set = 1 WHERE id = ?').run(body.personId, t.txn.id);
-        if (t.txn.personId !== body.personId) dropLinks(db, t.txn.id, null);
+        db.prepare('UPDATE transactions SET person_id = ?, category_id = NULL, category_owner_set = 1, updated_at = ? WHERE id = ?').run(body.personId, now, t.txn.id);
       }
       db.prepare('DELETE FROM iou_links WHERE payback_transaction_id = ? AND payback_line_id IS ?').run(t.txn.id, t.lineId);
       const ins = db.prepare(`INSERT INTO iou_links (id, payback_transaction_id, payback_line_id, item_transaction_id, item_line_id, amount_cents, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)`);
       body.items.forEach((it, i) => ins.run(randomUUID(), t.txn.id, t.lineId, it.transactionId, it.lineId ?? null, it.amountCents, `${now}#${String(i).padStart(2, '0')}`));
-      db.prepare('UPDATE transactions SET updated_at = ? WHERE id = ?').run(now, t.txn.id);
       return { status: 200, body: getTransaction(db, t.txn.id, localDay(deps.now())) };
     });
     return reply.code(r.status).send(r.body);

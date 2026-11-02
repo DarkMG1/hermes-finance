@@ -4,7 +4,7 @@ import { settle, entryKey, type Tagged, type Link } from '../src/ious.ts';
 import { buildApp } from '../src/app.ts';
 import { fitSplitToAmount } from '../src/ledger.ts';
 import { applyItems } from '../src/itemize.ts';
-import { makeTestDeps, AUTH, seedAccount, seedPerson, seedSplit, seedTxn } from './helpers.ts';
+import { makeTestDeps, AUTH, seedAccount, seedCategory, seedPerson, seedSplit, seedTxn } from './helpers.ts';
 
 let n = 0;
 const e = (id: string, amount: number, o: Partial<Tagged> = {}): Tagged => ({
@@ -185,6 +185,10 @@ test('PUT payback validation: other person, closed item, over item, over payback
   seedSplit(deps.db, { id: 'S2', transactionId: 'sp', amountCents: 400, categoryId: null });
   assert.equal((await put('v7', { personId: 'p1', items: [] }, 'sp')).statusCode, 409);
   assert.equal((await put('v8', { personId: 'p1', lineId: 'S1', items: [{ transactionId: 'big', amountCents: 400 }] }, 'sp')).statusCode, 200, 'a positive split line can be a payback');
+  seedTxn(deps.db, { id: 'forg', accountId: 'a1', date: '2026-03-07', amountCents: 500 });
+  deps.db.prepare("UPDATE transactions SET forgiven = 1 WHERE id = 'forg'").run();
+  const locked = await put('v9', { personId: 'p1', items: [] }, 'forg');
+  assert.deepEqual([locked.statusCode, locked.json().code], [409, 'FORGIVENESS_LOCKED']);
 });
 
 test('changing the person of a payback or an item drops its links (R6)', async () => {
@@ -250,4 +254,50 @@ test('changing a split line\'s person drops its links; a payee edit keeps them (
   assert.equal(count(), 1);
   await send('PATCH', '/v1/transactions/item/lines/L1', 'pl-2', { personId: null });
   assert.equal(count(), 0);
+});
+
+test('setting a category on a row or a line drops its links (R6)', async () => {
+  const { deps, send, link } = app();
+  const count = () => (deps.db.prepare('SELECT COUNT(*) AS n FROM iou_links').get() as { n: number }).n;
+  seedCategory(deps.db, { id: 'c1', name: 'Synthetic Fun' });
+  seedTxn(deps.db, { id: 'item', accountId: 'a1', date: '2026-03-01', amountCents: -1000, personId: 'p1' });
+  seedTxn(deps.db, { id: 'back', accountId: 'a1', date: '2026-03-02', amountCents: 2000, personId: 'p1' });
+  link('k1', 'back', 'item', 1000);
+  await send('PATCH', '/v1/transactions/item', 'pc-1', { categoryId: 'c1' });
+  assert.equal(count(), 0);
+  seedTxn(deps.db, { id: 'sp', accountId: 'a1', date: '2026-03-01', amountCents: -2000 });
+  seedSplit(deps.db, { id: 'L1', transactionId: 'sp', amountCents: -1000, categoryId: null, personId: 'p1' });
+  seedSplit(deps.db, { id: 'L2', transactionId: 'sp', amountCents: -1000, categoryId: null });
+  link('k2', 'back', 'sp', 1000, 'L1');
+  await send('PATCH', '/v1/transactions/sp/lines/L1', 'pc-2', { categoryId: 'c1' });
+  assert.equal(count(), 0);
+});
+
+test('PUT payback for an archived person only when already tagged with them', async () => {
+  const { deps, send } = app();
+  seedPerson(deps.db, { id: 'p2', name: 'Synthetic Wren', archived: true });
+  seedTxn(deps.db, { id: 'dep', accountId: 'a1', date: '2026-03-05', amountCents: 500 });
+  seedTxn(deps.db, { id: 'dep2', accountId: 'a1', date: '2026-03-05', amountCents: 500, personId: 'p2' });
+  const r = await send('PUT', '/v1/transactions/dep/payback', 'ar-1', { personId: 'p2', items: [] });
+  assert.deepEqual([r.statusCode, r.json().field], [400, 'personId']);
+  assert.equal((await send('PUT', '/v1/transactions/dep2/payback', 'ar-2', { personId: 'p2', items: [] })).statusCode, 200);
+});
+
+test('payback on a split line: GET lists its links, a person change replaces them', async () => {
+  const { deps, get, send } = app();
+  seedPerson(deps.db, { id: 'p2', name: 'Synthetic Wren' });
+  seedTxn(deps.db, { id: 'mine', accountId: 'a1', date: '2026-03-01', amountCents: -400, personId: 'p1' });
+  seedTxn(deps.db, { id: 'theirs', accountId: 'a1', date: '2026-03-01', amountCents: -300, personId: 'p2' });
+  seedTxn(deps.db, { id: 'sp', accountId: 'a1', date: '2026-03-06', amountCents: 800 });
+  seedSplit(deps.db, { id: 'S1', transactionId: 'sp', amountCents: 400, categoryId: null });
+  seedSplit(deps.db, { id: 'S2', transactionId: 'sp', amountCents: 400, categoryId: null });
+  assert.equal((await send('PUT', '/v1/transactions/sp/payback', 'ln-1', { personId: 'p1', lineId: 'S1', items: [{ transactionId: 'mine', amountCents: 400 }] })).statusCode, 200);
+  const choices = await get('/v1/transactions/sp/payback?personId=p1&lineId=S1');
+  assert.deepEqual(choices.items.map((i: { transactionId: string }) => i.transactionId), ['mine']);
+  assert.deepEqual(choices.linked, [{ transactionId: 'mine', lineId: null, amountCents: 400 }]);
+  assert.deepEqual((await get('/v1/transactions/sp/payback?personId=p2&lineId=S1')).linked, [], 'another person sees no links');
+  const r = await send('PUT', '/v1/transactions/sp/payback', 'ln-2', { personId: 'p2', lineId: 'S1', items: [{ transactionId: 'theirs', amountCents: 300 }] });
+  assert.equal(r.statusCode, 200);
+  assert.equal(r.json().splitLines.find((l: { id: string }) => l.id === 'S1').personId, 'p2');
+  assert.deepEqual(deps.db.prepare('SELECT payback_line_id AS l, item_transaction_id AS i FROM iou_links').all(), [{ l: 'S1', i: 'theirs' }]);
 });
