@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { AppleCardImportResult, Bank, Home, InboxList, Investments, Itemization, LinkSession, NetWorthHistory, PayeeHistory, PaybackChoices, PersonDetail, RecurringList, Reimbursements, ReimbursementsCleanup, Spending, SyncStatus, Transaction, TransactionPage } from '@hermes/shared';
+import { AppleCardImportResult, Bank, Home, InboxList, Investments, Itemization, LinkSession, NetWorthHistory, PayeeHistory, PaybackChoices, PersonDetail, ProfileReadResult, RecurringList, Reimbursements, ReimbursementsCleanup, Spending, SyncStatus, Transaction, TransactionPage } from '@hermes/shared';
 import { buildFixtures, FIXTURE_DIR } from './fixtures/generate.ts';
 
 const root = join(import.meta.dirname, '..', '..');
@@ -44,4 +44,5 @@ test('fixtures satisfy the shared contract', async () => {
   Reimbursements.parse(f['reimbursements.json']);
   assert.ok(Transaction.parse(f['transaction-recurring.json']).recurring);
   assert.deepEqual(PayeeHistory.parse(f['payee-history.json']).names, [{ name: 'Synthetic Split Extra', excluded: true }]);
+  for (const kind of ['tax-return', 'tax-form', 'pay-stub', 'offer']) assert.equal(ProfileReadResult.parse(f[`profile-read-${kind}.json`]).kind, kind.replace('-', '_'));
 });

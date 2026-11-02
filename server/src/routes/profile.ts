@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { CreateJobBody, GrantBody, LinkPayStubBody, PatchGrantBody, PatchJobBody, PatchPayStubBody, PatchTaxFormBody, PayStubBody, PutProfileBody, TaxFormBody,
-  TaxReturnBody } from '@hermes/shared';
+import { CreateJobBody, GrantBody, LinkPayStubBody, PatchGrantBody, PatchJobBody, PatchPayStubBody, PatchTaxFormBody, PayStubBody, ProfileReadBody, PutProfileBody,
+  TaxFormBody, TaxReturnBody } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
 import { idempotentWrite } from '../idempotency.ts';
+import { readProfile } from '../profile-reader.ts';
 import { getForm, getGrant, getJob, getProfile, getReturn, getStub, listJobs, putProfile, stubMatches, taxYears } from '../profile.ts';
 import { parseBody } from '../validate.ts';
+import { isJpeg, MAX_BYTES } from './receipts.ts';
 
 const JOB_COLS = ['employer', 'title', 'status', 'start_date', 'end_date', 'base_cents', 'bonus_target_pct', 'signing_bonus_cents', 'relocation_cents', 'note'];
 const GRANT_COLS = ['kind', 'shares', 'value_cents', 'strike_cents', 'grant_date', 'cliff_months', 'vest_months', 'vest_every_months'];
@@ -60,6 +62,14 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   };
 
   app.get('/v1/profile', async () => getProfile(db));
+  // no idempotency key: a read stores nothing
+  app.post('/v1/profile/read', { bodyLimit: MAX_BYTES }, async (req) => {
+    const body = parseBody(ProfileReadBody, req.body);
+    const pages = body.pages.map((p) => Buffer.from(p, 'base64'));
+    const bad = pages.findIndex((p) => !isJpeg(p));
+    if (bad >= 0) throw new ApiError(400, 'INVALID_IMAGE', `pages.${bad}: must be a JPEG`, `pages.${bad}`);
+    return readProfile(deps, body.kind, pages);
+  });
 
   app.put('/v1/profile', async (req, reply) => {
     const body = parseBody(PutProfileBody, req.body);

@@ -5,6 +5,7 @@ import { markInterruptedReads } from './inbox.ts';
 import { createPlaidClient } from './plaid/client.ts';
 import { createTiingoClient } from './prices/tiingo.ts';
 import { createAnthropicReader } from './receipt-reader/anthropic.ts';
+import { createAnthropicProfileReader } from './profile-reader.ts';
 import { createClaude } from './chat/anthropic.ts';
 import { buildApp } from './app.ts';
 import { startScheduler } from './scheduler.ts';
@@ -19,7 +20,8 @@ export async function start(env: NodeJS.ProcessEnv): Promise<{ close: () => Prom
   const now = () => new Date();
   const claude = createClaude({ db, config, now });
   const deps = { db, config, plaid: createPlaidClient(config), prices: config.tiingoApiKey ? createTiingoClient(config.tiingoApiKey) : null,
-    receiptReader: claude ? createAnthropicReader(claude, config.anthropicModel) : null, claude, now };
+    receiptReader: claude ? createAnthropicReader(claude, config.anthropicModel) : null,
+    profileReader: claude ? createAnthropicProfileReader(claude, config.anthropicModel) : null, claude, now };
   const app = buildApp(deps);
   await app.listen({ host: config.host, port: config.port });
   const stop = startScheduler(deps);

@@ -559,3 +559,27 @@ export const JobDetail = Job.extend({
   grants: z.array(EquityGrant), nextVests: z.array(VestEvent), stubs: z.array(PayStub), forms: z.array(TaxForm),
 });
 export type JobDetail = z.infer<typeof JobDetail>;
+
+// What Claude read off a document for the owner to review: a missing field or a value that doesn't fit is null.
+const draft = <S extends z.ZodRawShape>(o: z.ZodObject<S>) => z.object(Object.fromEntries(Object.entries(o.shape)
+  .map(([k, s]) => [k, (s as z.ZodType).nullable().default(null).catch(null)])) as unknown as { [K in keyof S]: z.ZodCatch<z.ZodDefault<z.ZodNullable<S[K]>>> });
+export const ProfileDrafts = {
+  tax_return: draft(TaxReturnFields),
+  tax_form: draft(TaxFormFields.omit({ jobId: true })),
+  pay_stub: draft(PayStubFields.omit({ jobId: true }).extend({ employer: JobFields.shape.employer })),
+  offer: draft(JobFields.omit({ status: true })).extend({ grants: z.array(draft(GrantFields)).max(20).default([]).catch([]) }),
+};
+export const ProfileKind = z.enum(['tax_return', 'tax_form', 'pay_stub', 'offer']);
+export type ProfileKind = z.infer<typeof ProfileKind>;
+/** pages are base64 JPEGs; the whole body is at most 3 MB */
+export const ProfileReadBody = z.object({ kind: ProfileKind, pages: z.array(z.string().min(1)).min(1).max(8) }).strict();
+export type ProfileReadBody = z.infer<typeof ProfileReadBody>;
+/** field names Claude is unsure of */
+export const ProfileUncertain = z.array(z.string().max(100)).max(100).default([]).catch([]);
+export const ProfileReadResult = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('tax_return'), draft: ProfileDrafts.tax_return, uncertain: ProfileUncertain }),
+  z.object({ kind: z.literal('tax_form'), draft: ProfileDrafts.tax_form, uncertain: ProfileUncertain }),
+  z.object({ kind: z.literal('pay_stub'), draft: ProfileDrafts.pay_stub, uncertain: ProfileUncertain }),
+  z.object({ kind: z.literal('offer'), draft: ProfileDrafts.offer, uncertain: ProfileUncertain }),
+]);
+export type ProfileReadResult = z.infer<typeof ProfileReadResult>;

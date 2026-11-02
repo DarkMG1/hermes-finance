@@ -19,7 +19,7 @@ export const RESULT_MAX = 20_000;
 export type ToolContext = { chatId?: string };
 type Entry = { def: ToolDef; schema: z.ZodType; run: (deps: Deps, q: unknown, today: string, ctx: ToolContext) => unknown };
 
-const jsonSchema = (s: z.ZodType): Record<string, unknown> => {
+export const jsonSchema = (s: z.ZodType): Record<string, unknown> => {
   const out: Record<string, unknown> = z.toJSONSchema(s, { io: 'input' });
   delete out.$schema;
   return out;

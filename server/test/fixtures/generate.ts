@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ProfileReadResult } from '@hermes/shared';
 import { buildApp } from '../../src/app.ts';
+import type { ProfileReadOutput } from '../../src/profile-reader.ts';
 import { FakeClaude, end, start, text as textRound, tool } from '../fake-claude.ts';
 import { AUTH, makeTestDeps, seedAccount, seedCategory, seedItem, seedPerson, seedSplit, seedTxn } from '../helpers.ts';
 
@@ -9,7 +11,7 @@ export const FIXTURE_DIR = 'app-ios/HermesKit/Tests/HermesKitTests/Fixtures';
 // Deterministic: fixed ids, the test clock, and random ids normalised before writing.
 export async function buildFixtures(): Promise<Record<string, string>> {
   process.env.TZ = 'UTC'; // snapshot dates use the process-local day
-  const { deps, plaid } = makeTestDeps();
+  const { deps, plaid, profileReader } = makeTestDeps();
   const { db } = deps;
   seedItem(deps, { id: 'item-1', plaidItemId: 'p-item-1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
   db.prepare("UPDATE items SET last_synced_at = '2026-03-15T11:00:00.000Z' WHERE id = 'item-1'").run();
@@ -168,6 +170,16 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   out.job = await get('/v1/jobs/job-1');
   out['tax-years'] = await get('/v1/tax-years');
   out['transaction-pay-stub'] = await get('/v1/transactions/txn-2');
+  const page = Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString('base64');
+  for (const [kind, draft] of Object.entries({
+    tax_return: { year: 2025, jurisdiction: 'federal', filingStatus: 'single', totalIncomeCents: 6520000, totalTaxCents: 650000, refundCents: 150000 },
+    tax_form: { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 6500000, federalWithheldCents: 800000, state: 'MI' },
+    pay_stub: { employer: 'SYNTHETIC EMPLOYER', payDate: '2026-03-13', grossCents: 420000, federalCents: 50000, netCents: 370000 },
+    offer: { employer: 'SYNTHETIC EMPLOYER', title: 'Synthetic Engineer', baseCents: 12000000, grants: [{ kind: 'rsu', shares: 400, grantDate: '2026-06-01', cliffMonths: 12, vestMonths: 48, vestEveryMonths: 3 }] },
+  } as const)) {
+    profileReader.next = ProfileReadResult.parse({ kind, draft, uncertain: ['grossCents'] }) as ProfileReadOutput;
+    out[`profile-read-${kind.replace('_', '-')}`] = await post('/v1/profile/read', { kind, pages: [page] });
+  }
   // ids minted at runtime are replaced so the files are stable
   const text = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
   const normalise = (s: string) => s.replace(/"accountId": "[0-9a-f-]{36}"/g, '"accountId": "fixture-applecard"').replace(/"itemId": "[0-9a-f-]{36}"/g, '"itemId": "fixture-item"');
