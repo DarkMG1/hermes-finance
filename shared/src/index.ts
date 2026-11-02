@@ -497,7 +497,9 @@ export const GrantBody = GrantFields.partial({ shares: true, valueCents: true, s
   .refine((g) => (g.cliffMonths ?? 0) <= g.vestMonths, { message: 'must be at most vestMonths', path: ['cliffMonths'] })
   .refine((g) => g.vestEveryMonths <= g.vestMonths, { message: 'must be at most vestMonths', path: ['vestEveryMonths'] });
 export type GrantBody = z.infer<typeof GrantBody>;
-export const PatchGrantBody = GrantFields.partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+/** a cleared cliff (null) is 0, as when a create leaves it out */
+export const PatchGrantBody = GrantFields.partial().extend({ cliffMonths: GrantFields.shape.cliffMonths.nullable().transform((v) => v ?? 0).optional() })
+  .strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
 export type PatchGrantBody = z.infer<typeof PatchGrantBody>;
 export const VestEvent = z.object({ date: DateStr, shares: z.number().nullable(), valueCents: Cents.nullable(), grantId: Id });
 export type VestEvent = z.infer<typeof VestEvent>;
@@ -516,7 +518,10 @@ export const PayStubBody = PayStubFields.partial().required({ payDate: true, gro
     { message: 'gross minus deductions must equal net', path: ['netCents'] })
   .refine((s) => !s.periodStart || !s.periodEnd || s.periodStart <= s.periodEnd, { message: 'must be on or after periodStart', path: ['periodEnd'] });
 export type PayStubBody = z.infer<typeof PayStubBody>;
-export const PatchPayStubBody = PayStubFields.partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+/** a cleared deduction line (null) is 0, as when a create leaves it out */
+export const PatchPayStubBody = PayStubFields.partial()
+  .extend(Object.fromEntries(STUB_PARTS.map((k) => [k, Money.nullable().transform((v) => v ?? 0).optional()])) as { [K in typeof STUB_PARTS[number]]: z.ZodOptional<z.ZodPipe<z.ZodNullable<typeof Money>, z.ZodTransform<number, number | null>>> })
+  .strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
 export type PatchPayStubBody = z.infer<typeof PatchPayStubBody>;
 export const LinkPayStubBody = z.object({ transactionId: Id.nullable() }).strict();
 export type LinkPayStubBody = z.infer<typeof LinkPayStubBody>;

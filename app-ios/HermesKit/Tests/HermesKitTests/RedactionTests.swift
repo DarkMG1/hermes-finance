@@ -32,6 +32,10 @@ private func boxed(_ text: String) -> Bool { !Redaction.boxes([line(text)]).isEm
     #expect(Redaction.boxes([line("Routing", y: 0.10), line("00001234567", y: 0.50)]).isEmpty, "far away")
     #expect(Redaction.boxes([line("Account total $00001234567.00")]).isEmpty, "an amount")
     #expect(Redaction.boxes([line("Alabama 00001234567")]).isEmpty, "aba inside a word")
+    #expect(Redaction.boxes([line("Accounting 00001234567")]).isEmpty, "not a whole word")
+    #expect(!Redaction.boxes([line("Account 00001234567.")]).isEmpty, "sentence end")
+    #expect(!Redaction.boxes([line("Acct.No.00001234567")]).isEmpty, "abbreviation dots")
+    #expect(Redaction.boxes([line("Account $12,345.67")]).isEmpty)
 }
 
 @Test func aMatchBoxesOnlyItsSpanPaddedAndClamped() throws {

@@ -23,14 +23,14 @@ const counts = (db: ReturnType<typeof setup>['deps']['db']) => Object.fromEntrie
 test('a read returns the draft with identifiers blanked and stores nothing', async () => {
   const { deps, read, profileReader } = setup();
   profileReader.next = { kind: 'tax_form', model: 'fake-model', uncertain: ['stateWithheldCents', 'not a field', '000-00-0000'],
-    draft: ProfileDrafts.tax_form.parse({ year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER 00-0000000', amountCents: 6500000, state: 'MI' }) };
+    draft: ProfileDrafts.tax_form.parse({ year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER 00-0000000', amountCents: 6500000, state: 'CA' }) };
   const before = counts(deps.db);
   for (let i = 0; i < 2; i += 1) {
     const res = await read({ kind: 'tax_form', pages: [PAGE, PAGE] });
     assert.equal(res.statusCode, 200);
     const body = res.json();
     assert.deepEqual([body.kind, body.draft.payer, body.draft.amountCents, body.draft.state, body.draft.ssWagesCents, body.uncertain],
-      ['tax_form', null, 6500000, 'MI', null, ['stateWithheldCents']]);
+      ['tax_form', null, 6500000, 'CA', null, ['stateWithheldCents']]);
     assert.equal(body.model, undefined);
   }
   assert.deepEqual(counts(deps.db), before);

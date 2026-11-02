@@ -27,11 +27,11 @@ test('About me starts empty, saves the fields given, keeps the rest, and replays
   assert.deepEqual((await get('/v1/profile')).json(), {
     state: null, filingStatus: null, birthYear: null, dependents: null, retirementPct: null, retirementKind: null, hsa: null, note: null, updatedAt: null,
   });
-  const put = await send('PUT', '/v1/profile', { state: 'MI', filingStatus: 'single', birthYear: 2004, dependents: 0, retirementPct: 6, retirementKind: 'roth', hsa: true }, 'same');
+  const put = await send('PUT', '/v1/profile', { state: 'CA', filingStatus: 'single', birthYear: 2004, dependents: 0, retirementPct: 6, retirementKind: 'roth', hsa: true }, 'same');
   assert.equal(put.statusCode, 200);
-  assert.deepEqual(put.json(), (await send('PUT', '/v1/profile', { state: 'MI', filingStatus: 'single', birthYear: 2004, dependents: 0, retirementPct: 6, retirementKind: 'roth', hsa: true }, 'same')).json());
+  assert.deepEqual(put.json(), (await send('PUT', '/v1/profile', { state: 'CA', filingStatus: 'single', birthYear: 2004, dependents: 0, retirementPct: 6, retirementKind: 'roth', hsa: true }, 'same')).json());
   const p = (await send('PUT', '/v1/profile', { note: 'Synthetic note', hsa: null })).json();
-  assert.deepEqual([p.state, p.retirementPct, p.hsa, p.note, p.updatedAt], ['MI', 6, null, 'Synthetic note', '2026-03-15T12:00:00.000Z']);
+  assert.deepEqual([p.state, p.retirementPct, p.hsa, p.note, p.updatedAt], ['CA', 6, null, 'Synthetic note', '2026-03-15T12:00:00.000Z']);
   assert.deepEqual((await get('/v1/profile')).json(), p);
 });
 
@@ -98,6 +98,8 @@ test('grants: create under a job, validate, patch, delete; next vests across gra
   const p = await send('PATCH', `/v1/jobs/${job.id}/grants/${opt.id}`, { valueCents: 9000, shares: null, kind: 'rsu' });
   assert.deepEqual([p.statusCode, p.json().shares, p.json().valueCents, p.json().strikeCents], [200, null, 9000, null], 'becoming an RSU clears the strike');
   assert.equal((await send('PATCH', `/v1/jobs/other/grants/${opt.id}`, { vestMonths: 6 })).statusCode, 404);
+  const cleared = await send('PATCH', `/v1/jobs/${job.id}/grants/${rsu.json().id}`, { cliffMonths: null });
+  assert.deepEqual([cleared.statusCode, cleared.json().cliffMonths], [200, 0], 'a cleared cliff is 0');
   assert.equal((await send('DELETE', `/v1/jobs/${job.id}/grants/${opt.id}`)).statusCode, 200);
   assert.deepEqual((await get(`/v1/jobs/${job.id}`)).json().grants.map((g: { id: string }) => g.id), [rsu.json().id]);
   assert.equal((await send('DELETE', `/v1/jobs/${job.id}/grants/${opt.id}`)).statusCode, 404);
@@ -185,6 +187,8 @@ test('pay stubs: create, validate the parts against net, patch, delete; the job 
   assert.equal((await send('PATCH', `/v1/pay-stubs/${s.id}`, { netCents: 1 })).json().field, 'netCents', 'the merged stub is checked');
   const p = await send('PATCH', `/v1/pay-stubs/${s.id}`, { otherDeductionsCents: 0, netCents: 280400, ytdGrossCents: 2_400_000 });
   assert.deepEqual([p.statusCode, p.json().netCents, p.json().ytdGrossCents, p.json().payDate], [200, 280400, 2_400_000, '2026-03-13']);
+  const zeroed = await send('PATCH', `/v1/pay-stubs/${bonus.id}`, { federalCents: null, netCents: 1000 });
+  assert.deepEqual([zeroed.statusCode, zeroed.json().federalCents, zeroed.json().netCents], [200, 0, 1000], 'a cleared deduction line is 0');
   assert.deepEqual((await get(`/v1/jobs/${job.id}`)).json().stubs.map((x: { id: string }) => x.id), [bonus.id, s.id]);
   assert.equal((await send('PATCH', '/v1/pay-stubs/missing', { netCents: 1 })).statusCode, 404);
   assert.equal((await send('DELETE', `/v1/pay-stubs/${s.id}`, undefined, 'd')).statusCode, 200);
@@ -253,7 +257,7 @@ test('a stub linked to a pending deposit follows the posted row', async () => {
 test('tax forms and returns: CRUD, upsert by year and jurisdiction, tax years newest first with the federal effective rate', async () => {
   const { get, send } = setup();
   const job = (await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'current' })).json();
-  const w2 = { jobId: job.id, year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 9_000_000, federalWithheldCents: 1_100_000, state: 'MI',
+  const w2 = { jobId: job.id, year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 9_000_000, federalWithheldCents: 1_100_000, state: 'CA',
     stateWithheldCents: 380_000, ssWagesCents: 9_500_000, medicareWagesCents: 9_500_000 };
   const f = await send('POST', '/v1/tax-forms', w2, 'form');
   assert.equal(f.statusCode, 201);
@@ -274,7 +278,7 @@ test('tax forms and returns: CRUD, upsert by year and jurisdiction, tax years ne
   assert.deepEqual((await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal', filingStatus: 'single', totalIncomeCents: 9_000_000, totalTaxCents: 1_000_000, refundCents: -5000 }, 'ret')).json(), fed.json());
   const again = (await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal', agiCents: 8_800_000 })).json();
   assert.deepEqual([again.id, again.totalTaxCents, again.agiCents, again.refundCents], [fed.json().id, 1_000_000, 8_800_000, -5000], 'upsert keeps left-out fields');
-  await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'MI', totalTaxCents: 380_000 });
+  await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'CA', totalTaxCents: 380_000 });
   await send('PUT', '/v1/tax-returns', { year: 2024, jurisdiction: 'federal', totalIncomeCents: 0, totalTaxCents: 0 });
   for (const [body, field] of [[{ year: 2025, jurisdiction: 'mi' }, 'jurisdiction'], [{ year: 2025, jurisdiction: 'state' }, 'jurisdiction'],
     [{ year: 1999, jurisdiction: 'federal' }, 'year'], [{ year: 2025, jurisdiction: 'federal', deductionKind: 'both' }, 'deductionKind']] as const) {
@@ -283,7 +287,7 @@ test('tax forms and returns: CRUD, upsert by year and jurisdiction, tax years ne
   const years = (await get('/v1/tax-years')).json().years;
   assert.deepEqual(years.map((y: { year: number; effectiveRate: number | null; returns: { jurisdiction: string }[]; forms: { id: string }[] }) =>
     [y.year, y.effectiveRate, y.returns.map((r) => r.jurisdiction), y.forms.map((x) => x.id)]),
-  [[2025, 0.1111, ['federal', 'MI'], [f.json().id]], [2024, null, ['federal'], [int.id]]]);
+  [[2025, 0.1111, ['federal', 'CA'], [f.json().id]], [2024, null, ['federal'], [int.id]]]);
   assert.equal((await send('DELETE', `/v1/tax-returns/${fed.json().id}`)).statusCode, 200);
   assert.equal((await get('/v1/tax-years')).json().years[0].effectiveRate, null, 'no federal return');
   assert.equal((await send('DELETE', `/v1/tax-returns/${fed.json().id}`)).statusCode, 404);

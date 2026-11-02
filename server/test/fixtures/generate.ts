@@ -164,11 +164,11 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   db.prepare("INSERT INTO equity_grants VALUES ('grant-1', 'job-1', 'rsu', 400, NULL, NULL, '2025-06-01', 12, 48, 3)").run();
   db.prepare(`INSERT INTO pay_stubs VALUES ('stub-1', 'job-1', '2026-03-13', '2026-02-28', '2026-03-13', 420000, 50000, 15000, 26040, 6090, 21000, 1870, 300000,
     2520000, 'txn-2', 'seed')`).run();
-  db.prepare("INSERT INTO tax_forms VALUES ('form-1', 'job-1', 2025, 'w2', 'SYNTHETIC EMPLOYER', 6500000, 800000, 'MI', 270000, 7000000, 7000000, 'seed')").run();
+  db.prepare("INSERT INTO tax_forms VALUES ('form-1', 'job-1', 2025, 'w2', 'SYNTHETIC EMPLOYER', 6500000, 800000, 'CA', 270000, 7000000, 7000000, 'seed')").run();
   db.prepare(`INSERT INTO tax_returns VALUES ('return-1', 2025, 'federal', 'single', 6500000, 6520000, 6520000, 'standard', 1500000, 5020000, 650000, 0,
     800000, 150000, 20000, 0, 'seed', 'seed')`).run();
   await app.inject({ method: 'PUT', url: '/v1/profile', headers: { ...AUTH, 'idempotency-key': 'fixture-profile' },
-    payload: { state: 'MI', filingStatus: 'single', birthYear: 2000, dependents: 0, retirementPct: 6, retirementKind: 'pre_tax', hsa: true } });
+    payload: { state: 'CA', filingStatus: 'single', birthYear: 2000, dependents: 0, retirementPct: 6, retirementKind: 'pre_tax', hsa: true } });
   out.profile = await get('/v1/profile');
   out.job = await get('/v1/jobs/job-1');
   out['tax-years'] = await get('/v1/tax-years');
@@ -176,7 +176,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   const page = Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString('base64');
   for (const [kind, [draft, uncertain]] of Object.entries({
     tax_return: [{ year: 2025, jurisdiction: 'federal', filingStatus: 'single', totalIncomeCents: 6520000, totalTaxCents: 650000, refundCents: 150000 }, ['agiCents']],
-    tax_form: [{ year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 6500000, federalWithheldCents: 800000, state: 'MI' }, ['state']],
+    tax_form: [{ year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 6500000, federalWithheldCents: 800000, state: 'CA' }, ['state']],
     pay_stub: [{ employer: 'SYNTHETIC EMPLOYER', payDate: '2026-03-13', grossCents: 420000, federalCents: 50000, netCents: 370000 }, ['grossCents']],
     offer: [{ employer: 'SYNTHETIC EMPLOYER', title: 'Synthetic Engineer', baseCents: 12000000, grants: [{ kind: 'rsu', shares: 400, grantDate: '2026-06-01', cliffMonths: 12, vestMonths: 48, vestEveryMonths: 3 }] }, ['baseCents']],
   } as const)) {

@@ -32,8 +32,8 @@ public enum Redaction {
     // swiftlint:disable force_try
     private static let identifier = try! NSRegularExpression(
         pattern: "(?<![\\d$])(?:\\d{3}(?:\(sep)\\d{2}\(sep)|\\d{2})\\d{4}|\\d{2}\(sep)\\d{7})(?!\\d|\\.\\d)")
-    private static let account = try! NSRegularExpression(pattern: "(?<![\\d.,$])\\d{8,17}(?![\\d.,])")
-    private static let keyword = try! NSRegularExpression(pattern: "\\b(?:account|acct|routing|aba\\b|rtn\\b)", options: .caseInsensitive)
+    private static let account = try! NSRegularExpression(pattern: "(?<![\\d$]|\\d[.,])\\d{8,17}(?!\\d|[.,]\\d)")
+    private static let keyword = try! NSRegularExpression(pattern: "\\b(?:accounts?|acct|routing|aba|rtn)\\b", options: .caseInsensitive)
     // swiftlint:enable force_try
 
     /// Boxes to black out: identifier matches on a line, plus long digit runs on or next to account/routing words.

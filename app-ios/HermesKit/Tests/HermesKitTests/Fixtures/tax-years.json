@@ -33,7 +33,7 @@
           "payer": "SYNTHETIC EMPLOYER",
           "amountCents": 6500000,
           "federalWithheldCents": 800000,
-          "state": "MI",
+          "state": "CA",
           "stateWithheldCents": 270000,
           "ssWagesCents": 7000000,
           "medicareWagesCents": 7000000,

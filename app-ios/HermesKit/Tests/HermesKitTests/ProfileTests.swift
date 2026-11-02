@@ -4,7 +4,7 @@ import Testing
 
 @Test func profileFixturesDecode() throws {
     let profile = try decode(Profile.self, "profile")
-    #expect(profile.state == "MI" && profile.hsa == true && profile.note == nil && profile.retirementPct == 6)
+    #expect(profile.state == "CA" && profile.hsa == true && profile.note == nil && profile.retirementPct == 6)
     let job = try decode(JobDetail.self, "job")
     #expect(job.employer == "SYNTHETIC EMPLOYER" && job.status == "current" && job.endDate == nil)
     #expect(job.grants.first?.shares == 400 && job.nextVests.map(\.shares) == [100, 25, 25, 25])
@@ -78,4 +78,24 @@ import Testing
     _ = try await client.linkPayStub(id: "stub-1", transactionId: nil, idempotencyKey: "k-2")
     #expect(transport.requests.map { String(data: $0.body ?? Data(), encoding: .utf8) } == [#"{"transactionId":"txn-2"}"#, #"{"transactionId":null}"#])
     #expect(transport.requests.map(\.url.path) == ["/v1/pay-stubs/stub-1/link", "/v1/pay-stubs/stub-1/link"])
+}
+
+@Test func clearingAPayStubLineOrACliffSendsNull() async throws {
+    let replies = try JSONSerialization.jsonObject(with: fixture("job")) as? [String: Any]
+    let stub = try JSONSerialization.data(withJSONObject: try #require((replies?["stubs"] as? [Any])?.first))
+    let grant = try JSONSerialization.data(withJSONObject: try #require((replies?["grants"] as? [Any])?.first))
+    let transport = FakeTransport([.success(HTTPResponse(status: 200, body: stub)), .success(HTTPResponse(status: 200, body: grant))])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    let saved = try decode(JobDetail.self, "job")
+    var s = saved.stubs[0].fields
+    s.federalCents = nil
+    s.netCents = 350000
+    _ = try await client.patchPayStub(id: "stub-1", body: s, from: saved.stubs[0].fields, idempotencyKey: "k-1")
+    var g = saved.grants[0].fields
+    g.cliffMonths = nil
+    _ = try await client.patchGrant(jobId: "job-1", id: "grant-1", body: g, from: saved.grants[0].fields, idempotencyKey: "k-2")
+    let bodies = transport.requests.map { String(data: $0.body ?? Data(), encoding: .utf8) }
+    #expect(bodies == [#"{"federalCents":null,"netCents":350000}"#, #"{"cliffMonths":null}"#])
+    #expect(transport.requests.map(\.method) == ["PATCH", "PATCH"])
+    #expect(transport.requests.map(\.url.path) == ["/v1/pay-stubs/stub-1", "/v1/jobs/job-1/grants/grant-1"])
 }
