@@ -104,12 +104,17 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
       date = CASE WHEN transactions.date_owner_set = 1 THEN transactions.date ELSE excluded.date END, bank_date = excluded.bank_date,
       date_owner_set = CASE WHEN transactions.date = excluded.bank_date THEN 0 ELSE transactions.date_owner_set END, authorized_date = excluded.authorized_date, clearing_date = COALESCE(excluded.clearing_date, transactions.clearing_date),
       amount_cents = excluded.amount_cents, source_file_date = excluded.source_file_date,
-      source_clear_from = excluded.source_clear_from, source_clear_to = excluded.source_clear_to,
+      -- a row keeps the range of every statement it was on, so any of them still finds it later
+      source_clear_from = COALESCE(MIN(transactions.source_clear_from, excluded.source_clear_from), excluded.source_clear_from, transactions.source_clear_from),
+      source_clear_to = COALESCE(MAX(transactions.source_clear_to, excluded.source_clear_to), excluded.source_clear_to, transactions.source_clear_to),
       bank_description = excluded.bank_description, merchant_name = excluded.merchant_name, plaid_category = excluded.plaid_category,
       category_id = COALESCE(transactions.category_id, CASE WHEN transactions.category_owner_set = 0 THEN excluded.category_id END),
       updated_at = excluded.updated_at`);
-  const remembered = merchantMemory(db);
   const result: AppleCardImportResult = { accountId, rows: rows.length, added: 0, updated: 0, skippedBeforeCutover: 0 };
+  // Two exports of one statement tie on fileDate, so the last import wins; a file seen before must not undo a later one's corrections.
+  const fileHash = createHash('sha256').update(JSON.stringify(rows.map((r) => JSON.stringify(r)).sort())).digest('hex');
+  if (!db.prepare('INSERT INTO applecard_imports (hash, imported_at) VALUES (?, ?) ON CONFLICT DO NOTHING').run(fileHash, nowIso).changes) return result;
+  const remembered = merchantMemory(db);
   const fileDate = rows.reduce((max, r) => (r.transactionDate > max ? r.transactionDate : max), '');
   const cols = 'id, source_id AS sourceId, clearing_date AS c, amount_cents AS amount, source_file_date AS fileDate, source_clear_from AS clearFrom, source_clear_to AS clearTo';
   const clearings = rows.flatMap((r) => r.clearingDate ?? []).sort();
@@ -174,7 +179,7 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
   const unpaired = new Map<string, number>();
   const correctionKey = (r: AppleCardRow) => JSON.stringify([r.transactionDate, r.description, r.type]);
   for (const k of rows.flatMap((r, i) => (found[i] ? [] : [correctionKey(r), baseOf(r)]))) unpaired.set(k, (unpaired.get(k) ?? 0) + 1);
-  // a same-amount row is a re-export only when one statement's clearing range covers the other's charge; otherwise it's a twin purchase
+  // a re-export (same amount) or correction only when one statement's clearing range covers the other's charge; otherwise it's another purchase
   const within = (c: string | null, from: string | null, to: string | null) => c !== null && from !== null && to !== null && c >= from && c <= to;
   const counterparts = db.prepare(`SELECT ${cols} FROM transactions
     WHERE source = 'applecard' AND removed_at IS NULL AND account_id = ? AND COALESCE(authorized_date, date) = ? AND bank_description = ?`);
@@ -184,8 +189,8 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
     const candidates = (counterparts.all(accountId, r.transactionDate, r.description) as NonNullable<Stored>[])
       .filter((s) => !taken.has(s.sourceId) && groupFor(baseOf({ ...r, amountCents: s.amount })).sourceIds.has(s.sourceId));
     const same = candidates.filter((s) => s.amount === r.amountCents);
-    const row = same.length ? (same.length === 1 && (within(same[0]!.c, clearFrom, clearTo) || within(r.clearingDate, same[0]!.clearFrom, same[0]!.clearTo)) ? same[0] : undefined)
-      : candidates.length === 1 && unpaired.get(correctionKey(r)) === 1 ? candidates[0] : undefined;
+    const pick = same.length ? same : unpaired.get(correctionKey(r)) === 1 ? candidates : [];
+    const row = pick.length === 1 && (within(pick[0]!.c, clearFrom, clearTo) || within(r.clearingDate, pick[0]!.clearFrom, pick[0]!.clearTo)) ? pick[0] : undefined;
     if (!row) return;
     taken.add(row.sourceId);
     found[i] = row;
