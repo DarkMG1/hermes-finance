@@ -10,6 +10,7 @@ struct WhoOwesView: View {
     @State private var selected: LedgerTransaction?
     @State private var adding = false
     @State private var addingFor: LedgerTransaction?
+    @State private var paying: PaybackTarget?
     @State private var showSettled = false
     @State private var writes: [String: WriteGuard] = [:]
     @State private var busyIds: Set<String> = []
@@ -62,6 +63,11 @@ struct WhoOwesView: View {
         .sheet(item: $addingFor) { transaction in
             PersonSheet(person: nil) { created in
                 if let created { await tag(transaction, created.id) } else { await load() }
+            }
+        }
+        .sheet(item: $paying) { target in
+            PaybackPicker(transactionId: target.transactionId, lineId: nil, personId: target.personId, paybackCents: target.paybackCents) {
+                await load()
             }
         }
     }
@@ -127,8 +133,9 @@ struct WhoOwesView: View {
     }
 
     private func tag(_ transaction: LedgerTransaction, _ personId: String) async {
-        await perform("\(transaction.id)|\(personId)", lock: transaction.id) { client, key in
-            _ = try await client.patchTransaction(id: transaction.id, body: PatchTransactionBody(personId: .set(personId)), idempotencyKey: key)
+        let target = PaybackTarget(transactionId: transaction.id, lineId: nil, personId: personId, paybackCents: transaction.amountCents)
+        await perform("\(transaction.id)|\(personId)", lock: transaction.id) { _, key in
+            if try await model.tagPayback(target, idempotencyKey: key) { paying = target }
         }
     }
 

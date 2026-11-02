@@ -46,6 +46,12 @@ struct PersonView: View {
                     }
                     if detail.person.balanceCents > 0, detail.forgivenCents != nil { Button("Forgive…") { forgiving = detail.person } }
                 }
+                if let openItems = detail.openItems, !openItems.isEmpty {
+                    Card {
+                        Text("Open").textStyle(.headline)
+                        ForEach(openItems) { item in openRow(item) }
+                    }
+                }
                 // entries up to and including the latest settle-up are the current period; older ones fold away
                 let cut = (detail.history.firstIndex(where: \.settled) ?? detail.history.count - 1) + 1
                 Card {
@@ -125,14 +131,33 @@ struct PersonView: View {
         }
     }
 
+    private func openRow(_ item: OpenItem) -> some View {
+        Button { Task { await open(item.transactionId) } } label: {
+            VStack(alignment: .leading, spacing: Space.xs) {
+                let amount = item.leftCents < item.totalCents
+                    ? "\(Money.format(item.leftCents)) of \(Money.format(item.totalCents)) left" : Money.format(item.totalCents)
+                ListRow(title: item.payee, subtitle: [DayText.display(item.date), amount].joined(separator: " · ")) {
+                    if item.hasReceipt { receiptIcon }
+                }
+                ForEach(item.paybacks, id: \.self) { payback in
+                    Text("Paid back \(Money.format(payback.amountCents)) · \(DayText.display(payback.date))")
+                        .textStyle(.caption, color: Palette.secondaryText)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var receiptIcon: some View {
+        Image(systemName: "doc.text")
+            .textStyle(.caption, color: Palette.secondaryText)
+            .accessibilityLabel("Has receipt")
+    }
+
     @ViewBuilder private func row(_ entry: HistoryEntry) -> some View {
         let button = Button { Task { await open(entry.transactionId) } } label: {
             ListRow(title: entry.payee, subtitle: subtitle(entry)) {
-                if entry.hasReceipt == true {
-                    Image(systemName: "doc.text")
-                        .textStyle(.caption, color: Palette.secondaryText)
-                        .accessibilityLabel("Has receipt")
-                }
+                if entry.hasReceipt == true { receiptIcon }
                 VStack(alignment: .trailing, spacing: Space.xs) {
                     Text(Money.format(entry.effectCents, showPlus: true)).textStyle(.body).monospacedDigit()
                     Text(Balance.phrase(entry.balanceAfterCents)).textStyle(.caption, color: Palette.secondaryText)
@@ -174,7 +199,16 @@ struct PersonView: View {
         case "forgiven": "Forgiven"
         default: "Paid by them"
         }
-        return [DayText.display(entry.date), kind].joined(separator: " · ")
+        var parts = [DayText.display(entry.date), kind]
+        if entry.kind == "forThem", let left = entry.leftCents {
+            if left == 0 { parts.append("Settled") } else if left < entry.effectCents { parts.append("\(Money.format(left)) left") }
+        }
+        if entry.kind == "fromThem", let paid = entry.paidBack, !paid.isEmpty {
+            let history = if case .loaded(let loaded) = state { loaded.value.history } else { [HistoryEntry]() }
+            let payee = paid.count == 1 ? history.first { $0.id == "\(paid[0].transactionId)|\(paid[0].lineId ?? "")" }?.payee : nil
+            parts.append(paid.count > 1 ? "Paid back \(paid.count) items" : ["Paid back", payee].compactMap(\.self).joined(separator: " "))
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func open(_ transactionId: String) async {

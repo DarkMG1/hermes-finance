@@ -73,6 +73,7 @@ private func item(_ id: String, left: Int, total: Int? = nil, date: String = "20
     #expect(tag(6000, TransactionIOU(leftCents: nil, paidBack: one + one)) == "Synthetic Quill repaid · 2 items")
     #expect(tag(6000, TransactionIOU(leftCents: nil, paidBack: [])) == "Synthetic Quill repaid")
     #expect(tag(6000, TransactionIOU(leftCents: nil, paidBack: [PaidBack(transactionId: "c", lineId: nil, amountCents: 6000)])) == "Synthetic Quill repaid")
-    #expect(tag(6000, TransactionIOU(leftCents: nil, paidBack: [PaidBack(transactionId: "c", lineId: nil, amountCents: 6000, payee: "")])) == "Synthetic Quill repaid")
+    let noPayee = [PaidBack(transactionId: "c", lineId: nil, amountCents: 6000, payee: "")]
+    #expect(tag(6000, TransactionIOU(leftCents: nil, paidBack: noPayee)) == "Synthetic Quill repaid")
     #expect(tag(6000, nil) == "Synthetic Quill repaid")
 }

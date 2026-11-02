@@ -45,6 +45,9 @@ struct TransactionDetailSheet: View {
     @State private var othersChanged: Set<String> = []
     /// onAppear runs again when a full-screen cover (camera, receipt viewer) closes; fill the fields only once.
     @State private var loaded = false
+    /// Reloaded after the payback picker saves, so the row shows the new links without reopening.
+    @State private var iou: TransactionIOU?
+    @State private var payingBack = false
 
     var body: some View {
         Sheet(
@@ -90,6 +93,15 @@ struct TransactionDetailSheet: View {
                     if paidById == nil {
                         NavigationLink { PersonPicker(selection: $personId, noneTitle: noneTitle) } label: {
                             LabeledContent(transaction.amountCents < 0 ? "For" : "Repaid by", value: personId.map(model.personName) ?? noneTitle)
+                        }
+                        // the saved person's links; hidden while another person is picked but not saved
+                        if transaction.amountCents > 0, let saved = transaction.personId, personId == saved, let iou {
+                            Button { payingBack = true } label: { LabeledContent("Paying back", value: paybackLabel(iou)) }
+                                .foregroundStyle(Palette.text)
+                                .sheet(isPresented: $payingBack) {
+                                    PaybackPicker(transactionId: transaction.id, lineId: nil, personId: saved,
+                                                  paybackCents: transaction.amountCents) { await reloadIOU() }
+                                }
                         }
                     }
                     // someone else paid this manual expense: it stays your spending, and counts as their credit
@@ -183,6 +195,7 @@ struct TransactionDetailSheet: View {
             date = DayText.date(transaction.date) ?? .now
             loadedDate = DayText.ymd(date)
             reconciled = transaction.reconciled ?? false
+            iou = transaction.iou
         }
         // a swipe-down skips onCancel, so the reconcile or receipt change refreshes the list here
         .onDisappear {
@@ -241,6 +254,20 @@ struct TransactionDetailSheet: View {
             personId: personId != transaction.personId ? .set(personId) : .unchanged,
             paidByPersonId: paidById != transaction.paidByPersonId ? .set(paidById) : .unchanged,
             date: DayText.ymd(date) != loadedDate ? DayText.ymd(date) : nil)
+    }
+
+    private func paybackLabel(_ iou: TransactionIOU) -> String {
+        switch iou.paidBack.count {
+        case 0: "Just the balance"
+        case 1: iou.paidBack[0].payee ?? "1 item"
+        case let n: "\(n) items"
+        }
+    }
+
+    private func reloadIOU() async {
+        savedOutside = true
+        guard let reader = model.reader else { return }
+        if let fresh = try? await reader.read("/v1/transactions/\(transaction.id)", as: LedgerTransaction.self).value { iou = fresh.iou }
     }
 
     private var noneTitle: String { transaction.amountCents < 0 ? "Me" : "Nobody" }
