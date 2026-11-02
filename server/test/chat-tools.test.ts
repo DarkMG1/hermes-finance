@@ -208,6 +208,10 @@ test('profile tools match the profile functions and never write', () => {
   ]);
   const ranged = call(deps, 'pay_stubs', { from: '2026-01-01', to: '2026-01-31', jobId: 'j1' });
   assert.deepEqual(ranged.stubs.map((s: { id: string }) => s.id), ['s2']);
+  const mid = call(deps, 'pay_stubs', { from: '2026-02-01', jobId: 'j1' });
+  assert.deepEqual(mid.stubs.map((s: { id: string }) => s.id), ['s3']);
+  assert.deepEqual(mid.ytd.map((y: { year: number; grossCents: number; netCents: number }) => [y.year, y.grossCents, y.netCents]), [[2026, 200, 140]]);
+  assert.deepEqual(call(deps, 'pay_stubs', { from: '2030-01-01' }), { stubs: [], ytd: [] });
   assert.equal(runTool(deps, 'pay_stubs', { from: 'bad' }).isError, true);
   assert.deepEqual(counts(), before);
 });

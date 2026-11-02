@@ -51,18 +51,23 @@ export function taxYears(db: Db): TaxYears {
 
 const SUMS = ['grossCents', 'federalCents', 'stateCents', 'socialSecurityCents', 'medicareCents', 'retirementCents', 'otherDeductionsCents', 'netCents'] as const;
 
-/** Stubs in the range (newest first) with their totals per job and calendar year of pay date. */
+/** Stubs in the range (newest first) with year-to-date totals: for each job and calendar year among them, every stub of that job
+ *  that year from Jan 1 through the latest returned pay date, whatever `from` is. */
 export function payStubs(db: Db, q: { from?: string; to?: string; jobId?: string }) {
   const stubs = db.prepare(`${STUB} WHERE (@from IS NULL OR pay_date >= @from) AND (@to IS NULL OR pay_date <= @to) AND (@jobId IS NULL OR job_id = @jobId)
     ORDER BY pay_date DESC, created_at DESC, id`).all({ from: q.from ?? null, to: q.to ?? null, jobId: q.jobId ?? null }) as PayStub[];
-  const groups = new Map<string, { jobId: string | null; year: number } & Record<(typeof SUMS)[number], number>>();
+  const latest = new Map<string, { jobId: string | null; year: number; through: string }>();
   for (const s of stubs) {
-    const year = Number(s.payDate.slice(0, 4));
-    const key = `${s.jobId}|${year}`;
-    if (!groups.has(key)) groups.set(key, { jobId: s.jobId, year, ...Object.fromEntries(SUMS.map((k) => [k, 0])) } as never);
-    for (const k of SUMS) groups.get(key)![k] += s[k];
+    const key = `${s.jobId}|${s.payDate.slice(0, 4)}`;
+    if (!latest.has(key)) latest.set(key, { jobId: s.jobId, year: Number(s.payDate.slice(0, 4)), through: s.payDate });
   }
-  return { stubs, ytd: [...groups.values()].sort((a, b) => a.year - b.year || (a.jobId ?? '').localeCompare(b.jobId ?? '')) };
+  const sums = SUMS.map((k) => `SUM(${k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`)}) AS ${k}`).join(', ');
+  const sum = db.prepare(`SELECT ${sums} FROM pay_stubs WHERE job_id IS @jobId AND pay_date >= @start AND pay_date <= @through`);
+  const ytd = [...latest.values()].map((g) => {
+    const totals = sum.get({ jobId: g.jobId, start: `${g.year}-01-01`, through: g.through }) as Record<(typeof SUMS)[number], number>;
+    return { jobId: g.jobId, year: g.year, ...totals };
+  }).sort((a, b) => a.year - b.year || (a.jobId ?? '').localeCompare(b.jobId ?? ''));
+  return { stubs, ytd };
 }
 
 export function getProfile(db: Db): Profile {

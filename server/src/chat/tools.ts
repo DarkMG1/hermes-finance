@@ -82,7 +82,7 @@ const PROFILE: [string, Entry][] = [
   entry('profile', "The owner's own details: state, filing status, birth year, dependents, retirement saving and HSA; fields are null until set.", Empty, (d) => getProfile(d.db)),
   entry('jobs', 'Jobs (current, past or offer) with salary, bonus and equity; give id for one job in full with its equity grants, next vest dates, pay stubs and tax forms.',
     z.object({ id: z.string().min(1).optional() }).strict(), (d, q, today) => (q.id ? getJob(d.db, q.id, today) : listJobs(d.db))),
-  entry('pay_stubs', 'Pay stubs newest first, optionally for one job (jobId) and pay dates from/to, with ytd totals per job and calendar year of the pay date for the stubs returned.',
+  entry('pay_stubs', 'Pay stubs newest first, optionally for one job (jobId) and pay dates from/to, with ytd: year-to-date totals per job and calendar year (all stubs of that job from Jan 1 through the latest returned pay date that year, even when from is later).',
     z.object({ from: Day, to: Day, jobId: z.string().min(1).optional() }).strict(), (d, q) => payStubs(d.db, q)),
   entry('tax_years', 'Tax returns and W-2/1099 forms by year, with the federal effective tax rate.', Empty, (d) => taxYears(d.db)),
 ];
