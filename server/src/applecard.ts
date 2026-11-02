@@ -188,11 +188,11 @@ export function importAppleCard(db: Db, rows: AppleCardRow[], nowIso: string): A
     // The source hash retains Apple's type; the ledger has no separate type column.
     const candidates = (counterparts.all(accountId, r.transactionDate, r.description) as NonNullable<Stored>[])
       .filter((s) => !taken.has(s.sourceId) && groupFor(baseOf({ ...r, amountCents: s.amount })).sourceIds.has(s.sourceId));
-    const same = candidates.filter((s) => s.amount === r.amountCents);
+    // a twin on a statement that doesn't overlap is another purchase, so it never makes a re-export or correction ambiguous
     const covers = (s: NonNullable<Stored>) => within(s.c, clearFrom, clearTo) || within(r.clearingDate, s.clearFrom, s.clearTo);
-    // a twin on a statement that doesn't overlap is another purchase, so it never makes a correction ambiguous
+    const same = candidates.filter((s) => s.amount === r.amountCents && covers(s));
     const pick = same.length ? same : unpaired.get(correctionKey(r)) === 1 ? candidates.filter(covers) : [];
-    const row = pick.length === 1 && covers(pick[0]!) ? pick[0] : undefined;
+    const row = pick.length === 1 ? pick[0] : undefined;
     if (!row) return;
     taken.add(row.sourceId);
     found[i] = row;

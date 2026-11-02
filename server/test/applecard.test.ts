@@ -540,6 +540,26 @@ test('a correction ignores a same-day twin on another statement whose range does
   }
 });
 
+test('a same-amount twin on a statement that does not overlap never blocks a correction or a clearing-date merge, in either import order', async () => {
+  const sept = csv(coffee('09/30/2026'), grocer('09/21/2026'));
+  const cases: [string, string, [number, string][]][] = [
+    [cup('6.00', '10/01/2026'), csv(cup('6.00'), grocer('09/21/2026')), [[-600, '2026-09-30'], [-600, '2026-10-01']]],
+    [coffee('10/01/2026'), csv(coffee('09/29/2026'), grocer('09/21/2026')), [[-500, '2026-09-29'], [-500, '2026-10-01']]],
+  ];
+  for (const [twin, reexport, expected] of cases) {
+    for (const order of [[sept, csv(twin, books)], [csv(twin, books), sept]]) {
+      const { deps } = makeTestDeps();
+      const app = buildApp(deps);
+      for (const [k, file] of order.entries()) await post(app, file, `first-${k}`);
+      const septId = deps.db.prepare("SELECT id FROM transactions WHERE bank_description = 'SYNTHETIC COFFEE' AND clearing_date = '2026-09-30'").pluck().get();
+      const r = (await post(app, reexport, 'sept-again')).json() as { added: number; updated: number };
+      assert.deepEqual([r.added, r.updated], [0, 2], reexport);
+      assert.deepEqual(coffees(deps.db).map((t) => [t.a, t.c]), expected, reexport);
+      assert.equal(deps.db.prepare("SELECT id FROM transactions WHERE bank_description = 'SYNTHETIC COFFEE' AND clearing_date = ?").pluck().get(expected[0]![1]), septId);
+    }
+  }
+});
+
 test('a row stored before statement ranges matches only when the new file covers its clearing date', async () => {
   const sept = csv(coffee('09/30/2026'), grocer('09/21/2026'));
   const cases: [string, [number, string][]][] = [

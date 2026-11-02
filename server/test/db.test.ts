@@ -87,6 +87,26 @@ test('migration 004 protects bank rows a stored PATCH response shows uncategoriz
   assert.deepEqual(['cleared', 'posted', 'untouched', 'manual'].map(flag), [1, 1, 0, 0]);
 });
 
+test('migration 027 drops ghost inbox links: none without a receipt, and one per receipt, the photo that matches', () => {
+  const db = tempDb();
+  migrate(db);
+  db.exec('ALTER TABLE transactions DROP COLUMN bank_date; ALTER TABLE transactions DROP COLUMN source_file_date; ALTER TABLE transactions DROP COLUMN source_clear_from; ALTER TABLE transactions DROP COLUMN source_clear_to; DROP TABLE applecard_imports; DELETE FROM migrations WHERE version = 27');
+  db.prepare("INSERT INTO accounts (id, name, type) VALUES ('a1', 'Synthetic', 'credit')").run();
+  for (const id of ['gone', 'same-size', 'by-size', 'one']) {
+    db.prepare("INSERT INTO transactions (id, account_id, source, source_id, date, amount_cents, created_at, updated_at) VALUES (?, 'a1', 'manual', ?, '2026-01-01', -1, 'x', 'x')").run(id, id);
+  }
+  for (const [id, bytes] of [['same-size', 3], ['by-size', 3], ['one', 3]] as const) {
+    db.prepare("INSERT INTO receipts (transaction_id, jpeg, bytes, created_at) VALUES (?, x'FFD8FF', ?, 'x')").run(id, bytes);
+  }
+  const link = db.prepare("INSERT INTO inbox_receipts (id, bytes, captured_at, linked_transaction_id, linked_at) VALUES (?, ?, 'x', ?, ?)");
+  for (const [id, bytes, txn, at] of [['i1', 3, 'gone', '2026-01-02'], ['i2', 3, 'same-size', '2026-01-01'], ['i3', 3, 'same-size', '2026-01-03'],
+    ['i4', 3, 'by-size', '2026-01-01'], ['i5', 9, 'by-size', '2026-01-03'], ['i6', 3, 'one', '2026-01-01'], ['i7', 3, null, '2026-01-01']] as const) link.run(id, bytes, txn, at);
+  assert.equal(migrate(db), 27);
+  assert.deepEqual(db.prepare('SELECT id, linked_transaction_id AS t, linked_at AS at FROM inbox_receipts ORDER BY id').all(), [
+    { id: 'i1', t: null, at: '2026-01-02' }, { id: 'i2', t: null, at: '2026-01-01' }, { id: 'i3', t: 'same-size', at: '2026-01-03' },
+    { id: 'i4', t: 'by-size', at: '2026-01-01' }, { id: 'i5', t: null, at: '2026-01-03' }, { id: 'i6', t: 'one', at: '2026-01-01' }, { id: 'i7', t: null, at: '2026-01-01' }]);
+});
+
 test('migration 027 copies the bank date into bank_date for bank rows, and an owner-re-dated Apple Card row takes its transaction date', () => {
   const db = tempDb();
   migrate(db);
