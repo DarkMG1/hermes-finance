@@ -283,6 +283,7 @@ struct TransactionDetailSheet: View {
         guard let reader = model.reader else { return }
         do {
             iou = try await reader.read("/v1/transactions/\(current.id)", as: LedgerTransaction.self).value.iou
+            error = nil
         } catch {
             self.error = "Couldn't refresh what this pays back: \(errorMessage(error))"
         }
