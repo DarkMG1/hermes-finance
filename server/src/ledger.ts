@@ -35,12 +35,11 @@ export function lookups(db: Db, rows: TxnRow[], member: ReturnType<typeof member
   const iou = new Map<string, Transaction['iou']>();
   for (const pid of new Set(rows.filter((r) => r.person_id && !splits.has(r.id)).map((r) => r.person_id!))) {
     const s = settlePerson(db, pid);
-    const payees = new Map([...s.items.values()].map((i) => [entryKey(i.entry.transaction_id, i.entry.line_id), i.entry.payee]));
     for (const r of rows) {
       if (r.person_id !== pid || splits.has(r.id)) continue;
       const k = entryKey(r.id, null);
       iou.set(r.id, { leftCents: s.items.get(k)?.leftCents ?? null,
-        paidBack: (s.paidBack.get(k) ?? []).map((p) => ({ ...p, payee: payees.get(entryKey(p.transactionId, p.lineId)) ?? '' })) });
+        paidBack: (s.paidBack.get(k) ?? []).map((p) => ({ ...p, payee: s.items.get(entryKey(p.transactionId, p.lineId))!.entry.payee })) });
     }
   }
   // a bill holds only the charges its History lists: owner money out (a refund or someone's IOU never opens the bill)
