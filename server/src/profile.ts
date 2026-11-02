@@ -49,6 +49,22 @@ export function taxYears(db: Db): TaxYears {
   }) };
 }
 
+const SUMS = ['grossCents', 'federalCents', 'stateCents', 'socialSecurityCents', 'medicareCents', 'retirementCents', 'otherDeductionsCents', 'netCents'] as const;
+
+/** Stubs in the range (newest first) with their totals per job and calendar year of pay date. */
+export function payStubs(db: Db, q: { from?: string; to?: string; jobId?: string }) {
+  const stubs = db.prepare(`${STUB} WHERE (@from IS NULL OR pay_date >= @from) AND (@to IS NULL OR pay_date <= @to) AND (@jobId IS NULL OR job_id = @jobId)
+    ORDER BY pay_date DESC, created_at DESC, id`).all({ from: q.from ?? null, to: q.to ?? null, jobId: q.jobId ?? null }) as PayStub[];
+  const groups = new Map<string, { jobId: string | null; year: number } & Record<(typeof SUMS)[number], number>>();
+  for (const s of stubs) {
+    const year = Number(s.payDate.slice(0, 4));
+    const key = `${s.jobId}|${year}`;
+    if (!groups.has(key)) groups.set(key, { jobId: s.jobId, year, ...Object.fromEntries(SUMS.map((k) => [k, 0])) } as never);
+    for (const k of SUMS) groups.get(key)![k] += s[k];
+  }
+  return { stubs, ytd: [...groups.values()].sort((a, b) => a.year - b.year || (a.jobId ?? '').localeCompare(b.jobId ?? '')) };
+}
+
 export function getProfile(db: Db): Profile {
   const p = db.prepare(PROFILE).get() as Omit<Profile, 'hsa'> & { hsa: number | null };
   return { ...p, hsa: p.hsa === null ? null : p.hsa === 1 };

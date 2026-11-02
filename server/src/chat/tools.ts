@@ -10,6 +10,7 @@ import { openItems, receiptIds, settlePerson } from '../ious.ts';
 import { getNetWorth } from '../networth.ts';
 import { localDay } from '../days.ts';
 import { getHoldingHistory, getInvestments } from '../investments.ts';
+import { getJob, getProfile, listJobs, payStubs, taxYears } from '../profile.ts';
 import { getChat, searchChats } from './store.ts';
 
 export type ToolDef = { name: string; description: string; input_schema: Record<string, unknown> };
@@ -77,8 +78,17 @@ const clip = (text: string): string => {
   return n < text.length ? `${text.slice(0, n)}… [message cut]` : text;
 };
 
+const PROFILE: [string, Entry][] = [
+  entry('profile', "The owner's own details: state, filing status, birth year, dependents, retirement saving and HSA; fields are null until set.", Empty, (d) => getProfile(d.db)),
+  entry('jobs', 'Jobs (current, past or offer) with salary, bonus and equity; give id for one job in full with its equity grants, next vest dates, pay stubs and tax forms.',
+    z.object({ id: z.string().min(1).optional() }).strict(), (d, q, today) => (q.id ? getJob(d.db, q.id, today) : listJobs(d.db))),
+  entry('pay_stubs', 'Pay stubs newest first, optionally for one job (jobId) and pay dates from/to, with ytd totals per job and calendar year of the pay date for the stubs returned.',
+    z.object({ from: Day, to: Day, jobId: z.string().min(1).optional() }).strict(), (d, q) => payStubs(d.db, q)),
+  entry('tax_years', 'Tax returns and W-2/1099 forms by year, with the federal effective tax rate.', Empty, (d) => taxYears(d.db)),
+];
+
 const ENTRIES = new Map<string, Entry>([
-  ...MONEY.map(([name, e]): [string, Entry] => [name, { ...e, def: { ...e.def, description: `${e.def.description} ${CENTS}` } }]),
+  ...[...MONEY, ...PROFILE].map(([name, e]): [string, Entry] => [name, { ...e, def: { ...e.def, description: `${e.def.description} ${CENTS}` } }]),
   entry('search_chats', "Searches the owner's own earlier conversations with you (questions and your answers) for messages containing every word of query, optionally between from and to; returns each match's chatId, title, date and a snippet with the words in [brackets]. Without query (e.g. for \"our last chat\"), lists the most recently active chats newest first, each with its first question as the snippet and that question's date (from and to then apply to that date).",
     z.object({ query: z.string().max(200).regex(/[\p{L}\p{N}]/u, 'query has no words to search for').optional(), from: Day, to: Day, limit: z.number().int().min(1).max(20).optional() }).strict(),
     (d, q, _today, ctx) => searchChats(d.db, { ...q, limit: q.limit ?? 10 }, ctx.chatId)),
@@ -97,7 +107,7 @@ const ENTRIES = new Map<string, Entry>([
 
 export const TOOLS: ToolDef[] = [...ENTRIES.values()].map((e) => e.def);
 
-const ARRAY_KEYS = ['transactions', 'rows', 'items', 'points', 'holdings', 'history', 'messages', 'results'];
+const ARRAY_KEYS = ['transactions', 'rows', 'items', 'points', 'holdings', 'history', 'messages', 'results', 'stubs'];
 const TEXT_KEYS = new Set(['notes', 'name', 'payee', 'bankDescription', 'merchantName', 'matchText']);
 
 

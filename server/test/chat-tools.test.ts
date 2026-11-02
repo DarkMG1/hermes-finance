@@ -8,6 +8,7 @@ import { getInvestments } from '../src/investments.ts';
 import { getRecurring } from '../src/recurring.ts';
 import { listAccounts, listTransactions } from '../src/ledger.ts';
 import { getPerson, listPeople } from '../src/people.ts';
+import { getJob, getProfile, listJobs, taxYears } from '../src/profile.ts';
 import { makeTestDeps, seedAccount, seedCategory, seedPerson, seedTxn } from './helpers.ts';
 
 function setup() {
@@ -182,4 +183,38 @@ test('open_items matches the person screen and lists only people with something 
   assert.deepEqual(call(deps, 'open_items', {}).map((p: { personId: string }) => p.personId), ['p1', 'p3']);
   assert.deepEqual(call(deps, 'open_items', { personId: 'p2' }), []);
   assert.equal(toolLabel('open_items', {}), 'Open IOUs');
+});
+
+test('profile tools match the profile functions and never write', () => {
+  const { deps, db, today } = setup();
+  db.prepare("INSERT INTO jobs (id, employer, status, created_at, updated_at) VALUES ('j1', 'SYNTHETIC EMPLOYER', 'current', 'x', 'x')").run();
+  const stub = db.prepare(`INSERT INTO pay_stubs (id, job_id, pay_date, gross_cents, federal_cents, state_cents, social_security_cents, medicare_cents,
+    retirement_cents, other_deductions_cents, net_cents, created_at) VALUES (?, ?, ?, 100, 10, 5, 6, 2, 5, 2, 70, 'x')`);
+  stub.run('s1', 'j1', '2025-12-30'); stub.run('s2', 'j1', '2026-01-15'); stub.run('s3', 'j1', '2026-02-15'); stub.run('s4', null, '2026-02-15');
+  const tables = ['profile', 'jobs', 'pay_stubs', 'tax_forms', 'tax_returns', 'equity_grants'];
+  const counts = () => tables.map((t) => db.prepare(`SELECT COUNT(*) FROM ${t}`).pluck().get());
+  const before = counts();
+  assert.deepEqual(call(deps, 'profile', {}), getProfile(db));
+  assert.deepEqual(call(deps, 'jobs', {}), listJobs(db));
+  assert.deepEqual(call(deps, 'jobs', { id: 'j1' }), JSON.parse(JSON.stringify(getJob(db, 'j1', today))));
+  assert.equal(runTool(deps, 'jobs', { id: 'nope' }).isError, true);
+  assert.deepEqual(call(deps, 'tax_years', {}), taxYears(db));
+  const all = call(deps, 'pay_stubs', {});
+  assert.deepEqual(all.stubs.map((s: { id: string }) => s.id), ['s3', 's4', 's2', 's1']);
+  assert.deepEqual(all.ytd, [
+    { jobId: 'j1', year: 2025, grossCents: 100, federalCents: 10, stateCents: 5, socialSecurityCents: 6, medicareCents: 2, retirementCents: 5, otherDeductionsCents: 2, netCents: 70 },
+    { jobId: null, year: 2026, grossCents: 100, federalCents: 10, stateCents: 5, socialSecurityCents: 6, medicareCents: 2, retirementCents: 5, otherDeductionsCents: 2, netCents: 70 },
+    { jobId: 'j1', year: 2026, grossCents: 200, federalCents: 20, stateCents: 10, socialSecurityCents: 12, medicareCents: 4, retirementCents: 10, otherDeductionsCents: 4, netCents: 140 },
+  ]);
+  const ranged = call(deps, 'pay_stubs', { from: '2026-01-01', to: '2026-01-31', jobId: 'j1' });
+  assert.deepEqual(ranged.stubs.map((s: { id: string }) => s.id), ['s2']);
+  assert.equal(runTool(deps, 'pay_stubs', { from: 'bad' }).isError, true);
+  assert.deepEqual(counts(), before);
+});
+
+test('profile tool labels', () => {
+  assert.equal(toolLabel('profile', {}), 'About me');
+  assert.equal(toolLabel('jobs', {}), 'Jobs');
+  assert.equal(toolLabel('pay_stubs', { from: '2026-01-01' }), 'Pay stubs · Since 2026-01-01');
+  assert.equal(toolLabel('tax_years', {}), 'Tax years');
 });

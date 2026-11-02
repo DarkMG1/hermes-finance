@@ -2,6 +2,7 @@ const LABELS: Record<string, string> = {
   spending: 'Spending', expenses: 'Expenses', transactions: 'Transactions', transaction: 'Transaction', payee_history: 'Payee history', bills: 'Bills',
   reimbursements: 'Reimbursements', people: 'People', open_items: 'Open IOUs', net_worth: 'Net worth', investments: 'Investments', accounts: 'Accounts', categories: 'Categories',
   search_chats: 'Past chats', read_chat: 'Past chat', show_chart: 'Chart',
+  profile: 'About me', jobs: 'Jobs', pay_stubs: 'Pay stubs', tax_years: 'Tax years',
 };
 
 export function toolLabel(name: string, input: Record<string, unknown>): string {
