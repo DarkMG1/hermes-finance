@@ -184,3 +184,79 @@ private let points: JSONValue = .array([.object(["label": .string("2026-09"), "v
 @Test func creditsExhaustedReadsPlainly() {
     #expect(ClientError.api(status: 402, body: APIErrorBody(code: "AI_CREDITS_EXHAUSTED", message: "x")).message == "AI credits used up for this month")
 }
+
+@Test func typingPaceKeepsUpAndFlushesWhenEnded() {
+    let frame = 1.0 / 60
+    // a small backlog types at the base pace, at least one character a frame
+    #expect(TypingPace.pace(shown: 0, received: 10, elapsed: frame, ended: false) == 2)
+    #expect(TypingPace.pace(shown: 9, received: 10, elapsed: frame, ended: false) == 10)
+    // a large backlog speeds up to clear in about a third of a second, and ended in a tenth
+    #expect(TypingPace.pace(shown: 0, received: 1200, elapsed: frame, ended: false) == 61)
+    #expect(TypingPace.pace(shown: 0, received: 1200, elapsed: frame, ended: true) == 200)
+    // caught up, or text that shrank (a reload), shows what there is
+    #expect(TypingPace.pace(shown: 10, received: 10, elapsed: frame, ended: false) == 10)
+    #expect(TypingPace.pace(shown: 50, received: 10, elapsed: frame, ended: true) == 10)
+    // a long stall never overshoots
+    #expect(TypingPace.pace(shown: 0, received: 10, elapsed: 5, ended: false) == 10)
+    // a 1,000-character burst is fully shown within about 1.5 s of frames
+    var shown = 0, frames = 0
+    while shown < 1000 { shown = TypingPace.pace(shown: shown, received: 1000, elapsed: frame, ended: false); frames += 1 }
+    #expect(frames <= 90)
+}
+
+@Test func typingStopsAtWordEndsAndHoldsAHalfArrivedWord() {
+    let frame = 1.0 / 30
+    #expect(TypingPace.next(text: "Hello world again", shown: 0, elapsed: frame, ended: false) == 5)
+    #expect(TypingPace.next(text: "Hello wor", shown: 5, elapsed: 1, ended: false) == 6)
+    #expect(TypingPace.next(text: "Hello wor", shown: 6, elapsed: frame, ended: true) == 9)
+    // a run without spaces longer than a word (a link) types through instead of waiting for its end
+    let link = "See https://example.com/" + String(repeating: "a", count: 40)
+    #expect(TypingPace.next(text: link, shown: 4, elapsed: frame, ended: false) == 11)
+    #expect(TypingPace.next(text: link, shown: 4, elapsed: 1, ended: false) == link.count)
+}
+
+@Test func typingNeverShowsHalfAnEmphasisOrCodeSpan() {
+    let frame = 1.0 / 30
+    // closed later on the line: shows through the closer at once
+    #expect(TypingPace.next(text: "Say **very big** now", shown: 4, elapsed: frame, ended: false) == 16)
+    #expect(TypingPace.next(text: "Run `ls -la` now", shown: 4, elapsed: frame, ended: false) == 12)
+    #expect(TypingPace.next(text: "An *odd one* here", shown: 3, elapsed: frame, ended: false) == 12)
+    // not closed yet: waits at the opener, and once ended shows it as it is
+    #expect(TypingPace.next(text: "Say **very big", shown: 4, elapsed: frame, ended: false) == 4)
+    #expect(TypingPace.next(text: "Say **very big", shown: 4, elapsed: frame, ended: true) > 4)
+    #expect(TypingPace.next(text: "Run `ls -la", shown: 4, elapsed: frame, ended: false) == 4)
+    // a marker cut in half shows whole
+    #expect(TypingPace.settle(Array("a **b** c"), 3, complete: false) == 7)
+    // a spaced star isn't an opener, and a finished line never waits
+    #expect(TypingPace.next(text: "5 * 3 = 15 and more", shown: 0, elapsed: 1, ended: false) == 15)
+    #expect(TypingPace.next(text: "a *b\nnext line", shown: 0, elapsed: 1, ended: false) == 10)
+}
+
+@Test func typingShowsTableRowsWholeAndAHeaderWithItsSeparator() {
+    let frame = 1.0 / 30
+    let header = "Intro\n| A | B |\n"
+    #expect(TypingPace.next(text: header, shown: 6, elapsed: frame, ended: false) == 6)
+    #expect(TypingPace.next(text: header + "|---|", shown: 6, elapsed: frame, ended: false) == 6)
+    #expect(TypingPace.next(text: header + "|---|---|\n", shown: 6, elapsed: frame, ended: false) == header.count + 10)
+    let table = header + "|---|---|\n| x | 1 |\n| y"
+    #expect(TypingPace.next(text: table, shown: header.count + 10, elapsed: frame, ended: false) == header.count + 20)
+    #expect(TypingPace.next(text: table, shown: header.count + 20, elapsed: 1, ended: false) == header.count + 20)
+    #expect(TypingPace.next(text: table, shown: header.count + 20, elapsed: 1, ended: true) == table.count)
+    // a line starting with a bar that isn't a table shows once the next line says so
+    #expect(TypingPace.next(text: "| not a table\nplain text", shown: 0, elapsed: frame, ended: false) == 14)
+}
+
+@Test func typingAMarkdownAnswerNeverStallsOrGoesBack() {
+    let answer = "## By category\n\n| Category | Oct |\n|---|--:|\n| SYNTHETIC GROCER | $540 |\n\n- **Groceries** rose, see `total`.\n- 5 * 3 *odd\n\nDone."
+    let chars = Array(answer)
+    var shown = 0, received = 0, frames = 0
+    while shown < chars.count {
+        received = min(chars.count, received + 7)
+        let next = TypingPace.next(text: String(chars[..<received]), shown: shown, elapsed: 1.0 / 30, ended: received == chars.count)
+        #expect(next >= shown)
+        shown = next
+        frames += 1
+        if frames > 200 { break }
+    }
+    #expect(shown == chars.count)
+}

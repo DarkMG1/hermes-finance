@@ -240,3 +240,96 @@ extension APIClient {
         (baseURL.appending(path: path), ["Authorization": "Bearer \(token)", "Accept": "text/event-stream", "Content-Type": "application/json"])
     }
 }
+
+/// How a streamed answer types out: a steady pace that speeds up to stay within about a second of what arrived, and flushes fast once the answer
+/// has ended. It stops only at word ends, and never inside Markdown that shows raw while half typed: an unclosed `**`, `*` or `` ` `` span on
+/// the line still arriving, or a table row (a header waits for its separator row). Counts are Characters.
+public enum TypingPace {
+    /// Characters per second when the text keeps up.
+    static let base = 90.0
+    /// A longer run without spaces (a link, CJK) types through instead of waiting for its end.
+    static let longestWord = 24
+
+    public static func next(text: String, shown: Int, elapsed: TimeInterval, ended: Bool) -> Int {
+        let chars = Array(text)
+        let paced = pace(shown: shown, received: chars.count, elapsed: elapsed, ended: ended)
+        if ended && paced == chars.count { return paced }
+        return max(min(shown, chars.count), settle(chars, paced, complete: ended))
+    }
+
+    static func pace(shown: Int, received: Int, elapsed: TimeInterval, ended: Bool) -> Int {
+        let backlog = received - shown
+        guard backlog > 0 else { return received }
+        let rate = max(base, Double(backlog) / (ended ? 0.1 : 0.33))
+        return min(received, shown + max(1, Int((rate * elapsed).rounded(.up))))
+    }
+
+    /// Moves `target` forward past what it cuts, or back to where it starts; once it has moved back it only moves back, so it ends.
+    static func settle(_ c: [Character], _ target: Int, complete: Bool) -> Int {
+        var n = target, held = false
+        while true {
+            let next = step(c, n, complete: complete)
+            if next == n || (held && next > n) { return n }
+            held = held || next < n
+            n = next
+        }
+    }
+
+    private static func step(_ c: [Character], _ n: Int, complete: Bool) -> Int {
+        guard n > 0 else { return n }
+        if n < c.count, !c[n].isWhitespace, !c[n - 1].isWhitespace {
+            let end = c[n...].firstIndex(where: \.isWhitespace) ?? c.count
+            if end - n <= longestWord { return end }
+        }
+        if n == c.count, !complete, !c[n - 1].isWhitespace {
+            let start = (c[..<n].lastIndex(where: \.isWhitespace) ?? -1) + 1
+            if n - start < longestWord { return start }
+        }
+        let start = lineStart(c, n - 1), end = c[start...].firstIndex(of: "\n")
+        if c[start] == "|" { return tableRow(c, n, start: start, end: end, complete: complete) }
+        guard end == nil, !complete else { return n }
+        return span(c, n, start: start)
+    }
+
+    private static func tableRow(_ c: [Character], _ n: Int, start: Int, end: Int?, complete: Bool) -> Int {
+        guard let end else { return complete ? c.count : start }
+        let previous = start == 0 ? nil : lineStart(c, start - 1)
+        guard previous.map({ c[$0] != "|" }) ?? true else { return max(n, end + 1) }
+        // a header row shows with its separator row, or as text once the next line shows it isn't a table
+        let separator = end + 1
+        guard separator < c.count else { return complete ? max(n, separator) : start }
+        guard c[separator] == "|" else { return max(n, separator) }
+        if let close = c[separator...].firstIndex(of: "\n") { return max(n, close + 1) }
+        return complete ? c.count : start
+    }
+
+    /// An opener on the line still arriving: show through its closer, or wait for one.
+    private static func span(_ c: [Character], _ n: Int, start: Int) -> Int {
+        var code: Int?, open: [(at: Int, run: Int)] = [], i = start
+        while i < n {
+            if c[i] == "`" {
+                code = code == nil ? i : nil
+                i += 1
+            } else if code == nil, c[i] == "*" {
+                let run = c[i...].prefix { $0 == "*" }.count
+                if i + run > n { return i + run }
+                if open.last?.run == run {
+                    open.removeLast()
+                } else if i + run < c.count, !c[i + run].isWhitespace {
+                    open.append((i, run))
+                }
+                i += run
+            } else {
+                i += 1
+            }
+        }
+        if let code { return c[n...].firstIndex(of: "`").map { $0 + 1 } ?? code }
+        guard let first = open.first, let last = open.last else { return n }
+        let marker = String(repeating: "*", count: last.run)
+        return String(c[n...]).range(of: marker).map { n + String(c[n...])[..<$0.upperBound].count } ?? first.at
+    }
+
+    private static func lineStart(_ c: [Character], _ i: Int) -> Int {
+        (c[..<i].lastIndex(of: "\n") ?? -1) + 1
+    }
+}

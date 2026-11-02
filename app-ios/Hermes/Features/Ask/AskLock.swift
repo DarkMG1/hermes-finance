@@ -13,6 +13,8 @@ struct AskLock<Content: View>: View {
     @State private var error: String?
     /// Bumped by every relock, so a Face ID success that lands after one doesn't unlock.
     @State private var generation = 0
+    /// This tab's value: opening it asks for Face ID straight away.
+    let tab: Int
     @ViewBuilder var content: Content
 
     var body: some View {
@@ -34,7 +36,11 @@ struct AskLock<Content: View>: View {
                 }
             }
             .onChange(of: scenePhase) { _, phase in if phase == .background { relock() } }
-            .onChange(of: selectedTab) { relock() }
+            // initial: the tab's content first appears with this tab already selected
+            .onChange(of: selectedTab, initial: true) { _, selected in
+                relock()
+                if selected == tab, hideBalances { Task { await unlock() } }
+            }
             .onChange(of: hideBalances) { _, hidden in if hidden { relock() } }
     }
 
@@ -48,10 +54,14 @@ struct AskLock<Content: View>: View {
     private func unlock() async {
         guard !unlocking else { return }
         unlocking = true
-        defer { unlocking = false }
         let started = generation
         let check = await confirmShowBalances(lock: lock, model: model, reason: "Unlock Ask")
-        guard generation == started else { return }
+        unlocking = false
+        guard generation == started else {
+            // a tab switch during the prompt asked again while this one was up and was ignored: ask now if Ask is still showing
+            if selectedTab == tab, hideBalances, !unlocked, scenePhase != .background { await unlock() }
+            return
+        }
         unlocked = check.shown
         error = check.error
     }
