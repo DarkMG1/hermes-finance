@@ -373,3 +373,12 @@ test('import stores the bank date under an owner date, and old or far dates are 
   const dates = deps.db.prepare("SELECT bank_date AS b FROM transactions WHERE bank_description LIKE 'SYNTHETIC %' AND amount_cents IN (-100, -200) ORDER BY amount_cents").all();
   assert.deepEqual(dates, [{ b: '2031-01-01' }, { b: '1999-12-31' }]);
 });
+
+test('re-import clears an owner date that matches the bank date', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  await post(app, SEPT, 'k1');
+  deps.db.prepare("UPDATE transactions SET date_owner_set = 1 WHERE source = 'applecard' AND amount_cents = -1234").run();
+  await post(app, SEPT, 'k2');
+  assert.equal((deps.db.prepare("SELECT date_owner_set AS f FROM transactions WHERE source = 'applecard' AND amount_cents = -1234").get() as { f: number }).f, 0);
+});

@@ -591,3 +591,22 @@ test('bank dates are never bounded', () => {
   apply([page({ added: [txn({ transactionId: 'old', date: '1999-12-31' }), txn({ transactionId: 'far', date: '2031-01-01' })] })]);
   assert.deepEqual([row('old')?.date, row('far')?.bank_date], ['1999-12-31', '2031-01-01']);
 });
+
+test('an owner date the bank later agrees with follows the bank again, on update, pending to posted and PATCH', async () => {
+  const { deps, apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'p1', date: '2026-03-10' }), txn({ transactionId: 'pend1', pending: true, date: '2026-03-10' })] })]);
+  deps.db.prepare("UPDATE transactions SET date = '2026-03-12', date_owner_set = 1 WHERE source_id IN ('p1', 'pend1')").run();
+  apply([page({ modified: [txn({ transactionId: 'p1', date: '2026-03-12' })] })]);
+  assert.equal(row('p1')?.date_owner_set, 0);
+  apply([page({ modified: [txn({ transactionId: 'p1', date: '2026-03-13' })] })]);
+  assert.equal(row('p1')?.date, '2026-03-13');
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', date: '2026-03-12' })], removed: [{ transactionId: 'pend1' }] })]);
+  assert.deepEqual([row('post1')?.date, row('post1')?.date_owner_set], ['2026-03-12', 0]);
+  const app = buildApp(deps);
+  const id = row('p1')?.id as string;
+  const patch = (key: string, date: string) => app.inject({ method: 'PATCH', url: `/v1/transactions/${id}`, headers: { ...AUTH, 'idempotency-key': key }, payload: { date } });
+  await patch('a1', '2026-03-14');
+  assert.equal(row('p1')?.date_owner_set, 1);
+  await patch('a2', '2026-03-13');
+  assert.equal(row('p1')?.date_owner_set, 0);
+});

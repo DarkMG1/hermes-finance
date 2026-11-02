@@ -81,6 +81,8 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
       @pendingSourceId, @categoryId, @ownerSet, @payee, @payeeOwnerSet, @notes, @personId, @dismissed, @dateOwnerSet, @now, @now)
     ON CONFLICT (source, source_id) DO UPDATE SET
       account_id = excluded.account_id, date = CASE WHEN transactions.date_owner_set = 1 THEN transactions.date ELSE excluded.date END, bank_date = excluded.bank_date,
+      -- owner and bank agree: the row follows the bank again
+      date_owner_set = CASE WHEN transactions.date = excluded.bank_date THEN 0 ELSE transactions.date_owner_set END,
       authorized_date = excluded.authorized_date,
       amount_cents = excluded.amount_cents, bank_description = excluded.bank_description, merchant_name = excluded.merchant_name,
       plaid_category = excluded.plaid_category, pending = excluded.pending,
@@ -136,7 +138,7 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
         notes = pending.notes;
         personId = pending.person_id;
         dismissed = pending.repayment_dismissed;
-        if (pending.date_owner_set) { date = pending.date; dateOwnerSet = 1; }
+        if (pending.date_owner_set && pending.date !== t.date) { date = pending.date; dateOwnerSet = 1; }
         pendingId = pending.id;
       }
     }

@@ -113,7 +113,7 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       if (body.notes !== undefined) { sets.push('notes = ?'); args.push(body.notes); }
       if (body.paidByPersonId !== undefined) { sets.push('paid_by_person_id = ?'); args.push(body.paidByPersonId); }
       if (body.repaymentDismissed !== undefined) { sets.push('repayment_dismissed = ?'); args.push(body.repaymentDismissed ? 1 : 0); }
-      if (date !== undefined) { sets.push('date = ?', 'date_owner_set = ?'); args.push(date, body.date === null ? 0 : 1); }
+      if (date !== undefined) { sets.push('date = ?', 'date_owner_set = ?'); args.push(date, date === current.bankDate ? 0 : 1); }
       const now = deps.now().toISOString();
       db.prepare(`UPDATE transactions SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...args, now, req.params.id);
       if (personAfter !== current.personId) dropLinks(db, current.id, null);
