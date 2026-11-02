@@ -67,8 +67,12 @@ struct TransactionDetailSheet: View {
         ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
                 LabeledContent("Amount") { MoneyText(cents: current.amountCents) }
-                DatePicker("Date", selection: $date, displayedComponents: .date)
+                DatePicker("Date", selection: $date, in: DateBounds.range(), displayedComponents: .date)
                     .disabled(busy || writes.unresolved || deleteWrites.unresolved)
+                if let bank = current.bankDate, bank != DayText.ymd(date) {
+                    Button("Use bank date") { date = DayText.date(bank) ?? date }
+                        .disabled(busy || writes.unresolved || deleteWrites.unresolved)
+                }
                 LabeledContent("Account", value: model.accountName(current.accountId))
                 if current.pending { LabeledContent("Status", value: "Pending") }
                 if !current.bankDescription.isEmpty { LabeledContent("Bank description", value: current.bankDescription) }
@@ -268,7 +272,8 @@ struct TransactionDetailSheet: View {
             notes: notes != (current.notes ?? "") ? .set(notes.isEmpty ? nil : notes) : .unchanged,
             personId: personId != current.personId ? .set(personId) : .unchanged,
             paidByPersonId: paidById != current.paidByPersonId ? .set(paidById) : .unchanged,
-            date: DayText.ymd(date) != loadedDate ? DayText.ymd(date) : nil)
+            // the bank's date goes back to following the bank
+            date: DayText.ymd(date) == loadedDate ? .unchanged : .set(DayText.ymd(date) == current.bankDate ? nil : DayText.ymd(date)))
     }
 
     private func paybackLabel(_ iou: TransactionIOU) -> String {

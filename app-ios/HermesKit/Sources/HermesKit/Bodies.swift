@@ -15,12 +15,12 @@ public struct PatchTransactionBody: Encodable, Sendable, Equatable {
     /// Manual rows only: someone else paid; it stays the owner's spending.
     public var paidByPersonId: FieldUpdate<String>
     public var repaymentDismissed: Bool?
-    /// `yyyy-MM-dd`. Bank sync and Apple Card re-import keep it from then on.
-    public var date: String?
+    /// `yyyy-MM-dd`. Bank sync and Apple Card re-import keep it from then on; `.set(nil)` goes back to the bank's date.
+    public var date: FieldUpdate<String>
 
     public init(categoryId: FieldUpdate<String> = .unchanged, payee: FieldUpdate<String> = .unchanged, notes: FieldUpdate<String> = .unchanged,
                 personId: FieldUpdate<String> = .unchanged, paidByPersonId: FieldUpdate<String> = .unchanged, repaymentDismissed: Bool? = nil,
-                date: String? = nil) {
+                date: FieldUpdate<String> = .unchanged) {
         self.categoryId = categoryId
         self.payee = payee
         self.notes = notes
@@ -32,19 +32,26 @@ public struct PatchTransactionBody: Encodable, Sendable, Equatable {
 
     public var isEmpty: Bool {
         categoryId == .unchanged && payee == .unchanged && notes == .unchanged && personId == .unchanged && paidByPersonId == .unchanged
-            && repaymentDismissed == nil && date == nil
+            && repaymentDismissed == nil && date == .unchanged
     }
 
     private enum Keys: String, CodingKey { case categoryId, payee, notes, personId, paidByPersonId, repaymentDismissed, date }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: Keys.self)
-        for (key, update) in [(Keys.categoryId, categoryId), (.payee, payee), (.notes, notes), (.personId, personId), (.paidByPersonId, paidByPersonId)] {
+        for (key, update) in [(Keys.categoryId, categoryId), (.payee, payee), (.notes, notes), (.personId, personId), (.paidByPersonId, paidByPersonId),
+                              (.date, date)] {
             guard case .set(let value) = update else { continue }
             if let value { try container.encode(value, forKey: key) } else { try container.encodeNil(forKey: key) }
         }
         try container.encodeIfPresent(repaymentDismissed, forKey: .repaymentDismissed)
-        try container.encodeIfPresent(date, forKey: .date)
+    }
+}
+
+/// Owner-entered dates: the server takes 2000-01-01 through a year after its today.
+public enum DateBounds {
+    public static func range(today: Date = .now, calendar: Calendar = .current) -> ClosedRange<Date> {
+        calendar.date(from: DateComponents(year: 2000, month: 1, day: 1))!...calendar.date(byAdding: .year, value: 1, to: today)!
     }
 }
 

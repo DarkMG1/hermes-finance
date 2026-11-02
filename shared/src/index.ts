@@ -5,7 +5,7 @@ const Id = z.string().min(1).max(100);
 const DateStr = z.string().regex(DATE_RE, 'expected YYYY-MM-DD')
   .refine((s) => DATE_RE.test(s) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s, 'not a real date');
 // Leave year 9999 for exclusive period boundaries and derived dates in responses.
-const DateInput = DateStr.refine((s) => s < '9999-01-01', 'year must be at most 9998');
+const DateInput = DateStr.refine((s) => s < '9999-01-01', 'year must be at most 9998').refine((s) => s >= '2000-01-01', 'must be 2000-01-01 or later');
 const Cents = z.number().int().safe();
 export const MAX_AMOUNT_CENTS = 1_000_000_000;
 const LedgerCents = Cents.min(-MAX_AMOUNT_CENTS).max(MAX_AMOUNT_CENTS);
@@ -36,6 +36,8 @@ const PaidBack = z.object({ transactionId: Id, lineId: Id.nullable(), amountCent
 
 export const Transaction = z.object({
   id: Id, accountId: Id, source: z.enum(['plaid', 'manual', 'actual', 'applecard']), date: DateStr,
+  /** The bank's own date, even under an owner-set date; null on manual and Actual rows and on rows the owner re-dated before 2.1.1. */
+  bankDate: DateStr.nullable(),
   amountCents: Cents, payee: z.string(), bankDescription: z.string(), merchantName: z.string().nullable(),
   pending: z.boolean(), categoryId: Id.nullable(), notes: z.string().nullable(), personId: Id.nullable(), paidByPersonId: Id.nullable(), repaymentDismissed: z.boolean(), splitLines: z.array(SplitLine),
   /** Marked reconciled and the bank amount unchanged since. */
@@ -64,8 +66,8 @@ export type ListTransactionsQuery = z.infer<typeof ListTransactionsQuery>;
 export const PatchTransactionBody = z.object({
   categoryId: Id.nullable().optional(), payee: z.string().min(1).max(200).nullable().optional(), notes: z.string().max(2000).nullable().optional(),
   personId: Id.nullable().optional(), paidByPersonId: Id.nullable().optional(), repaymentDismissed: z.boolean().optional(),
-  /** The owner's date; bank sync and Apple Card re-import keep it from then on. */
-  date: DateInput.optional(),
+  /** The owner's date; bank sync and Apple Card re-import keep it from then on. null: back to the bank's date. */
+  date: DateInput.nullable().optional(),
 }).strict()
   .refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' })
   .refine((b) => !(b.categoryId && b.personId), { message: 'categoryId and personId cannot both be set', path: ['personId'] })

@@ -8,3 +8,8 @@ export function parseBody<T>(schema: z.ZodType<T>, data: unknown): T {
   const field = issue && issue.path.length > 0 ? issue.path.join('.') : undefined;
   throw new ApiError(400, 'INVALID_REQUEST', issue ? `${field ?? 'request'}: ${issue.message}` : 'invalid request', field);
 }
+
+/** Owner-entered dates end a year after the owner's today (`localDay`); bank dates are never bounded. */
+export function assertOwnerDate(date: string | null | undefined, today: string): void {
+  if (date && date > `${Number(today.slice(0, 4)) + 1}${today.slice(4)}`) throw new ApiError(400, 'INVALID_REQUEST', 'date: must be at most a year from today', 'date');
+}

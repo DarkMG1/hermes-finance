@@ -5,6 +5,7 @@
       "accountId": "acct-checking",
       "source": "plaid",
       "date": "2026-03-10",
+      "bankDate": null,
       "amountCents": 500,
       "payee": "ZELLE FROM SYNTHETIC QUILL",
       "bankDescription": "ZELLE FROM SYNTHETIC QUILL",

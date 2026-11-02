@@ -89,3 +89,12 @@ test('the default category: an income Gifts is refused, a lowercase gifts is reu
   assert.equal(r.json().splitLines[1].categoryId, 'c-gifts');
   assert.equal((deps.db.prepare("SELECT COUNT(*) FROM categories WHERE lower(name) = 'gifts'").pluck().get() as number), 1);
 });
+
+test('a forgiveness date runs from 2000-01-01 to a year after today', async () => {
+  const { forgive } = setup();
+  for (const date of ['1999-12-31', '2027-03-16']) {
+    const r = await forgive({ amountCents: 100, date });
+    assert.deepEqual([r.statusCode, r.json().field], [400, 'date'], date);
+  }
+  assert.equal((await forgive({ amountCents: 100, date: '2027-03-15' })).statusCode, 201);
+});

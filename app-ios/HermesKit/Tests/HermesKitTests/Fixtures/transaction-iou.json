@@ -3,6 +3,7 @@
   "accountId": "acct-checking",
   "source": "plaid",
   "date": "2026-03-11",
+  "bankDate": null,
   "amountCents": 1000,
   "payee": "SYNTHETIC TRANSFER",
   "bankDescription": "SYNTHETIC TRANSFER",

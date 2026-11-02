@@ -3,6 +3,7 @@
   "accountId": "acct-card",
   "source": "manual",
   "date": "2026-03-12",
+  "bankDate": null,
   "amountCents": -4000,
   "payee": "Synthetic Split",
   "bankDescription": "SYNTHETIC",

@@ -148,8 +148,9 @@ func json(_ value: some Encodable) throws -> String {
     #expect(try json(PatchTransactionBody(personId: .set(nil), paidByPersonId: .set("p1"))) == #"{"paidByPersonId":"p1","personId":null}"#)
     #expect(try json(PatchTransactionBody(repaymentDismissed: false)) == #"{"repaymentDismissed":false}"#)
     #expect(PatchTransactionBody(repaymentDismissed: false).isEmpty == false)
-    #expect(try json(PatchTransactionBody(date: "2026-04-01")) == #"{"date":"2026-04-01"}"#)
-    #expect(PatchTransactionBody(date: "2026-04-01").isEmpty == false)
+    #expect(try json(PatchTransactionBody(date: .set("2026-04-01"))) == #"{"date":"2026-04-01"}"#)
+    #expect(PatchTransactionBody(date: .set("2026-04-01")).isEmpty == false)
+    #expect(try json(PatchTransactionBody(date: .set(nil))) == #"{"date":null}"#)
     let paid = CreateTransactionBody(date: "2026-03-03", amountCents: -6000, payee: "M", categoryId: nil, notes: nil, paidByPersonId: "p1")
     #expect(try json(paid) == #"{"amountCents":-6000,"date":"2026-03-03","paidByPersonId":"p1","payee":"M"}"#)
 }
@@ -248,8 +249,20 @@ func json(_ value: some Encodable) throws -> String {
     old["reconciled"] = nil
     old["hasReceipt"] = nil
     old["hasHistory"] = nil
+    old["bankDate"] = nil
     let decoded = try JSONDecoder().decode(LedgerTransaction.self, from: JSONSerialization.data(withJSONObject: old))
-    #expect(decoded.reconciled == nil && decoded.hasReceipt == nil && decoded.hasHistory == nil)
+    #expect(decoded.reconciled == nil && decoded.hasReceipt == nil && decoded.hasHistory == nil && decoded.bankDate == nil)
+    old["bankDate"] = "2026-03-09"
+    #expect(try JSONDecoder().decode(LedgerTransaction.self, from: JSONSerialization.data(withJSONObject: old)).bankDate == "2026-03-09")
+}
+
+@Test func ownerDatesRunFrom2000ToAYearAfterToday() throws {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+    let today = try #require(calendar.date(from: DateComponents(year: 2026, month: 3, day: 15, hour: 9)))
+    let range = DateBounds.range(today: today, calendar: calendar)
+    #expect(calendar.dateComponents([.year, .month, .day], from: range.lowerBound) == DateComponents(year: 2000, month: 1, day: 1))
+    #expect(calendar.dateComponents([.year, .month, .day], from: range.upperBound) == DateComponents(year: 2027, month: 3, day: 15))
 }
 
 @Test func reconcileMonthTitles() {

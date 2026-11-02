@@ -75,12 +75,13 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
   const checkSuperseded = db.prepare("SELECT id FROM transactions WHERE source = 'plaid' AND pending_source_id = ?");
   const getRow = db.prepare("SELECT id, date, date_owner_set, category_id, category_owner_set, payee, payee_owner_set, notes, person_id, repayment_dismissed, pending_source_id FROM transactions WHERE source = 'plaid' AND source_id = ?");
   const upsert = db.prepare(`
-    INSERT INTO transactions (id, account_id, source, source_id, date, authorized_date, amount_cents, bank_description, merchant_name,
+    INSERT INTO transactions (id, account_id, source, source_id, date, bank_date, authorized_date, amount_cents, bank_description, merchant_name,
       plaid_category, pending, pending_source_id, category_id, category_owner_set, payee, payee_owner_set, notes, person_id, repayment_dismissed, date_owner_set, created_at, updated_at)
-    VALUES (@id, @accountId, 'plaid', @sourceId, @date, @authorizedDate, @amount, @desc, @merchant, @plaidCategory, @pending,
+    VALUES (@id, @accountId, 'plaid', @sourceId, @date, @bankDate, @authorizedDate, @amount, @desc, @merchant, @plaidCategory, @pending,
       @pendingSourceId, @categoryId, @ownerSet, @payee, @payeeOwnerSet, @notes, @personId, @dismissed, @dateOwnerSet, @now, @now)
     ON CONFLICT (source, source_id) DO UPDATE SET
-      account_id = excluded.account_id, date = CASE WHEN transactions.date_owner_set = 1 THEN transactions.date ELSE excluded.date END, authorized_date = excluded.authorized_date,
+      account_id = excluded.account_id, date = CASE WHEN transactions.date_owner_set = 1 THEN transactions.date ELSE excluded.date END, bank_date = excluded.bank_date,
+      authorized_date = excluded.authorized_date,
       amount_cents = excluded.amount_cents, bank_description = excluded.bank_description, merchant_name = excluded.merchant_name,
       plaid_category = excluded.plaid_category, pending = excluded.pending,
       category_id = COALESCE(transactions.category_id, CASE WHEN transactions.category_owner_set = 0 THEN excluded.category_id END),
@@ -140,7 +141,7 @@ export function applyPages(db: Db, pages: SyncPage[], opts: { itemId: string; cu
       }
     }
     upsert.run({
-      id: randomUUID(), accountId: accountFor(t.accountId), sourceId: t.transactionId, date, authorizedDate: t.authorizedDate,
+      id: randomUUID(), accountId: accountFor(t.accountId), sourceId: t.transactionId, date, bankDate: t.date, authorizedDate: t.authorizedDate,
       amount: plaidAmountToCents(t.amount), desc: t.name, merchant: t.merchantName, plaidCategory: t.category,
       pending: t.pending ? 1 : 0, pendingSourceId: t.pendingTransactionId, categoryId, ownerSet, payee, payeeOwnerSet, notes, personId, dismissed, dateOwnerSet, now: opts.nowIso,
     });

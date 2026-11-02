@@ -560,3 +560,34 @@ test('a pending charge linked as an item keeps its links when it posts with a ne
   apply([page({ added: [txn({ transactionId: 'postc', pendingTransactionId: 'pendc', amount: 30 })], removed: [{ transactionId: 'pendc' }] })]);
   assert.deepEqual(deps.db.prepare('SELECT payback_transaction_id AS p, item_transaction_id AS i FROM iou_links').all(), [{ p: back, i: row('postc')!.id }]);
 });
+
+test('bank_date follows the bank under an owner date, and pending to posted takes the posted date', () => {
+  const { deps, apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'p1', date: '2026-03-30' }), txn({ transactionId: 'pend1', pending: true, date: '2026-03-28' })] })]);
+  assert.deepEqual([row('p1')?.bank_date, row('pend1')?.bank_date], ['2026-03-30', '2026-03-28']);
+  deps.db.prepare("UPDATE transactions SET date = '2026-04-01', date_owner_set = 1 WHERE source_id IN ('p1', 'pend1')").run();
+  apply([page({ modified: [txn({ transactionId: 'p1', date: '2026-03-31' })] })]);
+  assert.deepEqual([row('p1')?.date, row('p1')?.bank_date], ['2026-04-01', '2026-03-31']);
+  apply([page({ added: [txn({ transactionId: 'post1', pendingTransactionId: 'pend1', date: '2026-03-29' })], removed: [{ transactionId: 'pend1' }] })]);
+  assert.deepEqual([row('post1')?.date, row('post1')?.bank_date], ['2026-04-01', '2026-03-29']);
+});
+
+test('Use bank date: PATCH date null restores the bank date and lets a later sync move it again', async () => {
+  const { deps, apply, row } = setup();
+  const app = buildApp(deps);
+  apply([page({ added: [txn({ transactionId: 'p1', date: '2026-03-10' })] })]);
+  const id = row('p1')?.id as string;
+  const patch = (key: string, date: string | null) => app.inject({ method: 'PATCH', url: `/v1/transactions/${id}`, headers: { ...AUTH, 'idempotency-key': key }, payload: { date } });
+  assert.equal((await patch('d1', '2026-03-12')).json().bankDate, '2026-03-10');
+  const r = await patch('d2', null);
+  assert.equal(r.statusCode, 200);
+  assert.deepEqual([r.json().date, r.json().bankDate, row('p1')?.date_owner_set], ['2026-03-10', '2026-03-10', 0]);
+  apply([page({ modified: [txn({ transactionId: 'p1', date: '2026-03-11' })] })]);
+  assert.equal(row('p1')?.date, '2026-03-11');
+});
+
+test('bank dates are never bounded', () => {
+  const { apply, row } = setup();
+  apply([page({ added: [txn({ transactionId: 'old', date: '1999-12-31' }), txn({ transactionId: 'far', date: '2031-01-01' })] })]);
+  assert.deepEqual([row('old')?.date, row('far')?.bank_date], ['1999-12-31', '2031-01-01']);
+});

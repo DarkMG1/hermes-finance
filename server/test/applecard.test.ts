@@ -359,3 +359,17 @@ test('equal-amount counterparts still make a clearing-date correction ambiguous'
   assert.deepEqual([r.statusCode, r.json().added, r.json().updated], [200, 1, 0]);
   assert.deepEqual(deps.db.prepare("SELECT id, amount_cents, clearing_date FROM transactions WHERE clearing_date < '2026-10-02' ORDER BY clearing_date").all(), before);
 });
+
+test('import stores the bank date under an owner date, and old or far dates are never bounded', async () => {
+  const { deps } = makeTestDeps();
+  const app = buildApp(deps);
+  await post(app, SEPT, 'k1');
+  deps.db.prepare("UPDATE transactions SET date = '2026-10-01', date_owner_set = 1 WHERE source = 'applecard' AND amount_cents = -1234").run();
+  await post(app, SEPT, 'k2');
+  const cafe = deps.db.prepare("SELECT date, bank_date AS b FROM transactions WHERE source = 'applecard' AND amount_cents = -1234").get();
+  assert.deepEqual(cafe, { date: '2026-10-01', b: '2026-09-01' });
+  const odd = [HEADER, '12/31/1999,,SYNTHETIC OLD,,,Purchase,1.00,', '01/01/2031,,SYNTHETIC FAR,,,Purchase,2.00,'].join('\n');
+  assert.equal((await post(app, odd, 'k3')).statusCode, 200);
+  const dates = deps.db.prepare("SELECT bank_date AS b FROM transactions WHERE bank_description LIKE 'SYNTHETIC %' AND amount_cents IN (-100, -200) ORDER BY amount_cents").all();
+  assert.deepEqual(dates, [{ b: '2031-01-01' }, { b: '1999-12-31' }]);
+});
