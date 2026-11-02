@@ -118,6 +118,8 @@ struct RedactionPreview: View {
                 }
             }
             .accessibilityElement(children: .ignore)
+            // dragging has no VoiceOver path; hiding the whole page is always safe
+            .accessibilityAction(named: "Black out whole page") { pages[index].drawn.append(Box(x: 0, y: 0, w: 1, h: 1)) }
             .accessibilityLabel("Page \(index + 1) of \(pages.count), \(page.boxes.count) \(page.boxes.count == 1 ? "item" : "items") hidden")
     }
 

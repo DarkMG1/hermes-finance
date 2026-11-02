@@ -129,7 +129,6 @@ struct ProfileDraftForm: View {
     @Environment(\.dismiss) private var dismiss
     let kind: ProfileKind
     let uncertain: Set<String>
-    let onSaved: () async -> Void
     /// the employer printed on a pay stub
     private let employer: String?
 
@@ -154,10 +153,9 @@ struct ProfileDraftForm: View {
     @State private var matchesError: String?
     @State private var linking: String?
 
-    init(kind: ProfileKind, draft: ProfileDraft, uncertain: Set<String>, onSaved: @escaping () async -> Void) {
+    init(kind: ProfileKind, draft: ProfileDraft, uncertain: Set<String>) {
         self.kind = kind
         self.uncertain = uncertain
-        self.onSaved = onSaved
         var employer: String?
         var grants: [GrantRow] = []
         let texts: [String: String] = switch draft {
@@ -180,11 +178,8 @@ struct ProfileDraftForm: View {
     private var locked: Bool { writes.unresolved || busy }
 
     private var form: some View {
-        Sheet(title: kind.title, canSave: !busy && built, busy: busy, unresolved: writes.unresolved, onCancel: {
-            // a save may have landed (or an offer's job did): the profile refreshes
-            if writes.unresolved || savedJobId != nil { Task { await onSaved() } }
-            dismiss()
-        }, onSave: { Task { await save() } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
+        Sheet(title: kind.title, canSave: !busy && built, busy: busy, unresolved: writes.unresolved, onCancel: { dismiss() },
+              onSave: { Task { await save() } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             switch kind {
             case .taxReturn:
                 Section { DraftFields(fields: Self.returnFields, texts: $texts, uncertain: uncertain) }.disabled(locked)
@@ -235,7 +230,7 @@ struct ProfileDraftForm: View {
 
     private func linkSheet(_ stub: PayStub) -> some View {
         Sheet(title: "Link deposit", saveTitle: "Skip", canSave: !busy, busy: busy, unresolved: writes.unresolved, dirty: false,
-              onCancel: { finish() }, onSave: { finish() }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
+              onCancel: { dismiss() }, onSave: { dismiss() }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
                 if let matches {
                     if matches.isEmpty {
@@ -301,7 +296,6 @@ struct ProfileDraftForm: View {
             guard try await write(client) else { return }
             writes.didSucceed()
             if kind == .payStub { return }
-            await onSaved()
             dismiss()
         } catch {
             writes.didFail(error)
@@ -356,18 +350,10 @@ struct ProfileDraftForm: View {
         do {
             _ = try await client.linkPayStub(id: stub.id, transactionId: transactionId, idempotencyKey: writes.key)
             writes.didSucceed()
-            await onSaved()
             dismiss()
         } catch {
             writes.didFail(error)
             self.error = writes.unresolved ? "Couldn't confirm the link. Tap Link to retry; it won't be applied twice." : errorMessage(error)
-        }
-    }
-
-    private func finish() {
-        Task {
-            await onSaved()
-            dismiss()
         }
     }
 

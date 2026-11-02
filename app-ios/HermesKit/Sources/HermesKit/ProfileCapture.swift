@@ -52,14 +52,12 @@ public enum FieldText {
 
     public static func whole(_ text: String) -> Int? { Int(text.trimmingCharacters(in: .whitespaces)) }
 
+    private static let day = Date.ISO8601FormatStyle(timeZone: TimeZone(identifier: "UTC")!).year().month().day()
+
     /// A real calendar day written YYYY-MM-DD.
     public static func date(_ text: String) -> String? {
         let s = text.trimmingCharacters(in: .whitespaces)
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TimeZone(identifier: "UTC")
-        f.dateFormat = "yyyy-MM-dd"
-        return f.date(from: s).map(f.string) == s ? s : nil
+        return (try? day.parse(s)).map(day.format) == s ? s : nil
     }
 
     /// "federal" stays lowercase; a state code is uppercased.

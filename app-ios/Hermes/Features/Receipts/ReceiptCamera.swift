@@ -39,11 +39,11 @@ private struct ReceiptCamera: ViewModifier {
                 Button("Choose photo") { choosingPhoto = true }
             }
             .fullScreenCover(isPresented: $scanning) {
-                DocumentScanner { scan in
+                DocumentScanner(onFinish: { scan in
                     scanning = false
                     guard let scan else { return }
                     add(scan, scan: true)
-                }
+                })
                 .ignoresSafeArea()
             }
             .photosPicker(isPresented: $choosingPhoto, selection: $pickerItem, matching: .images)

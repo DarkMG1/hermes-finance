@@ -24,6 +24,7 @@ private struct DocumentCapture: ViewModifier {
     @State private var pickerItems: [PhotosPickerItem] = []
     @State private var capture: Capture?
     @State private var unreadable: String?
+    @State private var opening = false
 
     func body(content: Content) -> some View {
         content
@@ -56,16 +57,26 @@ private struct DocumentCapture: ViewModifier {
             }
             .fileImporter(isPresented: $choosingPDF, allowedContentTypes: [.pdf]) { result in
                 guard case .success(let url) = result else { return }
-                guard let pdf = Self.pdfPages(url), !pdf.pages.isEmpty else {
-                    unreadable = "Couldn't open that PDF."
-                    return
+                opening = true
+                Task {
+                    defer { opening = false }
+                    let read = await Task.detached(priority: .userInitiated) { Self.pdfPages(url) }.value
+                    switch read {
+                    case .pages(let pages, let count) where !pages.isEmpty: show(pages, of: count)
+                    case .locked: unreadable = "This PDF is locked. Remove the password and try again."
+                    default: unreadable = "Couldn't open that PDF."
+                    }
                 }
-                show(pdf.pages, of: pdf.count)
+            }
+            .disabled(opening)
+            .overlay {
+                if opening {
+                    ProgressView("Opening…").padding(Space.l).background(.regularMaterial, in: RoundedRectangle(cornerRadius: Radius.medium))
+                }
             }
             .alert(unreadable ?? "", isPresented: Binding(get: { unreadable != nil }, set: { if !$0 { unreadable = nil } })) {}
-            .sheet(item: $capture) { capture in
-                ProfileCaptureFlow(capture: capture, onSaved: onSaved)
-            }
+            // every way out, a swipe included, refreshes: something may have been saved
+            .sheet(item: $capture, onDismiss: { Task { await onSaved() } }, content: ProfileCaptureFlow.init)
     }
 
     private func show(_ pages: [UIImage], of count: Int? = nil) {
@@ -74,6 +85,8 @@ private struct DocumentCapture: ViewModifier {
     }
 
     private func load(_ items: [PhotosPickerItem]) async {
+        opening = true
+        defer { opening = false }
         var pages: [UIImage] = []
         for item in items {
             guard let data = try? await item.loadTransferable(type: Data.self), let image = UIImage(data: data) else {
@@ -85,35 +98,32 @@ private struct DocumentCapture: ViewModifier {
         show(pages)
     }
 
-    /// The first pages at about 200 dpi, upright, the long side at most 2000 px, and how many the file has; read in place, nothing copied.
-    static func pdfPages(_ url: URL) -> (pages: [UIImage], count: Int)? {
+    enum PDFRead: Sendable {
+        /// the first pages and how many the file has
+        case pages([UIImage], count: Int)
+        case locked, unreadable
+    }
+
+    /// The first pages at about 200 dpi, the long side at most 2000 px; read in place, nothing copied.
+    nonisolated static func pdfPages(_ url: URL) -> PDFRead {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        guard let doc = PDFDocument(url: url), !doc.isLocked else { return nil }
+        guard let doc = PDFDocument(url: url) else { return .unreadable }
+        guard !doc.isLocked else { return .locked }
         let pages = (0..<min(doc.pageCount, PageBudget.maxPages)).compactMap { i -> UIImage? in
             guard let page = doc.page(at: i) else { return nil }
-            let bounds = page.bounds(for: .mediaBox)
-            let k = min(200 / 72, 2000 / max(bounds.width, bounds.height, 1))
-            let turned = page.rotation % 180 != 0
-            let size = CGSize(width: (turned ? bounds.height : bounds.width) * k, height: (turned ? bounds.width : bounds.height) * k)
-            let format = UIGraphicsImageRendererFormat()
-            format.scale = 1
-            return UIGraphicsImageRenderer(size: size, format: format).image { ctx in
-                UIColor.white.setFill()
-                ctx.fill(CGRect(origin: .zero, size: size))
-                // PDF space runs bottom up; drawing applies the page's rotation itself
-                ctx.cgContext.translateBy(x: 0, y: size.height)
-                ctx.cgContext.scaleBy(x: k, y: -k)
-                page.draw(with: .mediaBox, to: ctx.cgContext)
-            }
+            let bounds = page.bounds(for: .cropBox)
+            let side = min(max(bounds.width, bounds.height) * 200 / 72, 2000)
+            // fits the square, applying the page's rotation and box origin; the image is scale 1 (checked on the simulator)
+            return page.thumbnail(of: CGSize(width: side, height: side), for: .cropBox)
         }
-        return (pages, doc.pageCount)
+        return .pages(pages, count: doc.pageCount)
     }
 }
 
 extension View {
     /// Setting `kind` asks for a source (scan, photos, PDF or by hand), then blacks out identifiers, reads the document and opens
-    /// its review form; `onSaved` runs after anything was saved.
+    /// its review form; `onSaved` runs whenever the flow closes.
     func profileCapture(kind: Binding<ProfileKind?>, onSaved: @escaping () async -> Void) -> some View {
         modifier(DocumentCapture(kind: kind, onSaved: onSaved))
     }
@@ -122,15 +132,14 @@ extension View {
 /// Preview and read, then the review form; by hand goes straight to an empty form.
 private struct ProfileCaptureFlow: View {
     let capture: Capture
-    let onSaved: () async -> Void
     @State private var read: ProfileReadResult?
     @State private var byHand = false
 
     var body: some View {
         if let read {
-            ProfileDraftForm(kind: capture.kind, draft: read.draft, uncertain: Set(read.uncertain), onSaved: onSaved)
+            ProfileDraftForm(kind: capture.kind, draft: read.draft, uncertain: Set(read.uncertain))
         } else if byHand || capture.pages.isEmpty {
-            ProfileDraftForm(kind: capture.kind, draft: .empty(capture.kind), uncertain: [], onSaved: onSaved)
+            ProfileDraftForm(kind: capture.kind, draft: .empty(capture.kind), uncertain: [])
         } else {
             RedactionPreview(kind: capture.kind, originals: capture.pages, dropped: capture.dropped,
                              onRead: { read = $0 }, onByHand: { byHand = true })
