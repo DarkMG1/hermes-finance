@@ -56,6 +56,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
     'transactions-page': await get('/v1/transactions?limit=2'),
     transaction: await get('/v1/transactions/txn-3'),
     'transaction-iou': await get('/v1/transactions/txn-4'),
+    'payback-choices': await get('/v1/transactions/txn-4/payback?personId=person-1'),
     spending: await get('/v1/spending?period=month&date=2026-03'),
     expenses: await get('/v1/expenses?period=month&date=2026-03'),
     reconcile: await get('/v1/reconcile?month=2026-03'),
@@ -101,6 +102,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   seedTxn(db, { id: 'txn-9', accountId: 'acct-card', date: '2026-03-04', amountCents: -2000, categoryId: 'cat-reimb', payee: 'Synthetic Airline' });
   seedTxn(db, { id: 'txn-10', accountId: 'acct-checking', date: '2026-03-06', amountCents: 1500, categoryId: 'cat-reimb', payee: 'Synthetic Employer' });
   out.reimbursements = await get('/v1/reimbursements');
+  out['reimbursements-cleanup'] = await get('/v1/people/reimbursements-cleanup');
   // investments use their own database so the accounts, home and net worth fixtures stay as they are
   const inv = makeTestDeps().deps;
   seedAccount(inv.db, { id: 'acct-brokerage', type: 'investment', subtype: 'brokerage', balanceCents: 150000 });

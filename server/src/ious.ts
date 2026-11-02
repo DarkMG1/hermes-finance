@@ -28,9 +28,15 @@ export const entryKey = (txn: string, line: string | null): string => `${txn}|${
 const isItem = (t: Tagged) => t.amount < 0 && !t.paid_by && !t.forgiven;
 const isPayback = (t: Tagged) => t.amount > 0 && !t.paid_by && !t.forgiven;
 
+// two links from one payback to one item (lines collapsed by a split rewrite) report as one
+const add = <T extends { transactionId: string; lineId: string | null; amountCents: number }>(list: T[], e: T) => {
+  const prior = list.find((x) => x.transactionId === e.transactionId && x.lineId === e.lineId);
+  if (prior) prior.amountCents += e.amountCents; else list.push(e);
+};
+
 /** One person's open items, computed on every read like the balance: links first (capped by what each side has left),
- * then every credit's unapplied money settles the oldest open items. Sum of leftCents = max(balance, 0). */
-export function settle(entries: Tagged[], links: Link[]): Settled {
+ * then (with fifo) every credit's unapplied money settles the oldest open items. Sum of leftCents = max(balance, 0) with fifo. */
+export function settle(entries: Tagged[], links: Link[], fifo = true): Settled {
   const items = new Map<string, ItemState>();
   for (const t of entries) if (isItem(t)) items.set(entryKey(t.transaction_id, t.line_id), { entry: t, leftCents: -t.amount, paybacks: [] });
   const credit = new Map(entries.filter((t) => t.amount > 0).map((t) => [entryKey(t.transaction_id, t.line_id), t.amount]));
@@ -45,12 +51,12 @@ export function settle(entries: Tagged[], links: Link[]): Settled {
       if (!item || cents <= 0) continue;
       item.leftCents -= cents;
       credit.set(pk, credit.get(pk)! - cents);
-      item.paybacks.push({ transactionId: p.transaction_id, lineId: p.line_id, date: p.date, amountCents: cents });
+      add(item.paybacks, { transactionId: p.transaction_id, lineId: p.line_id, date: p.date, amountCents: cents });
       if (!paidBack.has(pk)) paidBack.set(pk, []);
-      paidBack.get(pk)!.push({ transactionId: item.entry.transaction_id, lineId: item.entry.line_id, amountCents: cents });
+      add(paidBack.get(pk)!, { transactionId: item.entry.transaction_id, lineId: item.entry.line_id, amountCents: cents });
     }
   }
-  const open = [...items.values()];
+  const open = fifo ? [...items.values()] : [];
   for (const t of entries) {
     let rest = credit.get(entryKey(t.transaction_id, t.line_id)) ?? 0;
     for (const item of open) {
@@ -73,10 +79,11 @@ export function personLinks(db: Db, entries: Tagged[]): Link[] {
   return db.prepare('SELECT * FROM iou_links WHERE payback_transaction_id IN (SELECT value FROM json_each(?))').all(ids) as Link[];
 }
 
-/** without: an entryKey settled as if it weren't in the ledger (the payback being edited). */
+/** without: an entryKey settled as if it weren't in the ledger (the payback being edited). Then only the other paybacks' links
+ * apply, no FIFO: explicit links override it, so unlinked money never closes an item this payback may link (R2). */
 export function settlePerson(db: Db, personId: string, without?: string): Settled {
   const entries = personEntries(db, personId).filter((t) => entryKey(t.transaction_id, t.line_id) !== without);
-  return settle(entries, personLinks(db, entries));
+  return settle(entries, personLinks(db, entries), without === undefined);
 }
 
 export const receiptIds = (db: Db): Set<string> =>
@@ -95,32 +102,44 @@ export function dropLinks(db: Db, txnId: string, lineId: string | null): void {
     .run(txnId, lineId, txnId, lineId);
 }
 
-export type Captured = { link: Link; side: 'payback' | 'item'; personId: string | null; sign: number };
+type Line = { id: string; p: string | null; a: number };
+/** pos: the old line's index (ORDER BY id), null when unsplit; rank: its index among the `peers` lines with the same person and sign. */
+export type Captured = { link: Link; side: 'payback' | 'item'; personId: string | null; sign: number; pos: number | null; rank: number; peers: number };
 
-/** R3: split rewrites delete and recreate lines; remember which person each link on this transaction belonged to. */
+const linesOf = (db: Db, txnId: string) =>
+  db.prepare('SELECT id, person_id AS p, amount_cents AS a FROM split_lines WHERE transaction_id = ? ORDER BY id').all(txnId) as Line[];
+const alike = (l: { p: string | null; a: number }) => (x: { p: string | null; a: number } | undefined) => x?.p === l.p && Math.sign(x.a) === Math.sign(l.a);
+
+/** R3: split rewrites delete and recreate lines; remember which person (and which of their lines) each link on this transaction had. */
 export function captureLinks(db: Db, txnId: string): Captured[] {
-  const person = (line: string | null) => (line
-    ? db.prepare('SELECT person_id AS p, amount_cents AS a FROM split_lines WHERE id = ?').get(line)
-    : db.prepare('SELECT person_id AS p, amount_cents AS a FROM transactions WHERE id = ?').get(txnId)) as { p: string | null; a: number } | undefined;
+  const lines = linesOf(db, txnId);
+  const row = db.prepare('SELECT person_id AS p, amount_cents AS a FROM transactions WHERE id = ?').get(txnId) as { p: string | null; a: number } | undefined;
   return (db.prepare('SELECT * FROM iou_links WHERE payback_transaction_id = ? OR item_transaction_id = ?').all(txnId, txnId) as Link[]).flatMap((link) => {
     const side = link.payback_transaction_id === txnId ? 'payback' : 'item';
-    const at = person(side === 'payback' ? link.payback_line_id : link.item_line_id);
-    return at ? [{ link, side, personId: at.p, sign: Math.sign(at.a) }] : [];
+    const lineId = side === 'payback' ? link.payback_line_id : link.item_line_id;
+    const at = lineId ? lines.find((l) => l.id === lineId) : row;
+    if (!at) return [];
+    const peers = lines.filter(alike(at));
+    return [{ link, side, personId: at.p, sign: Math.sign(at.a), pos: lineId ? lines.indexOf(at as Line) : null, rank: peers.indexOf(at as Line), peers: peers.length }];
   });
 }
 
-/** Retarget each captured link to the unsplit row if it now has that person, else the first line with that person and sign; else drop it. */
+/** Retarget each captured link: to the row if it is unsplit and has that person, else (from an unsplit row) their first line with that sign.
+ * Split → split: the line at the same position if it still has that person and sign; else, while that person's count of such lines
+ * is unchanged (lines reordered), the one at the same rank among them; else the line's person changed and the link drops (R6). */
 export function restoreLinks(db: Db, txnId: string, captured: Captured[]): void {
   const row = db.prepare('SELECT person_id AS p, amount_cents AS a FROM transactions WHERE id = ?').get(txnId) as { p: string | null; a: number } | undefined;
-  const lines = db.prepare('SELECT id, person_id AS p, amount_cents AS a FROM split_lines WHERE transaction_id = ? ORDER BY id').all(txnId) as { id: string; p: string | null; a: number }[];
+  const lines = linesOf(db, txnId);
   const del = db.prepare('DELETE FROM iou_links WHERE id = ?');
   const ins = db.prepare(`INSERT INTO iou_links (id, payback_transaction_id, payback_line_id, item_transaction_id, item_line_id, amount_cents, created_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)`);
   for (const c of captured) {
     del.run(c.link.id);
     if (!c.personId) continue;
-    const target = !lines.length && row?.p === c.personId && Math.sign(row.a) === c.sign ? null
-      : lines.find((l) => l.p === c.personId && Math.sign(l.a) === c.sign)?.id;
+    const same = alike({ p: c.personId, a: c.sign });
+    const peers = lines.filter(same);
+    const target = !lines.length ? (same(row) ? null : undefined)
+      : c.pos === null ? peers[0]?.id : same(lines[c.pos]) ? lines[c.pos]!.id : peers.length === c.peers ? peers[c.rank]?.id : undefined;
     if (target === undefined) continue;
     const k = c.link;
     ins.run(k.id, k.payback_transaction_id, c.side === 'payback' ? target : k.payback_line_id, k.item_transaction_id,

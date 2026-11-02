@@ -9,7 +9,7 @@ import { idempotentWrite } from '../idempotency.ts';
 import { REIMBURSEMENT } from '../cashflow.ts';
 import { memberships } from '../recurring.ts';
 import { TXN_COLS, assertCategoryExists, getTransaction, lookups, rowToTransaction, type TxnRow } from '../ledger.ts';
-import { entryKey, openItems, receiptIds, settlePerson } from '../ious.ts';
+import { dropLinks, entryKey, openItems, receiptIds, settlePerson } from '../ious.ts';
 import { assertPersonTaggable, getPerson, listPeople, peopleSettings, suggestions } from '../people.ts';
 
 export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
@@ -20,12 +20,15 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
   app.get('/v1/people/suggestions', async () => suggestions(db, deps.now()));
 
   app.get('/v1/people/reimbursements-cleanup', async () => {
-    const rows = db.prepare(`SELECT ${TXN_COLS} FROM transactions t WHERE removed_at IS NULL AND (
+    const rows = db.prepare(`SELECT ${TXN_COLS} FROM transactions t WHERE removed_at IS NULL AND t.forgiven = 0 AND t.paid_by_person_id IS NULL AND (
         EXISTS (SELECT 1 FROM categories c WHERE c.id = t.category_id AND ${REIMBURSEMENT})
         OR EXISTS (SELECT 1 FROM split_lines sl JOIN categories c ON c.id = sl.category_id WHERE sl.transaction_id = t.id AND ${REIMBURSEMENT}))
       ORDER BY date DESC, created_at DESC, rowid DESC`).all() as TxnRow[];
     const l = lookups(db, rows, memberships(db, localDay(deps.now())));
-    return { rows: rows.map((r) => rowToTransaction(r, l)) };
+    const cats = new Set((db.prepare(`SELECT id FROM categories c WHERE ${REIMBURSEMENT}`).all() as { id: string }[]).map((c) => c.id));
+    // one entry per unsplit row or per split line in the category
+    return { rows: rows.map((r) => rowToTransaction(r, l)).flatMap((transaction) => (transaction.splitLines.length
+      ? transaction.splitLines.filter((sl) => cats.has(sl.categoryId ?? '')).map((sl) => sl.id) : [null]).map((lineId) => ({ transaction, lineId }))) };
   });
 
   app.post<{ Params: { id: string } }>('/v1/people/suggestions/:id/dismiss', async (req, reply) => {
@@ -131,7 +134,7 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
     const line = lineId ? txn.splitLines.find((l) => l.id === lineId) : undefined;
     if (lineId && !line) throw new ApiError(404, 'NOT_FOUND', 'split line not found');
     if ((line?.amountCents ?? txn.amountCents) <= 0 || txn.paidByPersonId) throw new ApiError(400, 'INVALID_REQUEST', 'personId: a payback is money in', 'personId');
-    return { txn, lineId: line?.id ?? null, cents: line?.amountCents ?? txn.amountCents };
+    return { txn, lineId: line?.id ?? null, cents: line?.amountCents ?? txn.amountCents, personId: line ? line.personId : txn.personId };
   };
 
   app.get<{ Params: { id: string } }>('/v1/transactions/:id/payback', async (req) => {
@@ -140,7 +143,7 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
     const key = entryKey(t.txn.id, t.lineId);
     const linked = (db.prepare('SELECT item_transaction_id AS transactionId, item_line_id AS lineId, amount_cents AS amountCents FROM iou_links WHERE payback_transaction_id = ? AND payback_line_id IS ? ORDER BY created_at, id')
       .all(t.txn.id, t.lineId) as PaybackChoices['linked']);
-    return { items: openItems(settlePerson(db, q.personId, key), receiptIds(db)), linked: (t.txn.personId ?? t.txn.splitLines.find((l) => l.id === t.lineId)?.personId) === q.personId ? linked : [] };
+    return { items: openItems(settlePerson(db, q.personId, key), receiptIds(db)), linked: t.personId === q.personId ? linked : [] };
   });
 
   app.put<{ Params: { id: string } }>('/v1/transactions/:id/payback', async (req, reply) => {
@@ -165,6 +168,8 @@ export function peopleRoutes(app: FastifyInstance, deps: Deps): void {
       } else {
         db.prepare('UPDATE transactions SET person_id = ?, category_id = NULL, category_owner_set = 1, updated_at = ? WHERE id = ?').run(body.personId, now, t.txn.id);
       }
+      // a new person drops both sides (a bank sign flip can leave links where this row was the item); else only its own paybacks
+      if (t.personId !== body.personId) dropLinks(db, t.txn.id, t.lineId);
       db.prepare('DELETE FROM iou_links WHERE payback_transaction_id = ? AND payback_line_id IS ?').run(t.txn.id, t.lineId);
       const ins = db.prepare(`INSERT INTO iou_links (id, payback_transaction_id, payback_line_id, item_transaction_id, item_line_id, amount_cents, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)`);

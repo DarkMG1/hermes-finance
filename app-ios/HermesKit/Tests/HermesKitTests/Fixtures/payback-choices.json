@@ -1,0 +1,21 @@
+{
+  "items": [
+    {
+      "transactionId": "txn-3",
+      "lineId": "line-2",
+      "date": "2026-03-12",
+      "payee": "Synthetic Split",
+      "totalCents": 1500,
+      "leftCents": 1500,
+      "hasReceipt": false,
+      "paybacks": []
+    }
+  ],
+  "linked": [
+    {
+      "transactionId": "txn-3",
+      "lineId": "line-2",
+      "amountCents": 1000
+    }
+  ]
+}

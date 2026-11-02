@@ -120,13 +120,13 @@ export type OpenItem = z.infer<typeof OpenItem>;
 export const PersonDetail = z.object({ person: Person, history: z.array(HistoryEntry), spentOnThemCents: Cents, forgivenCents: Cents, openItems: z.array(OpenItem) });
 export type PersonDetail = z.infer<typeof PersonDetail>;
 
-export const ReimbursementsCleanup = z.object({ rows: z.array(Transaction) });
+export const ReimbursementsCleanup = z.object({ rows: z.array(z.object({ transaction: Transaction, lineId: Id.nullable() })) });
 export type ReimbursementsCleanup = z.infer<typeof ReimbursementsCleanup>;
 
 export const PaybackQuery = z.object({ personId: Id, lineId: Id.optional() }).strict();
 export const PaybackBody = z.object({
   personId: Id, lineId: Id.nullable().optional(),
-  items: z.array(z.object({ transactionId: Id, lineId: Id.nullable().optional(), amountCents: z.number().int().min(1).max(MAX_AMOUNT_CENTS) }).strict()).max(50),
+  items: z.array(z.object({ transactionId: Id, lineId: Id.nullable().optional(), amountCents: z.number().int().min(1).max(MAX_AMOUNT_CENTS) }).strict()).max(200),
 }).strict();
 export type PaybackBody = z.infer<typeof PaybackBody>;
 export const PaybackChoices = z.object({ items: z.array(OpenItem), linked: z.array(PaidBack) });

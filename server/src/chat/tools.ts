@@ -54,9 +54,12 @@ const MONEY: [string, Entry][] = [
     (d, q) => (q.id ? getPerson(d.db, q.id) : listPeople(d.db, true))),
   entry('open_items', 'Charges each person still owes the owner for, oldest first, with what is left and the paybacks linked to each; give personId for one person.',
     z.object({ personId: z.string().min(1).optional() }).strict(),
-    (d, q) => listPeople(d.db, true).filter((p) => !q.personId || p.id === q.personId)
-      .map((p) => ({ personId: p.id, name: p.name, items: openItems(settlePerson(d.db, p.id), receiptIds(d.db)) }))
-      .filter((p) => p.items.length)),
+    (d, q) => {
+      const receipts = receiptIds(d.db);
+      return listPeople(d.db, true).filter((p) => !q.personId || p.id === q.personId)
+        .map((p) => ({ personId: p.id, name: p.name, items: openItems(settlePerson(d.db, p.id), receipts) }))
+        .filter((p) => p.items.length);
+    }),
   entry('net_worth', 'Daily net worth history over a range with the current value and the change, hidden accounts left out; give accountIds (from accounts) and/or type for those accounts\' daily balance alone, e.g. to find which account moved.',
     NetWorthQuery.extend({ accountIds: z.array(z.string().min(1)).min(1).max(50).optional(), type: z.enum(['depository', 'credit', 'loan', 'investment', 'other']).optional() }).strict(),
     (d, { range, ...filter }, today) => getNetWorth(d.db, range, today, filter)),
