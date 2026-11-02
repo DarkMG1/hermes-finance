@@ -14,7 +14,16 @@ extension APIClient {
     }
 
     public func putSplits(transactionId: String, body: PutSplitsBody, idempotencyKey: String) async throws -> LedgerTransaction {
-        try await write("PUT", "/v1/transactions/\(transactionId)/splits", body: body, key: idempotencyKey)
+        do {
+            return try await write("PUT", "/v1/transactions/\(transactionId)/splits", body: body, key: idempotencyKey)
+        } catch ClientError.api(400, let error) where body.lines.contains { $0.id != nil } && error.field?.hasPrefix("lines.") == true
+            && error.message.contains(#""id""#) {
+            // a server before 2.1.1 rejects line ids; without them it keeps IOU links by rank
+            let lines = body.lines.map {
+                SplitLineBody(amountCents: $0.amountCents, categoryId: $0.categoryId, notes: $0.notes, personId: $0.personId, payee: $0.payee)
+            }
+            return try await write("PUT", "/v1/transactions/\(transactionId)/splits", body: PutSplitsBody(lines: lines), key: idempotencyKey)
+        }
     }
 
     public func putPayback(transactionId: String, body: PaybackBody, idempotencyKey: String) async throws -> LedgerTransaction {

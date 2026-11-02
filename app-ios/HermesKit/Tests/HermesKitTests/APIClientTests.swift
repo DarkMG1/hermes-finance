@@ -88,3 +88,23 @@ import Testing
     #expect(request.method == "DELETE" && request.url.path() == "/v1/transactions/t1/receipt")
     #expect(request.headers["Idempotency-Key"] == nil && request.body == nil)
 }
+
+@Test func splitSaveDropsLineIdsOnceWhenAnOlderServerRejectsThem() async throws {
+    let rejected = FakeTransport.json(400, #"{"code":"INVALID_REQUEST","message":"lines.0: Unrecognized key: \"id\"","field":"lines.0"}"#)
+    let lines = [SplitLineBody(id: "l1", amountCents: -300, categoryId: nil, notes: nil), SplitLineBody(amountCents: -200, categoryId: nil, notes: nil)]
+    let transport = FakeTransport([rejected, .success(HTTPResponse(status: 200, body: try fixture("transaction")))])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    _ = try await client.putSplits(transactionId: "t1", body: PutSplitsBody(lines: lines), idempotencyKey: "k")
+    #expect(transport.requests.count == 2 && transport.requests[1].headers["Idempotency-Key"] == "k")
+    let retried = try #require(transport.requests[1].body)
+    #expect(String(bytes: retried, encoding: .utf8)?.contains(#""id""#) == false)
+    // a body without ids, or another 400, is not retried
+    let duplicate = FakeTransport.json(400, #"{"code":"INVALID_REQUEST","message":"lines.0.id: each line id once","field":"lines.0.id"}"#)
+    let other = FakeTransport([duplicate, rejected])
+    for body in [PutSplitsBody(lines: lines), PutSplitsBody(lines: lines.map { SplitLineBody(amountCents: $0.amountCents, categoryId: nil, notes: nil) })] {
+        await #expect(throws: ClientError.self) {
+            try await APIClient(baseURL: testBase, token: "t", transport: other).putSplits(transactionId: "t1", body: body, idempotencyKey: "k")
+        }
+    }
+    #expect(other.requests.count == 2)
+}

@@ -50,7 +50,14 @@ public struct PatchTransactionBody: Encodable, Sendable, Equatable {
 
 /// Owner-entered dates: the server takes 2000-01-01 through a year after its today.
 public enum DateBounds {
-    public static func range(today: Date = .now, calendar: Calendar = .current) -> ClosedRange<Date> {
+    /// Gregorian like the app's day strings: a Buddhist or Japanese device calendar would move the 2000 floor.
+    public static var gregorian: Calendar {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        return calendar
+    }
+
+    public static func range(today: Date = .now, calendar: Calendar = gregorian) -> ClosedRange<Date> {
         calendar.date(from: DateComponents(year: 2000, month: 1, day: 1))!...calendar.date(byAdding: .year, value: 1, to: today)!
     }
 }

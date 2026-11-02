@@ -265,6 +265,12 @@ func json(_ value: some Encodable) throws -> String {
     #expect(calendar.dateComponents([.year, .month, .day], from: range.upperBound) == DateComponents(year: 2027, month: 3, day: 15))
 }
 
+@Test func ownerDateBoundsDefaultToTheGregorianCalendarInTheLocalTimeZone() {
+    var gregorian = Calendar(identifier: .gregorian)
+    gregorian.timeZone = .current
+    #expect(DateBounds.range().lowerBound == gregorian.date(from: DateComponents(year: 2000, month: 1, day: 1)))
+}
+
 @Test func reconcileMonthTitles() {
     #expect(ReconcileMonth.title("2026-09") == "September 2026")
     #expect(ReconcileMonth.current(today: "2026-10-12") == "2026-10")
