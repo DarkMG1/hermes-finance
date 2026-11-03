@@ -35,6 +35,8 @@ test('sends the photo with the tool, without forcing it, and returns the validat
   const image = body.messages[0]!.content.find((c) => c.type === 'image')!;
   assert.equal(image.source!.media_type, 'image/jpeg');
   assert.equal(image.source!.data, JPEG.toString('base64'));
+  // a deposit follows its item to whoever gets it; bill-wide fees would spread it across everyone
+  assert.match(String(sent!.init.body), /deposit or recycling fee printed under it\) is added to that item's amountCents/);
   assert.ok(sent!.init.signal);
   assert.equal((body as unknown as { max_tokens: number }).max_tokens, 8192);
 });
