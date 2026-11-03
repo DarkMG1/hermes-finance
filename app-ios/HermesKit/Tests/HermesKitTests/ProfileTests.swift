@@ -66,9 +66,12 @@ import Testing
     var edited = job
     edited.note = nil
     edited.baseCents = 100
+    edited.hourlyCents = 3750
+    edited.hoursPerWeek = 20
     _ = try await client.patchJob(id: "job-1", body: edited, from: job, idempotencyKey: "k-2")
     let bodies = transport.requests.map { String(data: $0.body ?? Data(), encoding: .utf8) }
-    #expect(bodies == [#"{"employer":"SYNTHETIC EMPLOYER","note":"Synthetic","status":"offered"}"#, #"{"baseCents":100,"note":null}"#])
+    #expect(bodies == [#"{"employer":"SYNTHETIC EMPLOYER","note":"Synthetic","status":"offered"}"#,
+                       #"{"baseCents":100,"hourlyCents":3750,"hoursPerWeek":20,"note":null}"#])
     #expect(transport.requests.map(\.method) == ["POST", "PATCH"] && transport.requests.map { $0.headers["Idempotency-Key"] } == ["k-1", "k-2"])
     #expect(transport.requests.last?.url.path == "/v1/jobs/job-1")
 }

@@ -18,7 +18,7 @@ test('public health is minimal; only a valid token reveals sha and migration ver
   }
   const detailed = await app.inject({ method: 'GET', url: '/v1/health', headers: AUTH });
   assert.equal(detailed.statusCode, 200);
-  assert.deepEqual(detailed.json(), { ok: true, gitSha: 'test-sha', dbVersion: 28 });
+  assert.deepEqual(detailed.json(), { ok: true, gitSha: 'test-sha', dbVersion: 29 });
 });
 
 test('other routes need the bearer token', async () => {
