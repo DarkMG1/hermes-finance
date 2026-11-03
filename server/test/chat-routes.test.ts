@@ -374,3 +374,27 @@ test("Ask's profile lock: profile data another chat copies through read_chat or 
   assert.equal((await s.app.inject({ method: 'GET', url: `/v1/chats/${untouched}`, headers: AUTH })).statusCode, 200);
   assert.deepEqual(JSON.parse(runTool(s.deps, 'search_chats', {}).content).results, [], 'an empty chat has no first question to list');
 });
+
+test("Ask's profile lock: a failed answer's profile data leaves with it, but an earlier answer's stays", async () => {
+  const s = setup([profileRound(), [], answerRound('Ask me again.'), profileRound(), answerRound(PROFILE_ANSWER), profileRound(), [], answerRound('Fine.')]);
+  const id = await s.create();
+  const ask = (clientId: string, text: string, profileUnlocked: boolean) =>
+    s.app.inject({ method: 'POST', url: `/v1/chats/${id}/messages`, headers: AUTH, payload: { clientId, text, profileUnlocked } });
+  s.fake.fail = { round: 1, code: 'HTTP_500' };
+  assert.deepEqual(events((await ask('a', 'What is my filing status?', true)).payload).map((e) => e.type), ['tool', 'error']);
+  const retry = await ask('a', 'What is my filing status?', false);
+  assert.deepEqual([retry.statusCode, events(retry.payload).map((e) => e.type)], [200, ['text', 'done']], 'a locked retry is allowed');
+  const read = async () => (await s.app.inject({ method: 'GET', url: `/v1/chats/${id}`, headers: AUTH })).json().messages;
+  assert.deepEqual((await read()).map((m: { text: string; profileLocked?: boolean }) => [m.text, m.profileLocked ?? false]),
+    [['What is my filing status?', false], ['Ask me again.', false]], 'and shown, since it used no profile tool');
+  await ask('b', 'Unlocked now: my filing status?', true);
+  s.fake.fail = { round: 6, code: 'HTTP_500' };
+  await ask('c', 'And again?', true);
+  const locked = await ask('d', 'Locked follow-up', false);
+  assert.deepEqual([locked.statusCode, locked.json().code], [403, 'PROFILE_LOCKED'], 'the earlier profile answer keeps the chat locked');
+  assert.equal((await read())[3].profileLocked, true);
+  await ask('e', 'Unlocked again', true);
+  assert.deepEqual((await read()).map((m: { profileLocked?: boolean }) => m.profileLocked ?? false), [false, false, false, true, false, true],
+    'dropping a later failed answer keeps the earlier mark');
+  assert.equal((await ask('f', 'Locked', false)).statusCode, 403);
+});

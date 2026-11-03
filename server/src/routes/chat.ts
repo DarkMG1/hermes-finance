@@ -60,7 +60,7 @@ export function chatRoutes(app: FastifyInstance, deps: Deps): void {
     const chat = find(chatId);
     if (!deps.claude) throw new ApiError(503, 'AI_NOT_CONFIGURED', 'AI is not configured');
     // the history holds profile data Claude could repeat, and a resend could replay it
-    if (!body.profileUnlocked && chatUsesProfile(db, chatId)) throw new ApiError(403, 'PROFILE_LOCKED', 'unlock the financial profile to go on with this chat');
+    if (!body.profileUnlocked && chatUsesProfile(db, chatId, true)) throw new ApiError(403, 'PROFILE_LOCKED', 'unlock the financial profile to go on with this chat');
     if (busy.has(chatId)) throw chatBusy();
     const prior = findByClientId(db, body.clientId);
     if (prior && prior.chatId !== chatId) throw new ApiError(409, 'IDEMPOTENCY_KEY_REUSED', 'clientId was used in another chat');

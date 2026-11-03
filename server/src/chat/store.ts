@@ -24,9 +24,13 @@ const usedProfile = (turn: ApiMessage[]): boolean => {
   const failed = new Set(turn.filter((m) => m.role === 'user').flatMap(blocks).filter((b) => b.is_error === true).map((b) => b.tool_use_id));
   return turn.filter((m) => m.role === 'assistant').flatMap(blocks).some((b) => b.type === 'tool_use' && PROFILE_TOOLS.has(b.name as string) && !failed.has(b.id));
 };
-/** The chat holds profile data: some answer got it from a profile tool, or from a past chat that held it. */
-export const chatUsesProfile = (db: Db, chatId: string): boolean =>
-  db.prepare('SELECT profile_seq IS NOT NULL FROM chat_conversations WHERE id = ?').pluck().get(chatId) === 1;
+/** The chat holds profile data: some answer got it from a profile tool, or from a past chat that held it. ignoreFailedTail: as it will be once
+ *  the next question drops a failed last answer. */
+export function chatUsesProfile(db: Db, chatId: string, ignoreFailedTail = false): boolean {
+  const from = db.prepare('SELECT profile_seq FROM chat_conversations WHERE id = ?').pluck().get(chatId) as number | null | undefined;
+  const tail = ignoreFailedTail ? failedTail(db, chatId) : null;
+  return from != null && (tail === null || from < tail);
+}
 /** Marks the chat as holding profile data from this answer on (an earlier mark stays). */
 export function markProfile(db: Db, chatId: string, assistantId: string): void {
   db.prepare('UPDATE chat_conversations SET profile_seq = COALESCE(profile_seq, (SELECT seq FROM chat_messages WHERE id = ?)) WHERE id = ?').run(assistantId, chatId);
@@ -147,12 +151,20 @@ export function searchChats(db: Db, q: { query?: string; from?: string; to?: str
   return { results: hits.map(({ createdAt, ...h }) => ({ ...h, date: localDay(new Date(createdAt)) })) };
 }
 
-export function dropFailedTail(db: Db, chatId: string): void {
+/** The seq of a failed last answer, else null. */
+function failedTail(db: Db, chatId: string): number | null {
   const last = db.prepare('SELECT seq, role, status FROM chat_messages WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1').get(chatId) as Pick<Row, 'seq' | 'role' | 'status'> | undefined;
-  if (last?.role !== 'assistant' || last.status !== 'failed') return;
-  db.prepare('DELETE FROM chat_messages WHERE conversation_id = ? AND (seq = ? OR (seq = ? AND role = \'user\'))').run(chatId, last.seq, last.seq - 1);
+  return last?.role === 'assistant' && last.status === 'failed' ? last.seq : null;
+}
+
+export function dropFailedTail(db: Db, chatId: string): void {
+  const seq = failedTail(db, chatId);
+  if (seq === null) return;
+  db.prepare('DELETE FROM chat_messages WHERE conversation_id = ? AND (seq = ? OR (seq = ? AND role = \'user\'))').run(chatId, seq, seq - 1);
+  // profile data that came only with the dropped answer leaves with it (profile_seq is the first answer that got any)
+  db.prepare('UPDATE chat_conversations SET profile_seq = NULL WHERE id = ? AND profile_seq >= ?').run(chatId, seq);
   // an emptied chat takes its title from the next question
-  db.prepare('UPDATE chat_conversations SET title = \'\' WHERE id = ? AND NOT EXISTS (SELECT 1 FROM chat_messages WHERE conversation_id = ?)').run(chatId, chatId);
+  db.prepare('UPDATE chat_conversations SET title = \'\', profile_title = 0 WHERE id = ? AND NOT EXISTS (SELECT 1 FROM chat_messages WHERE conversation_id = ?)').run(chatId, chatId);
 }
 
 /** A stored turn for replay: drops thinking (its signature binds it to the system prompt and tools it was written under, and only the turn
