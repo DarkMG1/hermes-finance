@@ -108,6 +108,8 @@ struct DraftFields<B>: View {
                         if !field.required || text.wrappedValue.isEmpty { Text(field.required ? "Choose" : "None").tag("") }
                         ForEach(options, id: \.value) { Text($0.label).tag($0.value) }
                     }
+                } else if field.key == "note" {
+                    NotesField(text: text, label: field.label)
                 } else {
                     Field(label: field.label, error: field.parses(text.wrappedValue) ? nil : field.hint) {
                         TextField(field.label, text: text)
