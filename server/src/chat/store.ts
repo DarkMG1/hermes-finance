@@ -9,7 +9,10 @@ export type ApiMessage = { role: 'user' | 'assistant'; content: string | Block[]
 type Row = { id: string; seq: number; role: 'user' | 'assistant'; content_json: string; status: ChatMessage['status']; error_code: string | null; created_at: string;
   profile_locked: number };
 
-const SUMMARY = 'SELECT id, title, created_at AS createdAt, updated_at AS updatedAt FROM chat_conversations';
+/** A locked list or read shows this for a title written after the chat got profile data. */
+export const LOCKED_TITLE = 'Locked chat';
+const summary = (hideProfile: boolean) => `SELECT id, CASE WHEN ${hideProfile ? 1 : 0} AND profile_title = 1 THEN '${LOCKED_TITLE}' ELSE title END AS title,
+  created_at AS createdAt, updated_at AS updatedAt FROM chat_conversations`;
 const rows = (db: Db, chatId: string) =>
   db.prepare('SELECT id, seq, role, content_json, status, error_code, created_at, profile_locked FROM chat_messages WHERE conversation_id = ? ORDER BY seq').all(chatId) as Row[];
 const blocks = (m: ApiMessage): Block[] => (Array.isArray(m.content) ? m.content : []);
@@ -21,8 +24,13 @@ const usedProfile = (turn: ApiMessage[]): boolean => {
   const failed = new Set(turn.filter((m) => m.role === 'user').flatMap(blocks).filter((b) => b.is_error === true).map((b) => b.tool_use_id));
   return turn.filter((m) => m.role === 'assistant').flatMap(blocks).some((b) => b.type === 'tool_use' && PROFILE_TOOLS.has(b.name as string) && !failed.has(b.id));
 };
+/** The chat holds profile data: some answer got it from a profile tool, or from a past chat that held it. */
 export const chatUsesProfile = (db: Db, chatId: string): boolean =>
-  rows(db, chatId).some((r) => r.role === 'assistant' && usedProfile(JSON.parse(r.content_json) as ApiMessage[]));
+  db.prepare('SELECT profile_seq IS NOT NULL FROM chat_conversations WHERE id = ?').pluck().get(chatId) === 1;
+/** Marks the chat as holding profile data from this answer on (an earlier mark stays). */
+export function markProfile(db: Db, chatId: string, assistantId: string): void {
+  db.prepare('UPDATE chat_conversations SET profile_seq = COALESCE(profile_seq, (SELECT seq FROM chat_messages WHERE id = ?)) WHERE id = ?').run(assistantId, chatId);
+}
 
 /** Replaces a message's search entry; no text leaves it out. Row deletes drop entries by trigger. */
 function index(db: Db, id: string, text: string | null): void {
@@ -36,19 +44,21 @@ export function createChat(db: Db, nowIso: string): ChatSummary {
   return { id, title: '', createdAt: nowIso, updatedAt: nowIso };
 }
 
-export function listChats(db: Db): ChatList {
-  return { chats: db.prepare(`${SUMMARY} ORDER BY updated_at DESC, created_at DESC`).all() as ChatSummary[] };
+export function listChats(db: Db, hideProfile = false): ChatList {
+  return { chats: db.prepare(`${summary(hideProfile)} ORDER BY updated_at DESC, created_at DESC`).all() as ChatSummary[] };
 }
 
-/** hideProfile: answers that used profile data come without their text and tools, marked profileLocked. */
+/** hideProfile: every answer from the first one that got profile data on (a later one can repeat it) comes without its text and tools,
+ *  marked profileLocked; questions stay. */
 export function getChat(db: Db, id: string, hideProfile = false): ChatDetail | null {
-  const chat = db.prepare(`${SUMMARY} WHERE id = ?`).get(id) as ChatSummary | undefined;
+  const chat = db.prepare(`${summary(hideProfile)} WHERE id = ?`).get(id) as ChatSummary | undefined;
   if (!chat) return null;
+  const from = hideProfile ? db.prepare('SELECT profile_seq FROM chat_conversations WHERE id = ?').pluck().get(id) as number | null : null;
   const messages = rows(db, id).map((r): ChatMessage => {
     const base = { id: r.id, role: r.role, status: r.status, errorCode: r.error_code, createdAt: r.created_at };
     if (r.role === 'user') return { ...base, text: JSON.parse(r.content_json) as string, tools: [] };
+    if (from !== null && r.seq >= from) return { ...base, text: '', tools: [], profileLocked: true };
     const turn = JSON.parse(r.content_json) as ApiMessage[];
-    if (hideProfile && usedProfile(turn)) return { ...base, text: '', tools: [], profileLocked: true };
     const all = turn.filter((m) => m.role === 'assistant').flatMap(blocks);
     const results = new Map(turn.filter((m) => m.role === 'user').flatMap(blocks).map((b) => [b.tool_use_id, b.is_error === true]));
     const text = answerText(turn);
@@ -101,6 +111,7 @@ export function startAssistant(db: Db, chatId: string, nowIso: string): string {
 export function saveAssistant(db: Db, id: string, turn: ApiMessage[], status: 'done' | 'failed' | 'stopped', errorCode: string | null): void {
   db.transaction(() => {
     db.prepare('UPDATE chat_messages SET content_json = ?, status = ?, error_code = ? WHERE id = ?').run(JSON.stringify(turn), status, errorCode, id);
+    if (usedProfile(turn)) markProfile(db, db.prepare('SELECT conversation_id FROM chat_messages WHERE id = ?').pluck().get(id) as string, id);
     index(db, id, status === 'failed' ? null : answerText(turn));
   })();
 }
@@ -110,20 +121,16 @@ export type ChatHit = { chatId: string; title: string; date: string; role?: 'use
 
 /** Past messages matching every term (each quoted, so FTS5 syntax is never parsed), best bm25 matches, then newest first.
  * Without a query: the most recently active chats with their first question and its date (from/to apply to that date), newest first. */
+/** hideProfile leaves out chats that hold profile data. */
 export function searchChats(db: Db, q: { query?: string; from?: string; to?: string; limit: number }, excludeChatId?: string, hideProfile = false): { results: ChatHit[] } {
-  const r = searchAll(db, q, excludeChatId);
-  // ponytail: a locked search drops profile chats after the LIMIT, so it may return fewer than limit hits
-  return hideProfile ? { results: r.results.filter((h) => !chatUsesProfile(db, h.chatId)) } : r;
-}
-
-function searchAll(db: Db, q: { query?: string; from?: string; to?: string; limit: number }, excludeChatId?: string): { results: ChatHit[] } {
+  const visible = hideProfile ? 'AND c.profile_seq IS NULL' : '';
   // owner-local days as UTC instants (a date-time without Z parses in the process time zone)
   const at = (day: string) => new Date(`${day}T00:00:00`).toISOString();
   const range = [q.from ? at(q.from) : '', q.to ? at(addDays(q.to, 1)) : '9', excludeChatId ?? null, q.limit];
   if (!q.query) {
     const chats = db.prepare(`SELECT c.id AS chatId, c.title, f.created_at AS createdAt, f.content_json AS first
       FROM chat_conversations c JOIN chat_messages f ON f.id = (SELECT id FROM chat_messages WHERE conversation_id = c.id AND role = 'user' ORDER BY seq LIMIT 1)
-      WHERE f.created_at >= ? AND f.created_at < ? AND c.id IS NOT ?
+      WHERE f.created_at >= ? AND f.created_at < ? AND c.id IS NOT ? ${visible}
       ORDER BY c.updated_at DESC, c.created_at DESC LIMIT ?`).all(...range) as { chatId: string; title: string; createdAt: string; first: string }[];
     return { results: chats.map(({ createdAt, first, ...c }) => {
       const text = JSON.parse(first) as string;
@@ -134,7 +141,7 @@ function searchAll(db: Db, q: { query?: string; from?: string; to?: string; limi
   const terms = q.query.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t)).map((t) => `"${t.replaceAll('"', '""')}"`);
   const hits = db.prepare(`SELECT c.id AS chatId, c.title, m.created_at AS createdAt, m.role, snippet(chat_search, 0, '[', ']', '…', 24) AS snippet
     FROM chat_search JOIN chat_messages m ON m.id = chat_search.message_id JOIN chat_conversations c ON c.id = m.conversation_id
-    WHERE chat_search MATCH ? AND m.created_at >= ? AND m.created_at < ? AND c.id IS NOT ? ORDER BY rank LIMIT ?`)
+    WHERE chat_search MATCH ? AND m.created_at >= ? AND m.created_at < ? AND c.id IS NOT ? ${visible} ORDER BY rank LIMIT ?`)
     .all(terms.join(' '), ...range) as (Omit<ChatHit, 'date'> & { createdAt: string })[];
   hits.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   return { results: hits.map(({ createdAt, ...h }) => ({ ...h, date: localDay(new Date(createdAt)) })) };

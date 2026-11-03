@@ -1,8 +1,8 @@
 import type { Deps } from '../deps.ts';
 import { ClaudeError, toCents, type Claude, type Usage } from './anthropic.ts';
 import { TOOLS, runTool } from './tools.ts';
-import { PROFILE_TOOLS, toolLabel } from './labels.ts';
-import { replay, saveAssistant, type ApiMessage } from './store.ts';
+import { toolLabel } from './labels.ts';
+import { chatUsesProfile, markProfile, replay, saveAssistant, type ApiMessage } from './store.ts';
 
 export type ChatEvent = { type: 'tool'; name: string; label: string; input: Record<string, unknown> } | { type: 'text'; text: string }
   | { type: 'done'; messageId: string; costCents: number; status: 'done' | 'stopped' } | { type: 'error'; code: string };
@@ -63,7 +63,8 @@ async function autoTitle(deps: Deps, claude: Claude, chatId: string, question: s
     if (r.stop_reason !== 'end_turn') return;
     const text = (r.content ?? []).filter((b) => b.type === 'text').map((b) => b.text as string).join('').trim();
     const title = (text.split('\n')[0] ?? '').replace(/^["'“‘\s]+|["'”’.!?,:;\s]+$/g, '').slice(0, 60);
-    if (title) deps.db.prepare('UPDATE chat_conversations SET title = ? WHERE id = ? AND title = ?').run(title, chatId, auto);
+    // written after the chat got profile data: a locked list shows LOCKED_TITLE instead
+    if (title) deps.db.prepare('UPDATE chat_conversations SET title = ?, profile_title = profile_seq IS NOT NULL WHERE id = ? AND title = ?').run(title, chatId, auto);
   } catch (e) {
     console.error(`[hermes] chat title failed code=${e instanceof ClaudeError ? e.code : 'INTERNAL'}`);
   }
@@ -142,6 +143,7 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
           const res = name === 'show_chart' && charts >= MAX_CHARTS
             ? { content: JSON.stringify({ error: `at most ${MAX_CHARTS} charts per answer` }), isError: true } : runTool(deps, name, input, { chatId, profileUnlocked });
           if (name === 'show_chart' && !res.isError) charts++;
+          if ('profile' in res && res.profile) markProfile(deps.db, chatId, assistantId);
           // a rejected chart showed nothing, so there's no line for it
           if (!(name === 'show_chart' && res.isError)) emit({ type: 'tool', name, label: toolLabel(name, input), input });
           return { type: 'tool_result', tool_use_id: b.id, content: res.content, is_error: res.isError };
@@ -162,10 +164,9 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
   }
   saveAssistant(deps.db, assistantId, turn, 'done', null);
   emit({ type: 'done', messageId: assistantId, costCents: toCents(cost), status: 'done' });
-  const answered = turn.filter((m) => m.role === 'assistant').flatMap((m) => m.content as Block[]);
-  // a title shows without Face ID, so it never comes from an answer that read the profile
-  const shown = answered.some((b) => b.type === 'tool_use' && PROFILE_TOOLS.has(b.name as string)) ? ''
-    : answered.filter((b) => b.type === 'text').map((b) => b.text as string).join('\n\n');
+  // a title shows without Face ID, so it never comes from an answer in a chat that holds profile data
+  const shown = chatUsesProfile(deps.db, chatId) ? ''
+    : turn.filter((m) => m.role === 'assistant').flatMap((m) => m.content as Block[]).filter((b) => b.type === 'text').map((b) => b.text as string).join('\n\n');
   // the question just answered: every question is its text then its date block
   void autoTitle(deps, deps.claude!, chatId, (history.at(-1)!.content as Block[]).at(-2)!.text as string, shown);
 }

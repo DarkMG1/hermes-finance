@@ -295,6 +295,19 @@ test('stub matches: bank deposits within 3 days, at most the net, closest then n
   assert.equal((await send('PUT', `/v1/pay-stubs/${s.id}/link`, { transactionId: 'a' })).statusCode, 400);
 });
 
+test('a pending deposit whose posted row is here is never offered with it', async () => {
+  const { get, send, db } = setup();
+  seedAccount(db, { id: 'chk' });
+  seedTxn(db, { id: 'pend', accountId: 'chk', date: '2026-03-12', amountCents: 140000, source: 'plaid', sourceId: 'p-1', pending: true });
+  seedTxn(db, { id: 'posted', accountId: 'chk', date: '2026-03-13', amountCents: 140000, source: 'plaid', sourceId: 'p-2' });
+  db.prepare("UPDATE transactions SET pending_source_id = 'p-1' WHERE id = 'posted'").run();
+  seedTxn(db, { id: 'other', accountId: 'chk', date: '2026-03-13', amountCents: 140000 });
+  const s = (await send('POST', '/v1/pay-stubs', stub)).json();
+  const m = (await get(`/v1/pay-stubs/${s.id}/matches`)).json();
+  assert.deepEqual([m.deposits.map((t: { id: string }) => t.id), m.suggestions], [['other', 'posted'], [['other', 'posted']]]);
+  assert.equal((await send('PUT', `/v1/pay-stubs/${s.id}/link`, { transactionIds: ['pend', 'posted'] })).json().field, 'transactionIds');
+});
+
 const plaidSetup = async () => {
   const t = setup();
   seedAccount(t.db, { id: 'chk', plaidAccountId: 'pa-chk' });

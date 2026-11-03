@@ -36,6 +36,8 @@ export const getReturn = (db: Db, year: number, jurisdiction: string) =>
 const candidates = (db: Db, stub: PayStub) => db.prepare(`SELECT ${TXN_COLS} FROM transactions WHERE removed_at IS NULL AND amount_cents > 0
     AND amount_cents <= @net AND account_id IN (SELECT id FROM accounts WHERE type = 'depository') AND abs(julianday(date) - julianday(@day)) <= 3
     AND NOT EXISTS (SELECT 1 FROM pay_stub_deposits d WHERE d.transaction_id = transactions.id AND d.stub_id <> @id)
+    -- a pending deposit whose posted row is already here is the same money
+    AND NOT (pending = 1 AND EXISTS (SELECT 1 FROM transactions p WHERE p.source = 'plaid' AND p.pending_source_id = transactions.source_id AND p.removed_at IS NULL))
   ORDER BY abs(julianday(date) - julianday(@day)), date DESC, id`).all({ net: stub.netCents, day: stub.payDate, id: stub.id }) as TxnRow[];
 
 /** Bank-account deposits within 3 days of the stub's pay date, at most its net, that no other stub holds (closest first, then newest),

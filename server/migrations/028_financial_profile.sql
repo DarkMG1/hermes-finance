@@ -122,3 +122,7 @@ ALTER TABLE ai_usage_new RENAME TO ai_usage;
 CREATE INDEX ai_usage_month ON ai_usage(month);
 -- a question asked while Ask's profile lock was on: its tools refused the profile data
 ALTER TABLE chat_messages ADD COLUMN profile_locked INTEGER NOT NULL DEFAULT 0 CHECK (profile_locked IN (0, 1));
+-- a chat holding financial profile data, from the first answer that got it (a profile tool, or a past chat that held it) onward;
+-- profile_title: its title was written after that, so a locked list doesn't show it
+ALTER TABLE chat_conversations ADD COLUMN profile_seq INTEGER;
+ALTER TABLE chat_conversations ADD COLUMN profile_title INTEGER NOT NULL DEFAULT 0 CHECK (profile_title IN (0, 1));

@@ -25,7 +25,7 @@ export function chatRoutes(app: FastifyInstance, deps: Deps): void {
   };
   const chatBusy = () => new ApiError(409, 'CHAT_BUSY', 'an answer is still being written');
 
-  app.get('/v1/chats', async () => listChats(db));
+  app.get<{ Querystring: { profileUnlocked?: string } }>('/v1/chats', async (req) => listChats(db, req.query.profileUnlocked !== '1'));
 
   app.post('/v1/chats', async (req, reply) => {
     const r = idempotentWrite(deps, req, () => ({ status: 201, body: createChat(db, deps.now().toISOString()) }));

@@ -152,7 +152,8 @@ function fit(e: Entry, deps: Deps, input: Record<string, unknown>, today: string
   return s;
 }
 
-export function runTool(deps: Deps, name: string, input: unknown, ctx: ToolContext = {}): { content: string; isError: boolean } {
+/** profile: the result holds financial profile data, from a profile tool or from a past chat that held it, so the asking chat now does too. */
+export function runTool(deps: Deps, name: string, input: unknown, ctx: ToolContext = {}): { content: string; isError: boolean; profile?: boolean } {
   const fail = (error: string) => ({ content: JSON.stringify({ error }), isError: true });
   const e = ENTRIES.get(name);
   if (!e) return fail(`unknown tool ${name}`);
@@ -162,7 +163,10 @@ export function runTool(deps: Deps, name: string, input: unknown, ctx: ToolConte
   try {
     const today = localDay(deps.now());
     const result = e.run(deps, parsed.data, today, ctx);
-    return result == null ? fail('not found') : { content: fit(e, deps, parsed.data as Record<string, unknown>, today, ctx, result), isError: false };
+    if (result == null) return fail('not found');
+    const profile = PROFILE_TOOLS.has(name) || (name === 'read_chat' && chatUsesProfile(deps.db, (parsed.data as { id: string }).id))
+      || (name === 'search_chats' && (result as { results: { chatId: string }[] }).results.some((h) => chatUsesProfile(deps.db, h.chatId)));
+    return { content: fit(e, deps, parsed.data as Record<string, unknown>, today, ctx, result), isError: false, ...(profile ? { profile } : {}) };
   } catch (err) {
     return fail(err instanceof ApiError ? err.message : 'tool failed');
   }

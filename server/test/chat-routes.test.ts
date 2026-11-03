@@ -5,6 +5,7 @@ import { setImmediate as tick } from 'node:timers/promises';
 import { buildApp } from '../src/app.ts';
 import { addUserMessage, createChat, getChat, startAssistant } from '../src/chat/store.ts';
 import { FakeClaude, end, start, text, tool, type Ev } from './fake-claude.ts';
+import { runTool } from '../src/chat/tools.ts';
 import { AUTH, makeTestDeps } from './helpers.ts';
 
 const NOW = '2026-03-15T12:00:00.000Z';
@@ -330,4 +331,46 @@ test("Ask's profile lock: an unlocked answer is hidden from a locked read, and t
   await until(() => s.fake.messageRequests.length > 0);
   const titled = JSON.stringify(s.fake.messageRequests[0]!.body.messages);
   assert.ok(!titled.includes(PROFILE_ANSWER), 'a title never comes from an answer that read the profile');
+});
+
+test("Ask's profile lock: a follow-up answer from history is hidden too, and a title written after the profile shows as Locked chat", async () => {
+  const s = setup([profileRound(), answerRound(PROFILE_ANSWER), answerRound('That is CA again.')]);
+  s.fake.reply = { content: [{ type: 'text', text: 'Filing in CA' }], stop_reason: 'end_turn' };
+  const id = await s.create();
+  const ask = (clientId: string, text: string) =>
+    s.app.inject({ method: 'POST', url: `/v1/chats/${id}/messages`, headers: AUTH, payload: { clientId, text, profileUnlocked: true } });
+  await ask('a', 'What is my filing status?');
+  await until(() => s.fake.messageRequests.length > 0);
+  await ask('b', 'Which state was that?');
+  const read = async (q = '') => (await s.app.inject({ method: 'GET', url: `/v1/chats/${id}${q}`, headers: AUTH })).json();
+  const locked = await read();
+  assert.deepEqual(locked.messages.map((m: { role: string; text: string; profileLocked?: boolean }) => [m.role, m.text, m.profileLocked ?? false]),
+    [['user', 'What is my filing status?', false], ['assistant', '', true], ['user', 'Which state was that?', false], ['assistant', '', true]]);
+  assert.equal((await read('?profileUnlocked=1')).messages[3].text, 'That is CA again.');
+  const list = async (q = '') => (await s.app.inject({ method: 'GET', url: `/v1/chats${q}`, headers: AUTH })).json().chats[0].title;
+  assert.deepEqual([locked.title, await list(), await list('?profileUnlocked=1')], ['Locked chat', 'Locked chat', 'Filing in CA']);
+});
+
+test("Ask's profile lock: profile data another chat copies through read_chat or search_chats makes that chat locked too", async () => {
+  const s = setup([profileRound(), answerRound(PROFILE_ANSWER)]);
+  const a = await s.create();
+  await s.app.inject({ method: 'POST', url: `/v1/chats/${a}/messages`, headers: AUTH, payload: { clientId: 'a', text: 'What is my filing status?', profileUnlocked: true } });
+  const untouched = await s.create();
+  for (const [name, input] of [['read_chat', { id: a }], ['search_chats', { query: 'single' }]] as const) {
+    s.fake = new FakeClaude([[start(), ...tool(0, 'tu1', name, input), ...end('tool_use')], answerRound('Earlier: single in CA.')]);
+    s.deps.claude = s.fake;
+    const b = await s.create();
+    await s.app.inject({ method: 'POST', url: `/v1/chats/${b}/messages`, headers: AUTH, payload: { clientId: `b-${name}`, text: 'What did we say?', profileUnlocked: true } });
+    const res = (s.fake.requests[1]!.messages as { content: { content: string }[] }[]).at(-1)!.content[0]!.content;
+    assert.match(res, /single/, `${name} returned the profile answer`);
+    const got = (await s.app.inject({ method: 'GET', url: `/v1/chats/${b}`, headers: AUTH })).json().messages[1];
+    assert.deepEqual([got.text, got.profileLocked], ['', true], name);
+    const post = await s.app.inject({ method: 'POST', url: `/v1/chats/${b}/messages`, headers: AUTH, payload: { clientId: `c-${name}`, text: 'And?' } });
+    assert.deepEqual([post.statusCode, post.json().code], [403, 'PROFILE_LOCKED'], name);
+    assert.equal(runTool(s.deps, 'read_chat', { id: b }).isError, true, name);
+    const hits = JSON.parse(runTool(s.deps, 'search_chats', {}).content).results.map((h: { chatId: string }) => h.chatId);
+    assert.ok(!hits.includes(b) && !hits.includes(a), name);
+  }
+  assert.equal((await s.app.inject({ method: 'GET', url: `/v1/chats/${untouched}`, headers: AUTH })).statusCode, 200);
+  assert.deepEqual(JSON.parse(runTool(s.deps, 'search_chats', {}).content).results, [], 'an empty chat has no first question to list');
 });
