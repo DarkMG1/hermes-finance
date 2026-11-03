@@ -260,3 +260,20 @@ private let points: JSONValue = .array([.object(["label": .string("2026-09"), "v
     }
     #expect(shown == chars.count)
 }
+
+@Test func aProfileAnswerReadWhileLockedDecodesAndMarksTheThread() throws {
+    let d = try decode(ChatDetail.self, "chat-detail-profile-locked")
+    #expect(d.messages[1].profileLocked == true && d.messages[1].text.isEmpty && ChatThread(d).holdsLockedProfile)
+    #expect(try decode(ChatDetail.self, "chat-detail").messages.allSatisfy { $0.profileLocked == nil }, "absent from older servers")
+    #expect(!ChatThread(try decode(ChatDetail.self, "chat-detail")).holdsLockedProfile)
+}
+
+@Test func chatReadsAndSendsCarryTheProfileUnlock() async throws {
+    let transport = FakeTransport([.success(HTTPResponse(status: 200, body: try fixture("chat-detail"))), .success(HTTPResponse(status: 200, body: try fixture("chat-detail")))])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    _ = try await client.chat(id: "chat-1")
+    _ = try await client.chat(id: "chat-1", profileUnlocked: true)
+    #expect(transport.requests.map { $0.url.query } == [nil, "profileUnlocked=1"])
+    let body = try JSONDecoder().decode([String: JSONValue].self, from: JSONEncoder().encode(SendChatBody(clientId: "c", text: "Hi", profileUnlocked: true)))
+    #expect(body == ["clientId": .string("c"), "text": .string("Hi"), "profileUnlocked": .bool(true)])
+}

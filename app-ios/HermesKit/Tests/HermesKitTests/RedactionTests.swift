@@ -38,14 +38,63 @@ private func boxed(_ text: String) -> Bool { !Redaction.boxes([line(text)]).isEm
     #expect(Redaction.boxes([line("Account $12,345.67")]).isEmpty)
 }
 
-@Test func aMatchBoxesOnlyItsSpanPaddedAndClamped() throws {
-    let text = "SSN 000-00-0000 Wages"
-    let box = try #require(Redaction.boxes([TextLine(text: text, box: Box(x: 0.1, y: 0.2, w: 0.42, h: 0.02))], padding: 0.004).first)
-    let perChar = 0.42 / Double(text.count)
-    #expect(abs(box.x - (0.1 + 4 * perChar - 0.004)) < 1e-9 && abs(box.w - (11 * perChar + 0.008)) < 1e-9)
-    #expect(abs(box.y - 0.196) < 1e-9 && abs(box.h - 0.028) < 1e-9)
+@Test func aMatchIsBoxedWhereVisionMeasuresItsCharactersPaddedAndClamped() throws {
+    let lines = [line("Wages 1,234.56", y: 0.1), TextLine(text: "SSN 000-00-0000 Wages", box: Box(x: 0.1, y: 0.2, w: 0.42, h: 0.02))]
+    var asked: [(Int, String)] = []
+    let measured = Box(x: 0.2, y: 0.2, w: 0.15, h: 0.02)
+    let box = try #require(Redaction.boxes(lines, padding: 0.004) { index, range in
+        let utf16 = Array(lines[index].text.utf16)
+        asked.append((index, String(decoding: utf16[range], as: UTF16.self)))
+        return measured
+    }.first)
+    #expect(asked.count == 1 && asked[0] == (1, "000-00-0000"), "only the identifier's own characters are measured")
+    #expect(abs(box.x - 0.196) < 1e-9 && abs(box.w - 0.158) < 1e-9 && abs(box.y - 0.196) < 1e-9 && abs(box.h - 0.028) < 1e-9)
     let edge = try #require(Redaction.boxes([TextLine(text: "000-00-0000", box: Box(x: 0, y: 0.99, w: 1, h: 0.01))]).first)
     #expect(edge.x == 0 && edge.w == 1 && abs(edge.y - 0.986) < 1e-9 && abs(edge.y + edge.h - 1) < 1e-9)
+}
+
+@Test func withoutAMeasureTheWholeLineIsBoxed() throws {
+    // proportional glyphs put the digits anywhere on the line, so a guess by character count could leave edge digits showing
+    let whole = Box(x: 0.1, y: 0.2, w: 0.8, h: 0.02)
+    let same = { (b: Box) in abs(b.x - whole.x) < 1e-9 && abs(b.y - whole.y) < 1e-9 && abs(b.w - whole.w) < 1e-9 && abs(b.h - whole.h) < 1e-9 }
+    #expect(Redaction.boxes([TextLine(text: "Social Security Number: 000-00-0000", box: whole)], padding: 0).map(same) == [true])
+    #expect(Redaction.boxes([TextLine(text: "Employee ID 00-0000000 SYNTHETIC EMPLOYER INC", box: whole)], padding: 0) { _, _ in nil }.map(same) == [true])
+}
+
+@Test func groupedAccountNumbersNearTheirWordAreBoxedAndDatesAreNot() {
+    for text in ["Account 0000 1234 5678", "Acct 0000-1234-56", "Routing 000 000 000", "Account number: 000-0000-00000"] { #expect(boxed(text), "\(text)") }
+    for text in ["Account opened 2026-04-15", "Account 2026 04 15", "Account 0000 12", "Account total $0,000 1234 5678.00", "Phone 555 555 0100 1234"] {
+        #expect(!boxed(text), "\(text)")
+    }
+}
+
+@Test func accountWordsReachFourLinesDown() {
+    #expect(!Redaction.boxes([line("Account", y: 0.40), line("00001234567", y: 0.46)]).isEmpty, "a direct-deposit table's third row")
+    #expect(!Redaction.boxes([line("Account", y: 0.40), line("0000 1234 5678", y: 0.48)]).isEmpty)
+    #expect(Redaction.boxes([line("Account", y: 0.40), line("00001234567", y: 0.50)]).isEmpty, "five lines away")
+}
+
+@Test func identifiersReadWithLettersForDigitsAreBoxed() {
+    for text in ["000-OO-0000", "SSN 0O0-00-000O", "12-345l789", "EIN 00-OOOOOOO".replacingOccurrences(of: "OOOOOOO", with: "00000O0"), "S000-00-0000", "B00 00 0000"] {
+        #expect(boxed(text), "\(text)")
+    }
+    for text in ["OOO-OO-OOOO", "SOLID BOSS", "Ollie Sullivan", "ISO 9001", "Box 12 code DD 0O"] { #expect(!boxed(text), "\(text)") }
+}
+
+@Test func pagesWithNothingHiddenAreFlaggedOnDocumentsThatCarryIDs() {
+    #expect(Redaction.pagesToCheck(kind: .taxForm, boxCounts: [2, 0, 1, 0]) == [2, 4])
+    #expect(Redaction.pagesToCheck(kind: .payStub, boxCounts: [0]) == [1])
+    #expect(Redaction.pagesToCheck(kind: .taxReturn, boxCounts: [1, 3]).isEmpty)
+    #expect(Redaction.pagesToCheck(kind: .offer, boxCounts: [0, 0]).isEmpty, "an offer letter carries no SSN or EIN")
+}
+
+@Test func aRevealStartedBeforeAnInvalidateIsDropped() {
+    var generation = RevealGeneration()
+    let started = generation.value
+    #expect(generation.isCurrent(started))
+    generation.invalidate()
+    #expect(!generation.isCurrent(started))
+    #expect(generation.isCurrent(generation.value))
 }
 
 @Test func overlappingBoxesMerge() {

@@ -8,7 +8,11 @@ import Testing
     let job = try decode(JobDetail.self, "job")
     #expect(job.employer == "SYNTHETIC EMPLOYER" && job.status == "current" && job.endDate == nil)
     #expect(job.grants.first?.shares == 400 && job.nextVests.map(\.shares) == [100, 25, 25, 25])
-    #expect(job.stubs.first?.transactionId == "txn-2" && job.forms.first?.kind == "w2")
+    #expect(job.stubs.first?.transactionIds == ["txn-2"] && job.stubs.first?.otherPayCents == 0 && job.forms.first?.kind == "w2")
+    let jobless = try decode([PayStub].self, "pay-stubs-unassigned")
+    #expect(jobless.map(\.id) == ["stub-2"] && jobless[0].jobId == nil && jobless[0].otherPayCents == 2500 && jobless[0].transactionIds.isEmpty)
+    let matches = try decode(PayStubMatches.self, "pay-stub-matches")
+    #expect(matches.deposits.first?.id == "txn-2" && matches.suggestions == [["txn-2"]])
     let years = try decode(TaxYears.self, "tax-years")
     #expect(years.years.first?.effectiveRate == 0.0997 && years.years.first?.returns.first?.jurisdiction == "federal")
     let linked = try decode(LedgerTransaction.self, "transaction-pay-stub")
@@ -69,14 +73,14 @@ import Testing
     #expect(transport.requests.last?.url.path == "/v1/jobs/job-1")
 }
 
-@Test func linkPayStubSendsNullToUnlink() async throws {
+@Test func linkPayStubSendsTheDepositsAndAnEmptyListToUnlink() async throws {
     let stub = try JSONSerialization.data(withJSONObject: try #require(
         JSONSerialization.jsonObject(with: fixture("job")) as? [String: Any])["stubs"].flatMap { ($0 as? [Any])?.first } as Any)
     let transport = FakeTransport([.success(HTTPResponse(status: 200, body: stub)), .success(HTTPResponse(status: 200, body: stub))])
     let client = APIClient(baseURL: testBase, token: "t", transport: transport)
-    _ = try await client.linkPayStub(id: "stub-1", transactionId: "txn-2", idempotencyKey: "k-1")
-    _ = try await client.linkPayStub(id: "stub-1", transactionId: nil, idempotencyKey: "k-2")
-    #expect(transport.requests.map { String(data: $0.body ?? Data(), encoding: .utf8) } == [#"{"transactionId":"txn-2"}"#, #"{"transactionId":null}"#])
+    _ = try await client.linkPayStub(id: "stub-1", transactionIds: ["txn-2", "txn-3"], idempotencyKey: "k-1")
+    _ = try await client.linkPayStub(id: "stub-1", transactionIds: [], idempotencyKey: "k-2")
+    #expect(transport.requests.map { String(data: $0.body ?? Data(), encoding: .utf8) } == [#"{"transactionIds":["txn-2","txn-3"]}"#, #"{"transactionIds":[]}"#])
     #expect(transport.requests.map(\.url.path) == ["/v1/pay-stubs/stub-1/link", "/v1/pay-stubs/stub-1/link"])
 }
 
@@ -98,4 +102,64 @@ import Testing
     #expect(bodies == [#"{"federalCents":null,"netCents":350000}"#, #"{"cliffMonths":null}"#])
     #expect(transport.requests.map(\.method) == ["PATCH", "PATCH"])
     #expect(transport.requests.map(\.url.path) == ["/v1/pay-stubs/stub-1", "/v1/jobs/job-1/grants/grant-1"])
+}
+
+@Test func aMergeEditKeepsWhatIsUnchangedAndSendsNullForWhatWasCleared() async throws {
+    let reply = try fixture("profile")
+    let transport = FakeTransport([.success(HTTPResponse(status: 200, body: reply))])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    let saved = try decode(Profile.self, "profile")
+    var edited = saved
+    edited.state = nil
+    edited.dependents = 2
+    _ = try await client.putProfile(edited, from: saved, idempotencyKey: "k-1")
+    let body = try JSONDecoder().decode([String: JSONValue].self, from: try #require(transport.requests.first?.body))
+    #expect(body["state"] == .null && body["dependents"] == .number(2) && body["filingStatus"] == .string("single") && body["hsa"] == .bool(true))
+    #expect(body["note"] == nil, "a field empty before and after is left to the server's merge")
+}
+
+@Test func aReadTaxReturnReplacesTheSavedOneSoBlankFieldsGoOutAsNull() async throws {
+    let transport = FakeTransport([.success(HTTPResponse(status: 200, body: Data(#"{"id":"r","year":2025,"jurisdiction":"federal"}"#.utf8)))])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    var read = TaxReturnBody()
+    read.year = 2025
+    read.jurisdiction = "federal"
+    read.totalTaxCents = 650000
+    _ = try await client.putTaxReturn(read, from: nil, idempotencyKey: "k-1")
+    let body = try JSONDecoder().decode([String: JSONValue].self, from: try #require(transport.requests.first?.body))
+    #expect(body["totalTaxCents"] == .number(650000) && body["year"] == .number(2025))
+    #expect(body["capitalGainsCents"] == .null && body["creditsCents"] == .null && body.count == 15, "every field of the return is sent")
+}
+
+@Test func aStubBalancesWithinACentCountingOtherPay() {
+    var s = PayStubBody()
+    #expect(s.imbalanceCents == nil && s.balanceProblem == nil)
+    s.grossCents = 400000
+    s.federalCents = 50000
+    s.otherDeductionsCents = 10000
+    s.otherPayCents = 5000
+    s.netCents = 345000
+    #expect(s.imbalanceCents == 0 && s.balanceProblem == nil)
+    s.netCents = 344999
+    #expect(s.imbalanceCents == 1 && s.balanceProblem == nil, "a cent off is allowed, as on the server")
+    s.netCents = 340000
+    #expect(s.imbalanceCents == 5000 && s.balanceProblem?.hasPrefix("Off by $50.00") == true)
+    s.netCents = 345000
+    s.ytdGrossCents = 399999
+    #expect(s.balanceProblem == "Gross year to date is less than gross pay")
+}
+
+@Test func hasProfileProbesWithoutLoadingTheProfile() async throws {
+    let transport = FakeTransport([FakeTransport.json(200, #"{"ok":true}"#), FakeTransport.json(404, #"{"code":"NOT_FOUND","message":"x"}"#)])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    #expect(try await client.hasProfile())
+    #expect(try await !client.hasProfile(), "an older server")
+    #expect(transport.requests.map(\.url.path) == ["/v1/profile/exists", "/v1/profile/exists"])
+}
+
+@Test func unassignedStubsComeFromTheirOwnRoute() async throws {
+    let transport = FakeTransport([.success(HTTPResponse(status: 200, body: try fixture("pay-stubs-unassigned")))])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    #expect(try await client.unassignedPayStubs().map(\.id) == ["stub-2"])
+    #expect(transport.requests.first?.url.path == "/v1/pay-stubs/unassigned")
 }

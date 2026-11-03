@@ -49,7 +49,7 @@ public struct GrantBody: Codable, Sendable, Equatable {
     public init() {}
 }
 
-/// Left-out deduction lines are 0; gross minus every line must equal net within a cent.
+/// Left-out deduction lines and other pay are 0; gross minus every line plus other pay must equal net within a cent.
 public struct PayStubBody: Codable, Sendable, Equatable {
     public var jobId: String?
     public var payDate: String?
@@ -62,9 +62,27 @@ public struct PayStubBody: Codable, Sendable, Equatable {
     public var medicareCents: Int?
     public var retirementCents: Int?
     public var otherDeductionsCents: Int?
+    /// after-tax additions (reimbursements, stipends)
+    public var otherPayCents: Int?
     public var netCents: Int?
     public var ytdGrossCents: Int?
     public init() {}
+
+    /// What net would need to change by for the stub to balance (the server allows a cent either way); nil until gross and net are set.
+    public var imbalanceCents: Int? {
+        guard let grossCents, let netCents else { return nil }
+        let deductions = [federalCents, stateCents, socialSecurityCents, medicareCents, retirementCents, otherDeductionsCents].reduce(0) { $0 + ($1 ?? 0) }
+        return grossCents - deductions + (otherPayCents ?? 0) - netCents
+    }
+
+    /// Why Save stays off: the lines don't add up to net, or year to date is less than this period.
+    public var balanceProblem: String? {
+        if let off = imbalanceCents, let net = netCents, abs(off) > 1 {
+            return "Off by \(Money.format(abs(off))): gross minus deductions plus other pay is \(Money.format(net + off)), net is \(Money.format(net))"
+        }
+        if let ytd = ytdGrossCents, let gross = grossCents, ytd < gross { return "Gross year to date is less than gross pay" }
+        return nil
+    }
 }
 
 public struct TaxFormBody: Codable, Sendable, Equatable {
@@ -109,16 +127,16 @@ public struct TaxReturnBody: Codable, Sendable, Equatable {
 @dynamicMemberLookup
 public struct Saved<Fields: Codable & Sendable & Equatable>: Codable, Sendable, Equatable, Identifiable {
     public let id: String
-    /// pay stubs only: the linked deposit
-    public let transactionId: String?
+    /// pay stubs only: the linked deposits (a paycheck split across accounts has several)
+    public let transactionIds: [String]
     public let fields: Fields
 
-    private enum Keys: String, CodingKey { case id, transactionId }
+    private enum Keys: String, CodingKey { case id, transactionIds }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
         id = try c.decode(String.self, forKey: .id)
-        transactionId = try c.decodeIfPresent(String.self, forKey: .transactionId)
+        transactionIds = try c.decodeIfPresent([String].self, forKey: .transactionIds) ?? []
         fields = try Fields(from: decoder)
     }
 
@@ -126,7 +144,7 @@ public struct Saved<Fields: Codable & Sendable & Equatable>: Codable, Sendable, 
         try fields.encode(to: encoder)
         var c = encoder.container(keyedBy: Keys.self)
         try c.encode(id, forKey: .id)
-        try c.encodeIfPresent(transactionId, forKey: .transactionId)
+        try c.encode(transactionIds, forKey: .transactionIds)
     }
 
     public subscript<T>(dynamicMember path: KeyPath<Fields, T>) -> T { fields[keyPath: path] }
@@ -194,6 +212,13 @@ public struct PayStubSummary: Codable, Sendable, Hashable {
     public let id: String
 }
 
+/// Deposits a pay stub can link: bank deposits within 3 days of its pay date, at most its net, closest first; `suggestions` are single
+/// deposits and pairs that add up to the net, as ids into `deposits`.
+public struct PayStubMatches: Codable, Sendable {
+    public let deposits: [LedgerTransaction]
+    public let suggestions: [[String]]
+}
+
 public enum ProfileKind: String, Codable, Sendable, CaseIterable {
     case taxReturn = "tax_return", taxForm = "tax_form", payStub = "pay_stub", offer
 }
@@ -232,10 +257,14 @@ public struct ProfileReadResult: Decodable, Sendable, Equatable {
 }
 
 /// An edit as JSON: fields the owner cleared go out as null; `keepUnchanged: false` leaves out what still matches `original`.
+/// With no `original` and `keepUnchanged`, every empty field goes out as null, so a merge on the server keeps nothing the body left blank.
 func edit<B: Encodable>(_ body: B, from original: B?, keepUnchanged: Bool) throws -> [String: JSONValue] {
     func object(_ b: B) throws -> [String: JSONValue] { try JSONDecoder().decode([String: JSONValue].self, from: JSONEncoder().encode(b)) }
     let new = try object(body), old = try original.map(object) ?? [:]
     var out = keepUnchanged ? new : new.filter { old[$0.key] != $0.value }
     for key in old.keys where new[key] == nil { out[key] = .null }
+    if original == nil, keepUnchanged {
+        for case let key? in Mirror(reflecting: body).children.map(\.label) where out[key] == nil { out[key] = .null }
+    }
     return out
 }

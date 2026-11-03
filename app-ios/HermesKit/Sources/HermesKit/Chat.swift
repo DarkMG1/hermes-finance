@@ -109,6 +109,18 @@ public struct ChatMessage: Codable, Sendable, Identifiable, Equatable {
     public var status: String
     public var errorCode: String?
     public var createdAt: String
+    /// An answer that used financial profile data, read without the profile unlocked: its text and tools were left out. Absent from older servers.
+    public var profileLocked: Bool?
+}
+
+/// A question to send; `profileUnlocked` only while the owner has passed Face ID for the profile this Ask visit.
+public struct SendChatBody: Encodable, Sendable {
+    public let clientId: String
+    public let text: String
+    public let profileUnlocked: Bool
+    public init(clientId: String, text: String, profileUnlocked: Bool) {
+        (self.clientId, self.text, self.profileUnlocked) = (clientId, text, profileUnlocked)
+    }
 }
 
 public struct ChatDetail: Codable, Sendable {
@@ -181,6 +193,9 @@ public struct ChatThread: Sendable, Equatable {
 
     public var isStreaming: Bool { messages.last?.status == "streaming" }
 
+    /// Some answer here was left out until the profile is unlocked; the server refuses another question until then.
+    public var holdsLockedProfile: Bool { messages.contains { $0.profileLocked == true } }
+
     /// Send turns into Stop where it stands, so a second tap meant for Send would stop the answer it just sent.
     /// Stop counts once 1.5 s have passed or the answer has started; with no `sentAt` (an answer from an earlier visit) it always counts.
     public func acceptsStop(sentAt: Date?, now: Date) -> Bool {
@@ -222,7 +237,10 @@ extension APIClient {
         try await write("POST", "/v1/chats", body: [String: String](), key: idempotencyKey)
     }
 
-    public func chat(id: String) async throws -> ChatDetail { try decode(try await getData("/v1/chats/\(id)")) }
+    /// Without `profileUnlocked`, answers that used financial profile data come back empty and marked `profileLocked`.
+    public func chat(id: String, profileUnlocked: Bool = false) async throws -> ChatDetail {
+        try decode(try await getData("/v1/chats/\(id)", query: profileUnlocked ? [URLQueryItem(name: "profileUnlocked", value: "1")] : []))
+    }
 
     public func deleteChat(id: String) async throws {
         try await send("DELETE", "/v1/chats/\(id)", body: nil, idempotencyKey: nil, timeout: 20)
