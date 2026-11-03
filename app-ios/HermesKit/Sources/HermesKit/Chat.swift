@@ -231,7 +231,10 @@ public struct ChatThread: Sendable, Equatable {
 }
 
 extension APIClient {
-    public func chats() async throws -> ChatList { try decode(try await getData("/v1/chats")) }
+    /// Without `profileUnlocked`, a title written after a chat got financial profile data reads "Locked chat".
+    public func chats(profileUnlocked: Bool = false) async throws -> ChatList {
+        try decode(try await getData("/v1/chats", query: profileUnlocked ? [URLQueryItem(name: "profileUnlocked", value: "1")] : []))
+    }
 
     public func createChat(idempotencyKey: String) async throws -> ChatSummary {
         try await write("POST", "/v1/chats", body: [String: String](), key: idempotencyKey)

@@ -269,12 +269,14 @@ private let points: JSONValue = .array([.object(["label": .string("2026-09"), "v
 }
 
 @Test func chatReadsAndSendsCarryTheProfileUnlock() async throws {
-    let detail = try fixture("chat-detail")
-    let transport = FakeTransport([.success(HTTPResponse(status: 200, body: detail)), .success(HTTPResponse(status: 200, body: detail))])
+    let detail = try fixture("chat-detail"), list = try fixture("chat-list")
+    let transport = FakeTransport([detail, detail, list, list].map { .success(HTTPResponse(status: 200, body: $0)) })
     let client = APIClient(baseURL: testBase, token: "t", transport: transport)
     _ = try await client.chat(id: "chat-1")
     _ = try await client.chat(id: "chat-1", profileUnlocked: true)
-    #expect(transport.requests.map { $0.url.query } == [nil, "profileUnlocked=1"])
+    _ = try await client.chats()
+    _ = try await client.chats(profileUnlocked: true)
+    #expect(transport.requests.map { $0.url.query } == [nil, "profileUnlocked=1", nil, "profileUnlocked=1"])
     let body = try JSONDecoder().decode([String: JSONValue].self, from: JSONEncoder().encode(SendChatBody(clientId: "c", text: "Hi", profileUnlocked: true)))
     #expect(body == ["clientId": .string("c"), "text": .string("Hi"), "profileUnlocked": .bool(true)])
 }
