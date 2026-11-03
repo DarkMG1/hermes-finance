@@ -426,6 +426,8 @@ private struct PayStubSection: View {
     @State private var stub: PayStub?
     @State private var busy = false
     @State private var error: String?
+    /// a reply that lands after a trip to the background shows nothing: it needs a new Face ID
+    @State private var generation = RevealGeneration()
 
     var body: some View {
         Section("Pay stub") {
@@ -433,7 +435,7 @@ private struct PayStubSection: View {
                 let lines = [("Gross pay", stub.grossCents), ("Federal tax", stub.federalCents.map { -$0 }), ("State tax", stub.stateCents.map { -$0 }),
                              ("Social Security", stub.socialSecurityCents.map { -$0 }), ("Medicare", stub.medicareCents.map { -$0 }),
                              ("Retirement", stub.retirementCents.map { -$0 }), ("Other deductions", stub.otherDeductionsCents.map { -$0 }),
-                             ("Net pay", stub.netCents)]
+                             ("Other pay", stub.otherPayCents), ("Net pay", stub.netCents)]
                 ForEach(lines, id: \.0) { line in
                     LabeledContent(line.0) { MoneyText(cents: line.1 ?? 0, colored: false) }
                 }
@@ -445,19 +447,24 @@ private struct PayStubSection: View {
                 InlineError(message: error)
             }
         }
-        .onChange(of: scenePhase) { _, phase in if phase == .background { stub = nil } }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .background else { return }
+            generation.invalidate()
+            stub = nil
+        }
     }
 
     private func show() async {
         busy = true
         defer { busy = false }
         error = nil
+        let started = generation.value
         let check = await confirmShowBalances(lock: lock, model: model, reason: "Show pay stub")
         guard check.shown, let client = model.client else { error = check.error; return }
         // the client, never the reader: nothing from the stub goes to the disk cache
         do {
             let loaded = try await client.payStub(id: id)
-            if scenePhase != .background { stub = loaded }
+            if generation.isCurrent(started), scenePhase != .background { stub = loaded }
         } catch {
             self.error = errorMessage(error)
         }

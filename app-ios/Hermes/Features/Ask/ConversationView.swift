@@ -3,7 +3,9 @@ import SwiftUI
 
 struct ConversationView: View {
     @Environment(AppModel.self) private var model
+    @Environment(AppLock.self) private var lock
     @Environment(\.askCovered) private var covered
+    @Environment(\.askProfileUnlocked) private var profileUnlocked
     /// nil until the first question creates the chat.
     @State var chatId: String?
     @State private var title = ""
@@ -120,6 +122,25 @@ struct ConversationView: View {
         .navigationTitle(title.isEmpty ? "New chat" : title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarVisibility(covered ? .hidden : .automatic, for: .navigationBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button(profileUnlocked.wrappedValue ? "Lock financial profile" : "Unlock financial profile",
+                       systemImage: profileUnlocked.wrappedValue ? "lock.open" : "lock") {
+                    if profileUnlocked.wrappedValue { profileUnlocked.wrappedValue = false } else { Task { await unlockProfile() } }
+                }
+            }
+        }
+        // what an unlocked read showed goes with the unlock; the server's copy hides it again
+        .onChange(of: profileUnlocked.wrappedValue) { _, unlocked in
+            guard !unlocked else { return }
+            typed = nil
+            thread = nil
+            // an answer still streaming keeps writing into the dropped thread; its saved copy loads once it ends
+            Task {
+                await stream?.value
+                await load()
+            }
+        }
         .task { await load() }
         .task { await loadUsage() }
         // an answer still being written by an earlier visit: look again until it ends
@@ -162,7 +183,7 @@ struct ConversationView: View {
         }
         guard let client = model.client else { return }
         do {
-            let detail = try await client.chat(id: chatId)
+            let detail = try await client.chat(id: chatId, profileUnlocked: profileUnlocked.wrappedValue)
             let lastQuestion = { (messages: [ChatMessage]) in messages.last { $0.role == "user" }?.text }
             guard stream == nil, !resync || detail.messages.count > thread?.messages.count ?? 0
                     || lastQuestion(detail.messages) == lastQuestion(thread?.messages ?? []) else { return }
@@ -186,12 +207,32 @@ struct ConversationView: View {
         if message.role == "user" {
             UserBubble(message: message).equatable()
         } else {
-            AnswerRow(message: message, typed: message.id == thread?.messages.last?.id ? typed : nil, canRetry: stream == nil, onRetry: retry)
+            AnswerRow(message: message, typed: message.id == thread?.messages.last?.id ? typed : nil, canRetry: stream == nil, onRetry: retry,
+                      onUnlock: { Task { await unlockProfile() } })
                 .equatable()
         }
     }
 
+    /// Face ID for the profile, once this Ask visit; then answers that used it show.
+    @discardableResult
+    private func unlockProfile() async -> Bool {
+        guard !profileUnlocked.wrappedValue else { return true }
+        let check = await confirmShowBalances(lock: lock, model: model, reason: "Use your financial profile in Ask")
+        guard check.shown else {
+            loadError = check.error
+            return false
+        }
+        profileUnlocked.wrappedValue = true
+        await load()
+        return true
+    }
+
     private func send(_ text: String) {
+        // the server takes no question in a chat holding profile data until it's unlocked
+        if thread?.holdsLockedProfile == true, !profileUnlocked.wrappedValue {
+            Task { if await unlockProfile() { send(text) } }
+            return
+        }
         draft = ""
         // setting a FocusState left the keyboard up in the simulator; this is what AskLock does too
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
@@ -231,7 +272,8 @@ struct ConversationView: View {
                 // the chat can still be busy for a moment after a Stop
                 for attempt in 1...2 {
                     do {
-                        try await ChatStream.send(client: client, chatId: chatId ?? "", clientId: clientId, text: text) { thread?.apply($0) }
+                        let body = SendChatBody(clientId: clientId, text: text, profileUnlocked: profileUnlocked.wrappedValue)
+                        try await ChatStream.send(client: client, chatId: chatId ?? "", body: body) { thread?.apply($0) }
                         break
                     } catch ClientError.api(_, let body) where body.code == "CHAT_BUSY" && attempt == 1 {
                         try await Task.sleep(for: .seconds(1))
@@ -313,10 +355,21 @@ private struct AnswerRow: View, Equatable {
     let typed: Int?
     let canRetry: Bool
     let onRetry: () -> Void
+    let onUnlock: () -> Void
 
     nonisolated static func == (a: Self, b: Self) -> Bool { a.message == b.message && a.typed == b.typed && a.canRetry == b.canRetry }
 
     var body: some View {
+        if message.profileLocked == true {
+            Button("This answer uses your financial profile · Unlock", systemImage: "lock", action: onUnlock)
+                .textStyle(.caption, color: Palette.secondaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            answer
+        }
+    }
+
+    @ViewBuilder private var answer: some View {
         let text = typed.map { String(message.text.prefix($0)) } ?? message.text
         let status = typed == nil ? message.status : "streaming"
         let waiting = status == "streaming" && text.isEmpty
@@ -353,7 +406,8 @@ private struct AnswerRow: View, Equatable {
     @ViewBuilder
     private var failure: some View {
         let final = ["AI_CREDITS_EXHAUSTED": "AI credits used up for this month", "AI_NOT_CONFIGURED": "AI isn't set up on the server",
-                     "CHAT_TOO_LONG": "This chat is too long. Start a new one."]
+                     "CHAT_TOO_LONG": "This chat is too long. Start a new one.",
+                     "PROFILE_LOCKED": "This chat uses your financial profile. Unlock it with the lock button, then ask again."]
         let retryable = ["MAX_TOKENS": "The answer got too long. Ask for less.", "REFUSED": "Claude couldn't answer that."]
         if let text = final[message.errorCode ?? ""] {
             Text(text).textStyle(.caption, color: Palette.loss)

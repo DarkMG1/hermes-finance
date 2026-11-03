@@ -4,30 +4,40 @@ import SwiftUI
 /// Edits a saved body's fields; `save` gets the new body and the write's idempotency key.
 struct EditForm<B: Equatable>: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.profileDrafting) private var drafting
     let title: String
     let fields: [DraftField<B>]
     let original: B
     let save: @MainActor (B, String) async throws -> Void
+    /// why Save stays off though every field parses (a pay stub that doesn't balance)
+    let check: (B) -> String?
     @State private var texts: [String: String]
     @State private var writes = WriteGuard()
     @State private var busy = false
     @State private var error: String?
 
-    init(title: String, fields: [DraftField<B>], original: B, save: @escaping @MainActor (B, String) async throws -> Void) {
+    init(title: String, fields: [DraftField<B>], original: B, check: @escaping (B) -> String? = { _ in nil },
+         save: @escaping @MainActor (B, String) async throws -> Void) {
         self.title = title
         self.fields = fields
         self.original = original
+        self.check = check
         self.save = save
         _texts = State(initialValue: DraftField.texts(fields, original))
     }
 
     var body: some View {
         let edited = DraftField.build(fields, texts, original)
-        Sheet(title: title, canSave: !busy && edited != nil && edited != original, busy: busy, unresolved: writes.unresolved, dirty: edited != original,
+        let problem = edited.flatMap(check)
+        Sheet(title: title, canSave: !busy && edited != nil && problem == nil && edited != original, busy: busy,
+              unresolved: writes.unresolved, dirty: edited != original,
               onCancel: { dismiss() }, onSave: { Task { await submit() } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section { DraftFields(fields: fields, texts: $texts, uncertain: []) }.disabled(busy || writes.unresolved)
+            if let problem { Section { Text(problem).textStyle(.caption, color: Palette.loss) } }
             if let error { Section { InlineError(message: error) } }
         }
+        .onChange(of: edited != original) { _, dirty in drafting.wrappedValue = dirty }
+        .onDisappear { drafting.wrappedValue = false }
     }
 
     private func submit() async {
@@ -51,6 +61,7 @@ struct EditRow<B: Equatable, Row: View>: View {
     let title: String
     let fields: [DraftField<B>]
     let original: B
+    var check: (B) -> String? = { _ in nil }
     let row: Row
     let save: @MainActor (B, String) async throws -> Void
     @State private var editing = false
@@ -59,7 +70,7 @@ struct EditRow<B: Equatable, Row: View>: View {
         // plain: a link or unlink button beside it in the row keeps its own taps
         Button { editing = true } label: { row }
             .buttonStyle(.plain)
-            .sheet(isPresented: $editing) { EditForm(title: title, fields: fields, original: original, save: save) }
+            .sheet(isPresented: $editing) { EditForm(title: title, fields: fields, original: original, check: check, save: save) }
     }
 }
 

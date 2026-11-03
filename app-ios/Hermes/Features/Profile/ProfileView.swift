@@ -11,11 +11,13 @@ struct ProfileGate: View {
     @State private var unlocked = false
     @State private var unlocking = false
     @State private var error: String?
+    /// a read or an edit is open: the relock throws it away, and says so
+    @State private var drafting = false
 
     var body: some View {
         NavigationStack {
             if unlocked {
-                ProfileView()
+                ProfileView().environment(\.profileDrafting, $drafting)
             } else {
                 VStack(spacing: Space.l) {
                     HButton(title: "Unlock with Face ID", busy: unlocking) { Task { await unlock() } }
@@ -32,8 +34,9 @@ struct ProfileGate: View {
         .task { await unlock() }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .background else { return }
+            // security over the draft: the relock drops it, but the owner hears why it's gone
+            error = unlocked && drafting ? "Locked — your unsaved draft was discarded" : nil
             unlocked = false
-            error = nil
         }
     }
 
@@ -44,7 +47,7 @@ struct ProfileGate: View {
         // confirmOwnerInApp fails a prompt that outlives a trip to the background
         let check = await confirmShowBalances(lock: lock, model: model, reason: "Open financial profile")
         unlocked = check.shown
-        error = check.error
+        if check.shown || check.error != nil { error = check.error }
     }
 }
 
@@ -53,9 +56,10 @@ struct ProfileView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var profile: Profile?
     @State private var jobs: [Job]?
+    @State private var jobless: [PayStub] = []
     @State private var error: String?
     @State private var editingAboutMe = false
-    @State private var adding: ProfileKind?
+    @State private var adding: CaptureRequest?
     @State private var addingJob = false
 
     var body: some View {
@@ -91,6 +95,12 @@ struct ProfileView: View {
                         Text("Add an offer letter with +.").textStyle(.subhead, color: Palette.secondaryText)
                     }
                 }
+                if !jobless.isEmpty {
+                    // saved before any job matched, or left when their job was deleted
+                    Section("Pay stubs without a job") {
+                        ForEach(jobless) { PayStubRow(stub: $0, fields: [ProfileDraftForm.stubJobField(jobs)] + ProfileDraftForm.stubFields) { await load() } }
+                    }
+                }
             }
             Section {
                 NavigationLink { TaxYearsView() } label: { Text("Tax years") }
@@ -103,14 +113,20 @@ struct ProfileView: View {
             ToolbarItem(placement: .cancellationAction) { Button("Close") { dismiss() } }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    ForEach(ProfileKind.allCases, id: \.self) { kind in Button(kind.title) { adding = kind } }
+                    ForEach(ProfileKind.allCases, id: \.self) { kind in
+                        Menu(kind.title) {
+                            ForEach(CaptureSource.available, id: \.self) { source in
+                                Button(source.title) { adding = CaptureRequest(kind: kind, source: source) }
+                            }
+                        }
+                    }
                     Divider()
                     Button("Job, entered by hand") { addingJob = true }
                 } label: { Image(systemName: "plus") }
                     .accessibilityLabel("Add document")
             }
         }
-        .profileCapture(kind: $adding) { await load() }
+        .profileCapture($adding) { await load() }
         .sheet(isPresented: $addingJob) {
             EditForm(title: "New job", fields: JobDetailView.fields, original: Self.newJob) { body, key in
                 _ = try await model.client?.createJob(body, idempotencyKey: key)
@@ -129,7 +145,8 @@ struct ProfileView: View {
         do {
             async let p = client.profile()
             async let j = client.jobs()
-            (profile, jobs) = try await (p, j)
+            async let s = client.unassignedPayStubs()
+            (profile, jobs, jobless) = try await (p, j, s)
             error = nil
         } catch {
             self.error = errorMessage(error)
@@ -151,6 +168,11 @@ struct ProfileView: View {
         ].compactMap { $0 }
         return parts.isEmpty ? "Not filled in" : parts.joined(separator: " · ")
     }
+}
+
+extension EnvironmentValues {
+    /// Set while a read or an edit is open under the profile gate.
+    @Entry var profileDrafting: Binding<Bool> = .constant(false)
 }
 
 extension View {

@@ -27,6 +27,8 @@ struct RedactionPreview: View {
     @State private var reading = false
     @State private var error: String?
     @State private var canRetry = false
+    /// pages with nothing hidden on a document that normally prints an SSN or EIN, asked about before sending
+    @State private var unchecked: [Int] = []
     @GestureState private var drag: (start: CGPoint, end: CGPoint)?
 
     var body: some View {
@@ -59,6 +61,9 @@ struct RedactionPreview: View {
                     }
                     Text("Black boxes hide ID and account numbers. Drag across anything else you want hidden.")
                         .textStyle(.caption, color: Palette.secondaryText)
+                    if !Redaction.pagesToCheck(kind: kind, boxCounts: [pages[index].boxes.count]).isEmpty {
+                        Text("Nothing hidden on this page — check it before sending.").textStyle(.caption, color: Palette.loss)
+                    }
                     if dropped > 0 {
                         Text("Only the first \(PageBudget.maxPages) pages are read.").textStyle(.caption, color: Palette.secondaryText)
                     }
@@ -81,11 +86,18 @@ struct RedactionPreview: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(reading) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Send") { Task { await send() } }.disabled(pages.isEmpty || reading)
+                    Button("Send") { confirmSend() }.disabled(pages.isEmpty || reading)
                 }
             }
         }
         .interactiveDismissDisabled(reading)
+        .alert("Nothing hidden on \(unchecked.count == 1 ? "page" : "pages") \(unchecked.map(String.init).formatted(.list(type: .and)))",
+               isPresented: Binding(get: { !unchecked.isEmpty }, set: { if !$0 { unchecked = [] } })) {
+            Button("Send anyway") { Task { await send() } }
+            Button("Check", role: .cancel) {}
+        } message: {
+            Text("A \(kind.title.lowercased()) usually shows an ID number. Check before sending.")
+        }
         .task { await prepare() }
     }
 
@@ -157,13 +169,25 @@ struct RedactionPreview: View {
         request.recognitionLevel = .accurate
         request.usesLanguageCorrection = false
         do { try VNImageRequestHandler(cgImage: cg).perform([request]) } catch { return nil }
+        // Vision's origin is bottom left
+        func upright(_ b: CGRect) -> Box { Box(x: b.minX, y: 1 - b.minY - b.height, w: b.width, h: b.height) }
+        var texts: [VNRecognizedText] = []
         let lines = (request.results ?? []).compactMap { o -> TextLine? in
-            guard let text = o.topCandidates(1).first?.string else { return nil }
-            let b = o.boundingBox
-            // Vision's origin is bottom left
-            return TextLine(text: text, box: Box(x: b.minX, y: 1 - b.minY - b.height, w: b.width, h: b.height))
+            guard let top = o.topCandidates(1).first else { return nil }
+            texts.append(top)
+            return TextLine(text: top.string, box: upright(o.boundingBox))
         }
-        return RedactedPage(image: image, found: Redaction.boxes(lines))
+        // each match where Vision measured its glyphs; Redaction boxes the whole line when it can't say
+        return RedactedPage(image: image, found: Redaction.boxes(lines) { i, r in
+            let s = texts[i].string
+            let range = String.Index(utf16Offset: r.lowerBound, in: s)..<String.Index(utf16Offset: r.upperBound, in: s)
+            return (try? texts[i].boundingBox(for: range)).map { upright($0.boundingBox) }
+        })
+    }
+
+    private func confirmSend() {
+        unchecked = Redaction.pagesToCheck(kind: kind, boxCounts: pages.map(\.boxes.count))
+        if unchecked.isEmpty { Task { await send() } }
     }
 
     nonisolated private static func blackedOut(_ page: RedactedPage) -> UIImage {

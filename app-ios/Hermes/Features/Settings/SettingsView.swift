@@ -179,16 +179,9 @@ struct SettingsView: View {
         } catch {}
     }
 
-    /// Only an older server (404) hides the row; the reply itself is dropped, so nothing shows before Face ID.
+    /// Only an older server hides the row; the probe carries no profile data, which loads behind Face ID.
     private func checkProfile() async {
-        do {
-            _ = try await model.client?.profile()
-            hasProfile = true
-        } catch ClientError.api(404, _) {
-            hasProfile = false
-        } catch {
-            hasProfile = true
-        }
+        hasProfile = (try? await model.client?.hasProfile()) ?? true
     }
 
     private func loadBanks() async {

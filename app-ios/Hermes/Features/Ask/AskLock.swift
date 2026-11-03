@@ -2,6 +2,7 @@ import SwiftUI
 
 /// While balances are hidden, Ask (chat titles included) stays covered until Face ID, so hiding still guards a glance at the screen.
 /// Unlocking here shows nothing elsewhere; it lasts until leaving the tab, the background, or balances being hidden again.
+/// The financial profile has its own unlock (Face ID even with balances shown), dropped on the same relock: one per Ask visit.
 struct AskLock<Content: View>: View {
     @Environment(AppModel.self) private var model
     @Environment(AppLock.self) private var lock
@@ -9,6 +10,7 @@ struct AskLock<Content: View>: View {
     @Environment(\.selectedTab) private var selectedTab
     @AppStorage("hideBalances") private var hideBalances = true
     @State private var unlocked = false
+    @State private var profileUnlocked = false
     @State private var unlocking = false
     @State private var error: String?
     /// Bumped by every relock, so a Face ID success that lands after one doesn't unlock.
@@ -24,6 +26,7 @@ struct AskLock<Content: View>: View {
             .disabled(covered)
             .accessibilityHidden(covered)
             .environment(\.askCovered, covered)
+            .environment(\.askProfileUnlocked, $profileUnlocked)
             .overlay {
                 if covered {
                     VStack(spacing: Space.l) {
@@ -47,6 +50,7 @@ struct AskLock<Content: View>: View {
     private func relock() {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         unlocked = false
+        profileUnlocked = false
         error = nil
         generation += 1
     }
@@ -70,4 +74,6 @@ struct AskLock<Content: View>: View {
 extension EnvironmentValues {
     /// The navigation bar is UIKit's and VoiceOver reads it past `accessibilityHidden`, so a covered screen hides it.
     @Entry var askCovered = false
+    /// Face ID passed for the financial profile this Ask visit: questions may use it and answers that did show.
+    @Entry var askProfileUnlocked: Binding<Bool> = .constant(false)
 }

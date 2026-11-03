@@ -269,7 +269,8 @@ private let points: JSONValue = .array([.object(["label": .string("2026-09"), "v
 }
 
 @Test func chatReadsAndSendsCarryTheProfileUnlock() async throws {
-    let transport = FakeTransport([.success(HTTPResponse(status: 200, body: try fixture("chat-detail"))), .success(HTTPResponse(status: 200, body: try fixture("chat-detail")))])
+    let detail = try fixture("chat-detail")
+    let transport = FakeTransport([.success(HTTPResponse(status: 200, body: detail)), .success(HTTPResponse(status: 200, body: detail))])
     let client = APIClient(baseURL: testBase, token: "t", transport: transport)
     _ = try await client.chat(id: "chat-1")
     _ = try await client.chat(id: "chat-1", profileUnlocked: true)

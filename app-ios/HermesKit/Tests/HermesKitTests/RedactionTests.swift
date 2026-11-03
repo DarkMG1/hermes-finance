@@ -75,7 +75,7 @@ private func boxed(_ text: String) -> Bool { !Redaction.boxes([line(text)]).isEm
 }
 
 @Test func identifiersReadWithLettersForDigitsAreBoxed() {
-    for text in ["000-OO-0000", "SSN 0O0-00-000O", "12-345l789", "EIN 00-OOOOOOO".replacingOccurrences(of: "OOOOOOO", with: "00000O0"), "S000-00-0000", "B00 00 0000"] {
+    for text in ["000-OO-0000", "SSN 0O0-00-000O", "12-345l789", "EIN 00-00000O0", "S000-00-0000", "B00 00 0000"] {
         #expect(boxed(text), "\(text)")
     }
     for text in ["OOO-OO-OOOO", "SOLID BOSS", "Ollie Sullivan", "ISO 9001", "Box 12 code DD 0O"] { #expect(!boxed(text), "\(text)") }

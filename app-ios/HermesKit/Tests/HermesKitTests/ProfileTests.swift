@@ -80,7 +80,8 @@ import Testing
     let client = APIClient(baseURL: testBase, token: "t", transport: transport)
     _ = try await client.linkPayStub(id: "stub-1", transactionIds: ["txn-2", "txn-3"], idempotencyKey: "k-1")
     _ = try await client.linkPayStub(id: "stub-1", transactionIds: [], idempotencyKey: "k-2")
-    #expect(transport.requests.map { String(data: $0.body ?? Data(), encoding: .utf8) } == [#"{"transactionIds":["txn-2","txn-3"]}"#, #"{"transactionIds":[]}"#])
+    #expect(transport.requests.map { String(data: $0.body ?? Data(), encoding: .utf8) }
+        == [#"{"transactionIds":["txn-2","txn-3"]}"#, #"{"transactionIds":[]}"#])
     #expect(transport.requests.map(\.url.path) == ["/v1/pay-stubs/stub-1/link", "/v1/pay-stubs/stub-1/link"])
 }
 

@@ -10,7 +10,6 @@ struct JobDetailView: View {
     @State private var error: String?
     @State private var editing = false
     @State private var addingGrant = false
-    @State private var linking: PayStub?
 
     var body: some View {
         List {
@@ -40,28 +39,7 @@ struct JobDetailView: View {
                     }
                 }
                 if !detail.stubs.isEmpty {
-                    Section("Pay stubs") {
-                        ForEach(detail.stubs) { stub in
-                            HStack {
-                                EditRow(title: "Pay stub", fields: ProfileDraftForm.stubFields, original: stub.fields,
-                                        row: ListRow(title: stub.payDate.map(DayText.display) ?? "Pay stub",
-                                                     subtitle: [stub.netCents.map { "Net \(Money.format($0))" }, stub.transactionId.map { _ in "Linked" }]
-                                                        .compactMap { $0 }.joined(separator: " · "))) { body, key in
-                                    _ = try await model.client?.patchPayStub(id: stub.id, body: body, from: stub.fields, idempotencyKey: key)
-                                    await load()
-                                }
-                                if stub.transactionId != nil {
-                                    UnlinkButton(stub: stub) { await load() }
-                                } else {
-                                    Button("Link…") { linking = stub }.buttonStyle(.borderless)
-                                }
-                            }
-                            .deleteSwipe("Delete this pay stub?") { client, key in
-                                try await client.deletePayStub(id: stub.id, idempotencyKey: key)
-                                await load()
-                            }
-                        }
-                    }
+                    Section("Pay stubs") { ForEach(detail.stubs) { PayStubRow(stub: $0) { await load() } } }
                 }
                 if !detail.forms.isEmpty {
                     Section("W-2s and 1099s") { ForEach(detail.forms) { TaxFormRow(form: $0) { await load() } } }
@@ -92,7 +70,6 @@ struct JobDetailView: View {
                 await load()
             }
         }
-        .sheet(item: $linking, onDismiss: { Task { await load() } }, content: { PayStubLinkSheet(stub: $0) })
         .task { await load() }
         .refreshable { await load() }
     }
@@ -167,7 +144,38 @@ struct TaxFormRow: View {
     }
 }
 
-/// Unlinks a stub's deposit after a confirmation.
+/// A pay stub: tap to edit, link or unlink its deposits, swipe to delete. `fields` may add a job choice.
+struct PayStubRow: View {
+    @Environment(AppModel.self) private var model
+    let stub: PayStub
+    var fields = ProfileDraftForm.stubFields
+    let onChange: () async -> Void
+    @State private var linking = false
+
+    var body: some View {
+        HStack {
+            EditRow(title: "Pay stub", fields: fields, original: stub.fields, check: \.balanceProblem,
+                    row: ListRow(title: stub.payDate.map(DayText.display) ?? "Pay stub",
+                                 subtitle: [stub.netCents.map { "Net \(Money.format($0))" }, stub.transactionIds.isEmpty ? nil : "Linked"]
+                                    .compactMap { $0 }.joined(separator: " · "))) { body, key in
+                _ = try await model.client?.patchPayStub(id: stub.id, body: body, from: stub.fields, idempotencyKey: key)
+                await onChange()
+            }
+            if stub.transactionIds.isEmpty {
+                Button("Link…") { linking = true }.buttonStyle(.borderless)
+            } else {
+                UnlinkButton(stub: stub, onUnlinked: onChange)
+            }
+        }
+        .deleteSwipe("Delete this pay stub?") { client, key in
+            try await client.deletePayStub(id: stub.id, idempotencyKey: key)
+            await onChange()
+        }
+        .sheet(isPresented: $linking, onDismiss: { Task { await onChange() } }, content: { PayStubLinkSheet(stub: stub) })
+    }
+}
+
+/// Unlinks a stub's deposits after a confirmation.
 private struct UnlinkButton: View {
     @Environment(AppModel.self) private var model
     let stub: PayStub
@@ -179,7 +187,8 @@ private struct UnlinkButton: View {
     var body: some View {
         Button("Unlink") { confirming = true }
             .buttonStyle(.borderless)
-            .confirmationDialog("Unlink this paycheck's deposit?", isPresented: $confirming, titleVisibility: .visible) {
+            .confirmationDialog(stub.transactionIds.count > 1 ? "Unlink this paycheck's deposits?" : "Unlink this paycheck's deposit?",
+                                isPresented: $confirming, titleVisibility: .visible) {
                 Button("Unlink", role: .destructive) { Task { await unlink() } }
             }
             .alert(error ?? "", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {}
@@ -188,7 +197,7 @@ private struct UnlinkButton: View {
     private func unlink() async {
         guard let client = model.client else { return }
         do {
-            _ = try await client.linkPayStub(id: stub.id, transactionId: nil, idempotencyKey: writes.key)
+            _ = try await client.linkPayStub(id: stub.id, transactionIds: [], idempotencyKey: writes.key)
             writes.didSucceed()
             await onUnlinked()
         } catch {
