@@ -11,6 +11,7 @@
     "medicareCents": null,
     "retirementCents": null,
     "otherDeductionsCents": null,
+    "otherPayCents": null,
     "netCents": 370000,
     "ytdGrossCents": null,
     "employer": "SYNTHETIC EMPLOYER"

@@ -10,8 +10,8 @@ export function parseBody<T>(schema: z.ZodType<T>, data: unknown): T {
 }
 
 /** Owner-entered dates run from 2000-01-01 to a year after the owner's today (`localDay`); bank dates and filters are never bounded. */
-export function assertOwnerDate(date: string | null | undefined, today: string): void {
+export function assertOwnerDate(date: string | null | undefined, today: string, field = 'date'): void {
   if (date && (date < '2000-01-01' || date > `${Number(today.slice(0, 4)) + 1}${today.slice(4)}`)) {
-    throw new ApiError(400, 'INVALID_REQUEST', 'date: must be from 2000-01-01 to a year from today', 'date');
+    throw new ApiError(400, 'INVALID_REQUEST', `${field}: must be from 2000-01-01 to a year from today`, field);
   }
 }

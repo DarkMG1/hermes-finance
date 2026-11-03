@@ -9,10 +9,19 @@ import { jsonSchema } from './chat/tools.ts';
 export type ProfileReadOutput = ProfileReadResult & { model: string };
 export interface ProfileReader { read(kind: ProfileKind, pages: Buffer[]): Promise<ProfileReadOutput> }
 
-// SSN/ITIN or EIN shaped; the app redacts the photo first, this catches what Claude still read
-// separators: hyphen, en or em dash, dot, or a run of spaces; an SSN has both or neither, so a ZIP+4 (00000-0000) is kept
-const IDENTIFIER = /\b\d{3}(?:(?:[-\u2013\u2014.]| +)\d{2}(?:[-\u2013\u2014.]| +)|\d{2})\d{4}\b|\b\d{2}(?:[-\u2013\u2014.]| +)\d{7}\b/;
-export const scrubIdentifiers = <T>(v: T): T => (typeof v === 'string' ? (IDENTIFIER.test(v) ? null : v)
+// The app's Redaction rules, so what the photo boxes the text blanks: the app redacts the photo first, this catches what Claude still read.
+// SSN/ITIN or EIN shaped, bounded by digits only (a label glued on, "SSN000-00-0000", still counts); separators: hyphen, en or em dash,
+// dot, or a run of spaces; an SSN has both or neither, so a ZIP+4 (00000-0000) is kept; a `$` before or `.digit` after makes it an amount.
+const SEP = '(?:[-\u2013\u2014.]| +)';
+const IDENTIFIER = new RegExp(`(?<![\\d$])(?:\\d{3}(?:${SEP}\\d{2}${SEP}|\\d{2})\\d{4}|\\d{2}${SEP}\\d{7})(?!\\d|\\.\\d)`);
+// account and routing numbers: with one of these words, 8 to 17 digits in a run or in groups split by spaces or hyphens (not a date)
+const KEYWORD = /\b(?:accounts?|acct|routing|aba|rtn)\b/i;
+const RUN = /(?<![\d$]|\d[.,])\d{8,17}(?!\d|[.,]\d)/;
+const GROUPS = /(?<![\d$]|\d[.,])\d{3,}(?:[ -]\d{2,}){1,4}(?!\d|[.,]\d)/g;
+const DATE = /^\d{4}[- ]\d{1,2}[- ]\d{1,2}$/;
+const grouped = (m: string) => { const n = m.replace(/\D/g, '').length; return n >= 8 && n <= 17 && !DATE.test(m); };
+const sensitive = (s: string) => IDENTIFIER.test(s) || (KEYWORD.test(s) && (RUN.test(s) || [...s.matchAll(GROUPS)].some((m) => grouped(m[0]))));
+export const scrubIdentifiers = <T>(v: T): T => (typeof v === 'string' ? (sensitive(v) ? null : v)
   : Array.isArray(v) ? v.map(scrubIdentifiers)
     : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scrubIdentifiers(x)])) : v) as T;
 
@@ -25,7 +34,7 @@ export async function readProfile(deps: Deps, kind: ProfileKind, pages: Buffer[]
   active.add(deps.db);
   try {
     const r = await deps.profileReader.read(kind, pages);
-    return { kind: r.kind, draft: scrubIdentifiers(r.draft), uncertain: r.uncertain.filter((k) => k in r.draft) } as ProfileReadResult;
+    return { kind: r.kind, draft: scrubIdentifiers(r.draft), uncertain: r.uncertain.filter((k) => Object.hasOwn(r.draft, k)) } as ProfileReadResult;
   } catch (e) {
     const code = e instanceof ReaderError ? e.code : 'UNKNOWN';
     if (code === 'AI_CREDITS_EXHAUSTED') throw new ApiError(402, 'AI_CREDITS_EXHAUSTED', 'the Anthropic API keys are out of credit');
@@ -40,7 +49,9 @@ export async function readProfile(deps: Deps, kind: ProfileKind, pages: Buffer[]
 const KINDS: Record<ProfileKind, [label: string, hints: string]> = {
   tax_return: ['tax return', "jurisdiction: 'federal' for a federal return, else the 2-letter state code. refundCents: positive for a refund, negative when tax is owed."],
   tax_form: ['W-2 or 1099 form', 'kind: w2 for a W-2, else the 1099 type. payer: the employer or payer name. amountCents: W-2 box 1 wages, else box 1 or the total.'],
-  pay_stub: ['pay stub', 'Amounts are for this pay period; ytdGrossCents is the year-to-date gross. employer: the employer name.'],
+  pay_stub: ['pay stub', 'Amounts are for this pay period; ytdGrossCents is the year-to-date gross. otherDeductionsCents: the sum of every deduction and tax '
+    + 'without its own field (local tax, disability, insurance, HSA and the rest). otherPayCents: after-tax additions such as reimbursements. '
+    + 'Gross minus all deductions plus otherPayCents must equal netCents. employer: the employer name.'],
   offer: ['offer letter', 'baseCents: the annual base salary. bonusTargetPct: a percent (15 for 15%). grants: each equity grant; vestMonths is the whole vesting length, vestEveryMonths the interval after the cliff.'],
 };
 

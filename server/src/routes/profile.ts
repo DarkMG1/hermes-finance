@@ -7,8 +7,8 @@ import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { readProfile } from '../profile-reader.ts';
-import { getForm, getGrant, getJob, getProfile, getReturn, getStub, listJobs, putProfile, stubMatches, taxYears } from '../profile.ts';
-import { parseBody } from '../validate.ts';
+import { getForm, getGrant, getJob, getProfile, getReturn, getStub, linkable, listJobs, putProfile, stubMatches, taxYears, unassignedStubs } from '../profile.ts';
+import { assertOwnerDate, parseBody } from '../validate.ts';
 import { isJpeg, MAX_BYTES } from './receipts.ts';
 
 const JOB_COLS = ['employer', 'title', 'status', 'start_date', 'end_date', 'base_cents', 'bonus_target_pct', 'signing_bonus_cents', 'relocation_cents', 'note'];
@@ -20,13 +20,13 @@ const assign = (cols: string[]) => cols.map((c) => `${c} = ?`).join(', ');
 const pick = (o: object, keys: string[]) => Object.fromEntries(keys.map((k) => [k, (o as Record<string, unknown>)[k]]));
 const notFound = (what: string) => new ApiError(404, 'NOT_FOUND', `${what} not found`);
 const STUB_COLS = ['job_id', 'pay_date', 'period_start', 'period_end', 'gross_cents', 'federal_cents', 'state_cents', 'social_security_cents', 'medicare_cents',
-  'retirement_cents', 'other_deductions_cents', 'net_cents', 'ytd_gross_cents'];
+  'retirement_cents', 'other_deductions_cents', 'other_pay_cents', 'net_cents', 'ytd_gross_cents'];
 const FORM_COLS = ['job_id', 'year', 'kind', 'payer', 'amount_cents', 'federal_withheld_cents', 'state', 'state_withheld_cents', 'ss_wages_cents', 'medicare_wages_cents'];
 const RETURN_COLS = ['year', 'jurisdiction', 'filing_status', 'wages_cents', 'total_income_cents', 'agi_cents', 'deduction_kind', 'deduction_cents',
   'taxable_income_cents', 'total_tax_cents', 'credits_cents', 'withholding_cents', 'refund_cents', 'capital_gains_cents', 'capital_loss_carryover_cents'];
-// left-out deduction lines are 0
+// left-out deduction lines and other pay are 0
 const stubValues = (s: PayStubBody) => [s.jobId ?? null, s.payDate, s.periodStart ?? null, s.periodEnd ?? null, s.grossCents, s.federalCents ?? 0, s.stateCents ?? 0,
-  s.socialSecurityCents ?? 0, s.medicareCents ?? 0, s.retirementCents ?? 0, s.otherDeductionsCents ?? 0, s.netCents, s.ytdGrossCents ?? null];
+  s.socialSecurityCents ?? 0, s.medicareCents ?? 0, s.retirementCents ?? 0, s.otherDeductionsCents ?? 0, s.otherPayCents ?? 0, s.netCents, s.ytdGrossCents ?? null];
 const formValues = (f: TaxFormBody) => [f.jobId ?? null, f.year, f.kind, f.payer, f.amountCents, f.federalWithheldCents ?? null, f.state ?? null,
   f.stateWithheldCents ?? null, f.ssWagesCents ?? null, f.medicareWagesCents ?? null];
 const returnValues = (t: TaxReturnBody) => [t.year, t.jurisdiction, t.filingStatus ?? null, t.wagesCents ?? null, t.totalIncomeCents ?? null, t.agiCents ?? null,
@@ -45,6 +45,10 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   const assertJob = (id: string | null | undefined) => {
     if (id && !db.prepare('SELECT 1 FROM jobs WHERE id = ?').get(id)) throw new ApiError(400, 'INVALID_REQUEST', 'jobId: unknown job', 'jobId');
   };
+  /** owner-entered dates are bounded like every other one in Hermes */
+  const assertDates = (o: object, keys: string[]) => keys.forEach((k) => assertOwnerDate((o as Record<string, string | null | undefined>)[k], today(), k));
+  const JOB_DATES = ['startDate', 'endDate'];
+  const STUB_DATES = ['payDate', 'periodStart', 'periodEnd'];
   const assertYear = (year: number) => {
     if (year > Number(today().slice(0, 4)) + 1) throw new ApiError(400, 'INVALID_REQUEST', 'year: must be at most next year', 'year');
   };
@@ -62,6 +66,8 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   };
 
   app.get('/v1/profile', async () => getProfile(db));
+  // lets Settings show its row without loading any profile data before Face ID
+  app.get('/v1/profile/exists', async () => ({ ok: true }));
   // no idempotency key: a read stores nothing
   app.post('/v1/profile/read', { bodyLimit: MAX_BYTES }, async (req) => {
     const body = parseBody(ProfileReadBody, req.body);
@@ -83,6 +89,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
 
   app.post('/v1/jobs', async (req, reply) => {
     const body = parseBody(CreateJobBody, req.body);
+    assertDates(body, JOB_DATES);
     const r = idempotentWrite(deps, req, () => {
       const id = randomUUID();
       const now = deps.now().toISOString();
@@ -98,6 +105,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
     const r = idempotentWrite(deps, req, () => {
       const current = job(req.params.id);
       const merged = parseBody(CreateJobBody, { ...pick(current, Object.keys(CreateJobBody.shape)), ...patch });
+      assertDates(merged, JOB_DATES);
       db.prepare(`UPDATE jobs SET ${assign(JOB_COLS)}, updated_at = ? WHERE id = ?`).run(...jobValues(merged), deps.now().toISOString(), current.id);
       return { status: 200, body: job(current.id) };
     });
@@ -114,6 +122,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
 
   app.post<{ Params: { id: string } }>('/v1/jobs/:id/grants', async (req, reply) => {
     const body = parseBody(GrantBody, req.body);
+    assertDates(body, ['grantDate']);
     const r = idempotentWrite(deps, req, () => {
       job(req.params.id);
       const id = randomUUID();
@@ -131,6 +140,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       if (!current) throw notFound('grant');
       const { id, jobId } = current;
       const merged = parseBody(GrantBody, { ...pick(current, Object.keys(GrantBody.shape)), ...(patch.kind === 'rsu' ? { strikeCents: null } : {}), ...patch });
+      assertDates(merged, ['grantDate']);
       db.prepare(`UPDATE equity_grants SET ${assign(GRANT_COLS)} WHERE id = ?`).run(...grantValues(merged), id);
       return { status: 200, body: getGrant(db, jobId, id) };
     });
@@ -147,6 +157,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
 
   app.post('/v1/pay-stubs', async (req, reply) => {
     const body = parseBody(PayStubBody, req.body);
+    assertDates(body, STUB_DATES);
     const r = idempotentWrite(deps, req, () => {
       assertJob(body.jobId);
       const id = randomUUID();
@@ -156,41 +167,43 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
     return reply.code(r.status).send(r.body);
   });
 
-  // an edit to net or pay date that the linked deposit no longer matches drops the link
+  // an edit to net or pay date that the linked deposits no longer match drops the links
   app.patch<{ Params: { id: string } }>('/v1/pay-stubs/:id', async (req, reply) => {
     const patch = parseBody(PatchPayStubBody, req.body);
     const r = idempotentWrite(deps, req, () => {
       const current = stub(req.params.id);
       const merged = parseBody(PayStubBody, { ...pick(current, Object.keys(PayStubBody.shape)), ...patch });
+      assertDates(merged, STUB_DATES);
       assertJob(merged.jobId);
       db.prepare(`UPDATE pay_stubs SET ${assign(STUB_COLS)} WHERE id = ?`).run(...stubValues(merged), current.id);
       const s = stub(current.id);
-      if (s.transactionId && (patch.netCents !== undefined || patch.payDate !== undefined) && !stubMatches(db, s, today()).some((t) => t.id === s.transactionId)) {
-        db.prepare('UPDATE pay_stubs SET transaction_id = NULL WHERE id = ?').run(s.id);
+      if (s.transactionIds.length && (patch.netCents !== undefined || patch.payDate !== undefined) && !linkable(db, s, s.transactionIds)) {
+        db.prepare('DELETE FROM pay_stub_deposits WHERE stub_id = ?').run(s.id);
       }
       return { status: 200, body: stub(s.id) };
     });
     return reply.code(r.status).send(r.body);
   });
 
+  app.get('/v1/pay-stubs/unassigned', async () => unassignedStubs(db));
   app.get<{ Params: { id: string } }>('/v1/pay-stubs/:id', async (req) => stub(req.params.id));
   app.delete('/v1/pay-stubs/:id', del('pay_stubs', 'pay stub'));
   app.get<{ Params: { id: string } }>('/v1/pay-stubs/:id/matches', async (req) => stubMatches(db, stub(req.params.id), today()));
 
   app.put<{ Params: { id: string } }>('/v1/pay-stubs/:id/link', async (req, reply) => {
-    const { transactionId } = parseBody(LinkPayStubBody, req.body);
+    const { transactionIds: ids } = parseBody(LinkPayStubBody, req.body);
     const r = idempotentWrite(deps, req, () => {
       const s = stub(req.params.id);
-      if (transactionId && !db.prepare('SELECT 1 FROM transactions WHERE id = ? AND removed_at IS NULL').get(transactionId)) {
-        throw new ApiError(400, 'INVALID_REQUEST', 'transactionId: not a matching deposit', 'transactionId');
+      if (ids.some((id) => db.prepare(`SELECT 1 FROM pay_stub_deposits d JOIN transactions t ON t.id = d.transaction_id AND t.removed_at IS NULL
+        WHERE d.transaction_id = ? AND d.stub_id <> ?`).get(id, s.id))) {
+        throw new ApiError(409, 'ALREADY_LINKED', 'a deposit is linked to another pay stub');
       }
-      if (transactionId && db.prepare('SELECT 1 FROM pay_stubs WHERE transaction_id = ? AND id <> ?').get(transactionId, s.id)) {
-        throw new ApiError(409, 'ALREADY_LINKED', 'that deposit is linked to another pay stub');
+      if (ids.length && !linkable(db, s, ids)) {
+        throw new ApiError(400, 'INVALID_REQUEST', 'transactionIds: not deposits that add up to the net', 'transactionIds');
       }
-      if (transactionId && !stubMatches(db, s, today()).some((t) => t.id === transactionId)) {
-        throw new ApiError(400, 'INVALID_REQUEST', 'transactionId: not a matching deposit', 'transactionId');
-      }
-      db.prepare('UPDATE pay_stubs SET transaction_id = ? WHERE id = ?').run(transactionId, s.id);
+      db.prepare('DELETE FROM pay_stub_deposits WHERE stub_id = ?').run(s.id);
+      const add = db.prepare('INSERT INTO pay_stub_deposits (stub_id, transaction_id) VALUES (?, ?)');
+      for (const id of ids) add.run(s.id, id);
       return { status: 200, body: stub(s.id) };
     });
     return reply.code(r.status).send(r.body);

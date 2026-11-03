@@ -103,6 +103,20 @@ test('scrubIdentifiers blanks SSN, ITIN and EIN shaped strings anywhere and keep
   for (const s of ['$1,234.56', '000.000.0000', '000-000-0000', '2026.03.14', '00000-0000']) assert.equal(scrubIdentifiers(s), s, s);
 });
 
+test("scrubIdentifiers follows the app's rules: digits bound an identifier, and account or routing numbers go with their word", () => {
+  for (const s of ['SSN000-00-0000', 'EIN00-0000000', 'ID000000000', 'x000-00-0000y', 'Account 00001234567', 'Routing 000000000', 'acct# 1234 5678 9012',
+    'Acct 1234-5678-90', 'ABA:000000000', 'Direct deposit account 0000 1234 5678.']) assert.equal(scrubIdentifiers(s), null, s);
+  for (const s of ['$000000000', '000000000.00', '$00-0000000', 'Account ending in 1234', 'Account opened 2026-04-15', '00001234567 transfers',
+    'Account total $00001234567.00', 'Accounting 00001234567', 'Synthetic City, ST 00000-0000', 'Phone 1234 5678 9012']) assert.equal(scrubIdentifiers(s), s, s);
+});
+
+test('uncertain keeps only the draft\'s own field names', async () => {
+  const { read, profileReader } = setup();
+  profileReader.next = { kind: 'tax_form', model: 'm', uncertain: ['constructor', 'toString', '__proto__', 'hasOwnProperty', 'payer'],
+    draft: ProfileDrafts.tax_form.parse({ payer: 'SYNTHETIC EMPLOYER' }) };
+  assert.deepEqual((await read({ kind: 'tax_form', pages: [PAGE] })).json().uncertain, ['payer']);
+});
+
 const makeReader = (fetchFn: typeof fetch) => {
   const { deps } = makeTestDeps();
   return { deps, reader: createAnthropicProfileReader(createClaude(deps, fetchFn)!, 'claude-sonnet-5-5') };
@@ -141,6 +155,8 @@ test('the Anthropic reader sends every page and one tool per kind, without forci
       [12000000, 20, 400, null, 19]);
     // a value that doesn't fit becomes null for the owner to fill in
     if (r.kind === 'pay_stub') assert.deepEqual([r.draft.grossCents, r.draft.netCents, r.draft.employer], [420000, null, 'SYNTHETIC EMPLOYER']);
+    // the stub balances only when every other deduction sums into one field
+    if (kind === 'pay_stub') assert.match(content[2]!.text!, /otherDeductionsCents: the sum of every deduction and tax without its own field.*Gross minus all deductions plus otherPayCents must equal netCents/s);
     if (r.kind === 'tax_return') assert.deepEqual([r.draft.refundCents, r.draft.agiCents], [-5000, null]);
   }
 });

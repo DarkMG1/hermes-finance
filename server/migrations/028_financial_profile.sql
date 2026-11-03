@@ -53,12 +53,19 @@ CREATE TABLE pay_stubs (
   medicare_cents INTEGER NOT NULL,
   retirement_cents INTEGER NOT NULL,
   other_deductions_cents INTEGER NOT NULL,
+  -- after-tax additions (reimbursements, stipends): gross - deductions + other pay = net
+  other_pay_cents INTEGER NOT NULL DEFAULT 0,
   net_cents INTEGER NOT NULL,
   ytd_gross_cents INTEGER,
-  transaction_id TEXT UNIQUE REFERENCES transactions(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL
 );
 CREATE INDEX pay_stubs_job ON pay_stubs(job_id);
+-- a paycheck split across accounts links each deposit; a deposit belongs to one stub
+CREATE TABLE pay_stub_deposits (
+  stub_id TEXT NOT NULL REFERENCES pay_stubs(id) ON DELETE CASCADE,
+  transaction_id TEXT NOT NULL UNIQUE REFERENCES transactions(id) ON DELETE CASCADE
+);
+CREATE INDEX pay_stub_deposits_stub ON pay_stub_deposits(stub_id);
 CREATE TABLE tax_forms (
   id TEXT PRIMARY KEY,
   job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
@@ -113,3 +120,5 @@ INSERT INTO ai_usage_new SELECT * FROM ai_usage;
 DROP TABLE ai_usage;
 ALTER TABLE ai_usage_new RENAME TO ai_usage;
 CREATE INDEX ai_usage_month ON ai_usage(month);
+-- a question asked while Ask's profile lock was on: its tools refused the profile data
+ALTER TABLE chat_messages ADD COLUMN profile_locked INTEGER NOT NULL DEFAULT 0 CHECK (profile_locked IN (0, 1));

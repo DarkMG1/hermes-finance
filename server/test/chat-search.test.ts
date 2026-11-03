@@ -160,3 +160,24 @@ test('search_chats without query lists recent chats newest first with their firs
   assert.deepEqual(recent({ from: localDay(new Date(APRIL)) }, { chatId: current }).map((r: { chatId: string }) => r.chatId), [april]);
   assert.equal(toolLabel('search_chats', {}), 'Past chats');
 });
+
+test('while the profile is locked, search_chats and read_chat leave out chats that hold profile data', () => {
+  const { deps, db, ask } = setup();
+  const plain = ask('Rent this year?', ['Rent was steady.']);
+  const chatId = createChat(db, MARCH).id;
+  addUserMessage(db, chatId, 'c-p', 'My salary this year?', MARCH);
+  saveAssistant(db, startAssistant(db, chatId, MARCH), [
+    { role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name: 'pay_stubs', input: {} }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: '{}', is_error: false }] },
+    ...say('Your salary this year is steady.'),
+  ], 'done', null);
+  const ids = (ctx?: { profileUnlocked: boolean }) =>
+    (JSON.parse(runTool(deps, 'search_chats', { query: 'year' }, ctx).content).results as { chatId: string }[]).map((r) => r.chatId);
+  assert.deepEqual([...new Set(ids())], [plain]);
+  assert.deepEqual(new Set(ids({ profileUnlocked: true })), new Set([plain, chatId]));
+  assert.deepEqual(JSON.parse(runTool(deps, 'search_chats', {}).content).results.map((r: { chatId: string }) => r.chatId), [plain], 'recent chats too');
+  const locked = runTool(deps, 'read_chat', { id: chatId });
+  assert.deepEqual([locked.isError, /financial profile is locked/.test(locked.content)], [true, true]);
+  assert.equal(runTool(deps, 'read_chat', { id: chatId }, { profileUnlocked: true }).isError, false);
+  assert.equal(runTool(deps, 'read_chat', { id: plain }).isError, false);
+});

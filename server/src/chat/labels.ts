@@ -5,6 +5,9 @@ const LABELS: Record<string, string> = {
   profile: 'About me', jobs: 'Jobs', pay_stubs: 'Pay stubs', tax_years: 'Tax years',
 };
 
+/** Tools that read the financial profile: behind Face ID in Ask. */
+export const PROFILE_TOOLS = new Set(['profile', 'jobs', 'pay_stubs', 'tax_years']);
+
 export function toolLabel(name: string, input: Record<string, unknown>): string {
   if (name === 'search_chats' && typeof input.query === 'string') return `${LABELS[name]} · ${input.query}`;
   const { from, to } = input;

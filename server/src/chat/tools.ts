@@ -11,13 +11,14 @@ import { getNetWorth } from '../networth.ts';
 import { localDay } from '../days.ts';
 import { getHoldingHistory, getInvestments } from '../investments.ts';
 import { getJob, getProfile, listJobs, payStubs, taxYears } from '../profile.ts';
-import { getChat, searchChats } from './store.ts';
+import { PROFILE_TOOLS } from './labels.ts';
+import { chatUsesProfile, getChat, searchChats } from './store.ts';
 
 export type ToolDef = { name: string; description: string; input_schema: Record<string, unknown> };
 export const RESULT_MAX = 20_000;
 
-/** What the tools know about the request: the conversation being answered. */
-export type ToolContext = { chatId?: string };
+/** What the tools know about the request: the conversation being answered, and whether the owner unlocked the financial profile for it. */
+export type ToolContext = { chatId?: string; profileUnlocked?: boolean };
 type Entry = { def: ToolDef; schema: z.ZodType; run: (deps: Deps, q: unknown, today: string, ctx: ToolContext) => unknown };
 
 export const jsonSchema = (s: z.ZodType): Record<string, unknown> => {
@@ -91,9 +92,10 @@ const ENTRIES = new Map<string, Entry>([
   ...[...MONEY, ...PROFILE].map(([name, e]): [string, Entry] => [name, { ...e, def: { ...e.def, description: `${e.def.description} ${CENTS}` } }]),
   entry('search_chats', "Searches the owner's own earlier conversations with you (questions and your answers) for messages containing every word of query, optionally between from and to; returns each match's chatId, title, date and a snippet with the words in [brackets]. Without query (e.g. for \"our last chat\"), lists the most recently active chats newest first, each with its first question as the snippet and that question's date (from and to then apply to that date).",
     z.object({ query: z.string().max(200).regex(/[\p{L}\p{N}]/u, 'query has no words to search for').optional(), from: Day, to: Day, limit: z.number().int().min(1).max(20).optional() }).strict(),
-    (d, q, _today, ctx) => searchChats(d.db, { ...q, limit: q.limit ?? 10 }, ctx.chatId)),
+    (d, q, _today, ctx) => searchChats(d.db, { ...q, limit: q.limit ?? 10 }, ctx.chatId, !ctx.profileUnlocked)),
   entry('read_chat', "One of the owner's own earlier conversations with you in full (id is a chatId from search_chats): each message's role, date and text.",
-    z.object({ id: z.string().min(1) }).strict(), (d, q) => {
+    z.object({ id: z.string().min(1) }).strict(), (d, q, _today, ctx) => {
+      if (!ctx.profileUnlocked && chatUsesProfile(d.db, q.id)) throw new ApiError(403, 'PROFILE_LOCKED', LOCKED);
       const chat = getChat(d.db, q.id);
       return chat && { id: chat.id, title: chat.title, createdAt: chat.createdAt,
         messages: chat.messages.map((m) => ({ role: m.role, date: localDay(new Date(m.createdAt)), text: clip(m.text) })) };
@@ -106,6 +108,7 @@ const ENTRIES = new Map<string, Entry>([
 ]);
 
 export const TOOLS: ToolDef[] = [...ENTRIES.values()].map((e) => e.def);
+const LOCKED = 'the financial profile is locked; ask the owner to unlock it with the lock button in Ask, then ask again';
 
 const ARRAY_KEYS = ['transactions', 'rows', 'items', 'points', 'holdings', 'history', 'messages', 'results', 'stubs'];
 const TEXT_KEYS = new Set(['notes', 'name', 'payee', 'bankDescription', 'merchantName', 'matchText']);
@@ -153,6 +156,7 @@ export function runTool(deps: Deps, name: string, input: unknown, ctx: ToolConte
   const fail = (error: string) => ({ content: JSON.stringify({ error }), isError: true });
   const e = ENTRIES.get(name);
   if (!e) return fail(`unknown tool ${name}`);
+  if (PROFILE_TOOLS.has(name) && !ctx.profileUnlocked) return fail(LOCKED);
   const parsed = e.schema.safeParse(input ?? {});
   if (!parsed.success) return fail(z.prettifyError(parsed.error));
   try {

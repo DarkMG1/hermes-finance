@@ -31,7 +31,7 @@ export function lookups(db: Db, rows: TxnRow[], member: ReturnType<typeof member
   }
   const receipts = new Set((db.prepare('SELECT transaction_id AS id FROM receipts WHERE transaction_id IN (SELECT value FROM json_each(?))')
     .all(ids) as { id: string }[]).map((r) => r.id));
-  const payStubs = new Map((db.prepare('SELECT transaction_id AS tid, id FROM pay_stubs WHERE transaction_id IN (SELECT value FROM json_each(?))')
+  const payStubs = new Map((db.prepare('SELECT transaction_id AS tid, stub_id AS id FROM pay_stub_deposits WHERE transaction_id IN (SELECT value FROM json_each(?))')
     .all(ids) as { tid: string; id: string }[]).map(({ tid, id }) => [tid, { id }]));
   // only unsplit person-tagged rows carry iou; one settle per person in the list
   const iou = new Map<string, Transaction['iou']>();

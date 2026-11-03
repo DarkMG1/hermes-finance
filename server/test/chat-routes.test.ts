@@ -288,3 +288,46 @@ test('no message text in logs', async () => {
   }
   assert.equal(lines.some((l) => l.includes('SYNTHETIC QUESTION TEXT') || l.includes('SYNTHETIC ANSWER TEXT')), false);
 });
+
+const profileRound = () => [start(), ...tool(0, 'tu1', 'profile', {}), ...end('tool_use')];
+const PROFILE_ANSWER = 'You file as single in CA.';
+
+test("Ask's profile lock: a locked question's profile tools refuse, and its date block says so", async () => {
+  const s = setup([profileRound(), answerRound('Unlock the profile to see that.')]);
+  const id = await s.create();
+  const ev = events((await s.send(id, 'a', 'What is my filing status?')).payload);
+  assert.deepEqual(ev.map((e) => e.type), ['tool', 'text', 'done']);
+  const question = (s.fake.requests[0]!.messages as { content: { text: string }[] }[])[0]!.content;
+  assert.match(question[1]!.text, /financial profile is locked for this question/);
+  const result = (s.fake.requests[1]!.messages as { content: { type: string; content: string; is_error: boolean }[] }[]).at(-1)!.content[0]!;
+  assert.deepEqual([result.is_error, /financial profile is locked/.test(result.content)], [true, true]);
+  assert.equal((await s.app.inject({ method: 'GET', url: `/v1/chats/${id}`, headers: AUTH })).json().messages[1].text, 'Unlock the profile to see that.',
+    'a refused profile call holds no profile data');
+});
+
+test("Ask's profile lock: an unlocked answer is hidden from a locked read, and the chat can't go on locked", async () => {
+  const s = setup([profileRound(), answerRound(PROFILE_ANSWER), answerRound('Still single.')]);
+  s.fake.reply = { content: [{ type: 'text', text: 'Filing status' }], stop_reason: 'end_turn' };
+  const id = await s.create();
+  const unlocked = (clientId: string, text: string, profileUnlocked?: boolean) =>
+    s.app.inject({ method: 'POST', url: `/v1/chats/${id}/messages`, headers: AUTH, payload: { clientId, text, ...(profileUnlocked === undefined ? {} : { profileUnlocked }) } });
+  const ev = events((await unlocked('a', 'What is my filing status?', true)).payload);
+  assert.deepEqual(ev.map((e) => e.type), ['tool', 'text', 'done']);
+  assert.doesNotMatch(JSON.stringify(s.fake.requests[0]!.messages), /locked/, 'no lock note on an unlocked question');
+  const result = (s.fake.requests[1]!.messages as { content: { is_error: boolean }[] }[]).at(-1)!.content[0]!;
+  assert.equal(result.is_error, false);
+  const read = async (q = '') => (await s.app.inject({ method: 'GET', url: `/v1/chats/${id}${q}`, headers: AUTH })).json().messages[1];
+  assert.deepEqual(await read(), { ...(await read('?profileUnlocked=1')), text: '', tools: [], profileLocked: true });
+  assert.equal((await read('?profileUnlocked=1')).text, PROFILE_ANSWER);
+  assert.equal((await read('?profileUnlocked=0')).text, '');
+  for (const flag of [undefined, false]) {
+    const r = await unlocked('b', 'And last year?', flag);
+    assert.deepEqual([r.statusCode, r.json().code], [403, 'PROFILE_LOCKED']);
+  }
+  assert.equal((await unlocked('a', 'What is my filing status?')).statusCode, 403, 'a resend of the answered question is refused too');
+  assert.equal(s.fake.requests.length, 2);
+  assert.deepEqual(events((await unlocked('b', 'And last year?', true)).payload).map((e) => e.type), ['text', 'done']);
+  await until(() => s.fake.messageRequests.length > 0);
+  const titled = JSON.stringify(s.fake.messageRequests[0]!.body.messages);
+  assert.ok(!titled.includes(PROFILE_ANSWER), 'a title never comes from an answer that read the profile');
+});

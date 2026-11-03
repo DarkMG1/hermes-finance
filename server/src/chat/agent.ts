@@ -1,7 +1,7 @@
 import type { Deps } from '../deps.ts';
 import { ClaudeError, toCents, type Claude, type Usage } from './anthropic.ts';
 import { TOOLS, runTool } from './tools.ts';
-import { toolLabel } from './labels.ts';
+import { PROFILE_TOOLS, toolLabel } from './labels.ts';
 import { replay, saveAssistant, type ApiMessage } from './store.ts';
 
 export type ChatEvent = { type: 'tool'; name: string; label: string; input: Record<string, unknown> } | { type: 'text'; text: string }
@@ -73,6 +73,9 @@ async function autoTitle(deps: Deps, claude: Claude, chatId: string, question: s
 export async function answer(deps: Deps, chatId: string, assistantId: string, emit: (e: ChatEvent) => void, signal: AbortSignal): Promise<void> {
   const model = deps.config.chatModel;
   const history = replay(deps.db, chatId, assistantId);
+  // the question being answered: asked with the financial profile unlocked or not
+  const profileUnlocked = deps.db.prepare(`SELECT profile_locked FROM chat_messages WHERE conversation_id = ? AND role = 'user'
+    AND seq < (SELECT seq FROM chat_messages WHERE id = ?) ORDER BY seq DESC LIMIT 1`).pluck().get(chatId, assistantId) === 0;
   const turn: ApiMessage[] = [];
   let content: Block[] = [];
   let cost = 0;
@@ -137,7 +140,7 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
           const name = b.name as string;
           const input = b.input as Record<string, unknown>;
           const res = name === 'show_chart' && charts >= MAX_CHARTS
-            ? { content: JSON.stringify({ error: `at most ${MAX_CHARTS} charts per answer` }), isError: true } : runTool(deps, name, input, { chatId });
+            ? { content: JSON.stringify({ error: `at most ${MAX_CHARTS} charts per answer` }), isError: true } : runTool(deps, name, input, { chatId, profileUnlocked });
           if (name === 'show_chart' && !res.isError) charts++;
           // a rejected chart showed nothing, so there's no line for it
           if (!(name === 'show_chart' && res.isError)) emit({ type: 'tool', name, label: toolLabel(name, input), input });
@@ -159,7 +162,10 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
   }
   saveAssistant(deps.db, assistantId, turn, 'done', null);
   emit({ type: 'done', messageId: assistantId, costCents: toCents(cost), status: 'done' });
-  const shown = turn.filter((m) => m.role === 'assistant').flatMap((m) => m.content as Block[]).filter((b) => b.type === 'text').map((b) => b.text as string).join('\n\n');
+  const answered = turn.filter((m) => m.role === 'assistant').flatMap((m) => m.content as Block[]);
+  // a title shows without Face ID, so it never comes from an answer that read the profile
+  const shown = answered.some((b) => b.type === 'tool_use' && PROFILE_TOOLS.has(b.name as string)) ? ''
+    : answered.filter((b) => b.type === 'text').map((b) => b.text as string).join('\n\n');
   // the question just answered: every question is its text then its date block
   void autoTitle(deps, deps.claude!, chatId, (history.at(-1)!.content as Block[]).at(-2)!.text as string, shown);
 }

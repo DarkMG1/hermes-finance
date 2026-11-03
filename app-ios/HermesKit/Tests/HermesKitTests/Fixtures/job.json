@@ -66,9 +66,12 @@
       "medicareCents": 6090,
       "retirementCents": 21000,
       "otherDeductionsCents": 1870,
+      "otherPayCents": 0,
       "netCents": 300000,
       "ytdGrossCents": 2520000,
-      "transactionId": "txn-2",
+      "transactionIds": [
+        "txn-2"
+      ],
       "createdAt": "seed"
     }
   ],

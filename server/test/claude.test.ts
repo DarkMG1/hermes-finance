@@ -247,11 +247,11 @@ test('stream(): the timeout is per idle gap, not on the whole answer; a stall ov
   assert.equal(await p, 'ABORTED');
 });
 
-test('the request timeout covers the wait for headers: chat 120 s, receipts 60 s', async (t) => {
+test('the request timeout covers the wait for headers: chat and profile reads 120 s, receipts 60 s', async (t) => {
   mock.timers.enable({ apis: ['setTimeout'] });
   t.after(() => mock.timers.reset());
   const hang = (init: RequestInit) => new Promise<Response>((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason)));
-  for (const [feature, ms] of [['chat', 120_000], ['receipt', 60_000]] as const) {
+  for (const [feature, ms] of [['chat', 120_000], ['profile', 120_000], ['receipt', 60_000]] as const) {
     const s = setup([hang]);
     let settled = false;
     const p = code(s.claude.messages(feature, BODY)).finally(() => { settled = true; });

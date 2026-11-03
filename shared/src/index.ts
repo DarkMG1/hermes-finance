@@ -438,11 +438,15 @@ export type ChatToolUse = z.infer<typeof ChatToolUse>;
 export const ChatMessage = z.object({
   id: Id, role: z.enum(['user', 'assistant']), text: z.string(), tools: z.array(ChatToolUse),
   status: z.enum(['streaming', 'done', 'failed', 'stopped']), errorCode: z.string().nullable(), createdAt: z.string(),
+  /** An answer that used financial profile data, read without the profile unlocked: its text and tools are left out until it is. */
+  profileLocked: z.boolean().optional(),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 export const ChatDetail = ChatSummary.extend({ messages: z.array(ChatMessage) });
 export type ChatDetail = z.infer<typeof ChatDetail>;
-export const SendChatBody = z.object({ clientId: z.string().min(1).max(200), text: z.string().trim().min(1).max(CHAT_TEXT_MAX) }).strict();
+/** profileUnlocked: the owner passed Face ID for the financial profile this Ask visit; without it the profile tools refuse, and a chat that
+ *  already holds profile data is 403 PROFILE_LOCKED. */
+export const SendChatBody = z.object({ clientId: z.string().min(1).max(200), text: z.string().trim().min(1).max(CHAT_TEXT_MAX), profileUnlocked: z.boolean().optional() }).strict();
 export type SendChatBody = z.infer<typeof SendChatBody>;
 export const AiUsage = z.object({ month: z.string(), costCents: Cents, backupActive: z.boolean() });
 export type AiUsage = z.infer<typeof AiUsage>;
@@ -505,16 +509,21 @@ export type VestEvent = z.infer<typeof VestEvent>;
 const PayStubFields = z.object({
   jobId: Id.nullable(), payDate: DateInput, periodStart: DateInput.nullable(), periodEnd: DateInput.nullable(),
   grossCents: Money, federalCents: Money, stateCents: Money, socialSecurityCents: Money, medicareCents: Money, retirementCents: Money,
-  otherDeductionsCents: Money, netCents: Money, ytdGrossCents: Money.nullable(),
+  otherDeductionsCents: Money,
+  /** after-tax additions (reimbursements, stipends) */
+  otherPayCents: Money, netCents: Money, ytdGrossCents: Money.nullable(),
 });
-export const PayStub = PayStubFields.extend({ id: Id, transactionId: Id.nullable(), createdAt: z.string() });
+/** transactionIds: the linked deposits Plaid still has, oldest first (a paycheck split across accounts has several). */
+export const PayStub = PayStubFields.extend({ id: Id, transactionIds: z.array(Id), createdAt: z.string() });
 export type PayStub = z.infer<typeof PayStub>;
-const STUB_PARTS = ['federalCents', 'stateCents', 'socialSecurityCents', 'medicareCents', 'retirementCents', 'otherDeductionsCents'] as const;
-/** Left-out deduction lines are 0; gross minus every line must equal net within a cent. PATCH checks the merged stub. */
+const STUB_PARTS = ['federalCents', 'stateCents', 'socialSecurityCents', 'medicareCents', 'retirementCents', 'otherDeductionsCents', 'otherPayCents'] as const;
+/** gross minus every deduction plus other pay */
+export const stubNet = (s: Partial<Record<(typeof STUB_PARTS)[number], number | null>> & { grossCents: number }) =>
+  STUB_PARTS.reduce((n, k) => (k === 'otherPayCents' ? n + (s[k] ?? 0) : n - (s[k] ?? 0)), s.grossCents);
+/** Left-out deduction lines and other pay are 0; gross minus every line plus other pay must equal net within a cent. PATCH checks the merged stub. */
 export const PayStubBody = PayStubFields.partial().required({ payDate: true, grossCents: true, netCents: true }).strict()
-  .refine((s) => s.netCents <= s.grossCents, { message: 'must be at most grossCents', path: ['netCents'] })
-  .refine((s) => Math.abs(STUB_PARTS.reduce((n, k) => n - (s[k] ?? 0), s.grossCents) - s.netCents) <= 1,
-    { message: 'gross minus deductions must equal net', path: ['netCents'] })
+  .refine((s) => Math.abs(stubNet(s) - s.netCents) <= 1, { message: 'gross minus deductions plus other pay must equal net', path: ['netCents'] })
+  .refine((s) => s.ytdGrossCents == null || s.ytdGrossCents >= s.grossCents, { message: 'must be at least grossCents', path: ['ytdGrossCents'] })
   .refine((s) => !s.periodStart || !s.periodEnd || s.periodStart <= s.periodEnd, { message: 'must be on or after periodStart', path: ['periodEnd'] });
 export type PayStubBody = z.infer<typeof PayStubBody>;
 /** a cleared deduction line (null) is 0, as when a create leaves it out */
@@ -522,8 +531,13 @@ export const PatchPayStubBody = PayStubFields.partial()
   .extend(Object.fromEntries(STUB_PARTS.map((k) => [k, Money.nullable().transform((v) => v ?? 0).optional()])) as { [K in typeof STUB_PARTS[number]]: z.ZodOptional<z.ZodPipe<z.ZodNullable<typeof Money>, z.ZodTransform<number, number | null>>> })
   .strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
 export type PatchPayStubBody = z.infer<typeof PatchPayStubBody>;
-export const LinkPayStubBody = z.object({ transactionId: Id.nullable() }).strict();
+/** The stub's deposits, replacing any linked before; they add up to its net exactly. Empty unlinks. */
+export const LinkPayStubBody = z.object({ transactionIds: z.array(Id).max(10) }).strict();
 export type LinkPayStubBody = z.infer<typeof LinkPayStubBody>;
+/** Deposits on bank accounts within 3 days of the pay date, at most the net and held by no other stub, closest first; suggestions are
+ *  single deposits and pairs that add up to the net (ids into deposits). */
+export const PayStubMatches = z.object({ deposits: z.array(Transaction), suggestions: z.array(z.array(Id)) });
+export type PayStubMatches = z.infer<typeof PayStubMatches>;
 
 const TaxFormFields = z.object({
   jobId: Id.nullable(), year: z.number().int().min(2000), kind: z.enum(['w2', '1099_nec', '1099_int', '1099_div', '1099_b', '1099_misc', 'other']),
