@@ -38,10 +38,23 @@ struct ProfileGate: View {
             error = unlocked && drafting ? "Locked — your unsaved draft was discarded" : nil
             unlocked = false
         }
+        .onChange(of: lock.canImportDocuments && model.openedPDF != nil) { _, waiting in
+            if waiting, !unlocked { Task { await unlock() } }
+        }
+        .onAppear { model.profileGateOpen = true }
+        .onDisappear {
+            model.openedPDF = nil
+            model.profileGateOpen = false
+        }
     }
 
     private func unlock() async {
         guard !unlocking else { return }
+        if model.openedPDF != nil, lock.justUnlocked {
+            unlocked = true
+            error = nil
+            return
+        }
         unlocking = true
         defer { unlocking = false }
         // confirmOwnerInApp fails a prompt that outlives a trip to the background
@@ -65,6 +78,17 @@ struct ProfileView: View {
     var body: some View {
         List {
             InlineError(message: error)
+            if let pdf = model.openedPDF {
+                Section("What is this PDF?") {
+                    ForEach(ProfileKind.allCases, id: \.self) { kind in
+                        Button(kind.title) {
+                            adding = CaptureRequest(kind: kind, source: .pdf, opened: pdf)
+                            model.openedPDF = nil
+                        }
+                    }
+                    Button("Discard", role: .destructive) { model.openedPDF = nil }
+                }
+            }
             Section("About me") {
                 if let profile {
                     Button { editingAboutMe = true } label: { ListRow(title: "About me", subtitle: Self.summary(profile)) }

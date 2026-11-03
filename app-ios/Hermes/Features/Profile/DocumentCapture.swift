@@ -32,6 +32,54 @@ enum CaptureSource: CaseIterable {
 struct CaptureRequest: Equatable {
     let kind: ProfileKind
     let source: CaptureSource
+    /// a PDF sent from another app, already in memory
+    var opened: OpenedPDF?
+}
+
+/// A PDF sent from another app, in memory only: iOS's copy of it is deleted as soon as it's read.
+struct OpenedPDF: Equatable, Sendable {
+    let id = UUID()
+    let pages: [UIImage]
+    /// how many pages the file has
+    let count: Int
+    static func == (a: OpenedPDF, b: OpenedPDF) -> Bool { a.id == b.id }
+}
+
+enum PDFFile {
+    enum Read: Sendable {
+        /// the first pages and how many the file has
+        case pages([UIImage], count: Int)
+        case locked, unreadable
+
+        var problem: String? {
+            switch self {
+            case .pages(let pages, _) where !pages.isEmpty: nil
+            case .locked: "This PDF is locked. Remove the password and try again."
+            default: "Couldn't open that PDF."
+            }
+        }
+    }
+
+    /// The first pages at about 200 dpi, the long side at most 2000 px. The importer opens the file in place (a security-scoped URL to
+    /// the original); a provider or another app that hands over a copy puts it in this app's container, and that copy is deleted once read.
+    nonisolated static func pages(_ url: URL) -> Read {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer {
+            if scoped { url.stopAccessingSecurityScopedResource() }
+            let home = URL(fileURLWithPath: NSHomeDirectory()).resolvingSymlinksInPath().path + "/"
+            if url.resolvingSymlinksInPath().path.hasPrefix(home) { try? FileManager.default.removeItem(at: url) }
+        }
+        guard let doc = PDFDocument(url: url) else { return .unreadable }
+        guard !doc.isLocked else { return .locked }
+        let pages = (0..<min(doc.pageCount, PageBudget.maxPages)).compactMap { i -> UIImage? in
+            guard let page = doc.page(at: i) else { return nil }
+            let bounds = page.bounds(for: .cropBox)
+            let side = min(max(bounds.width, bounds.height) * 200 / 72, 2000)
+            // fits the square, applying the page's rotation and box origin; the image is scale 1 (checked on the simulator)
+            return page.thumbnail(of: CGSize(width: side, height: side), for: .cropBox)
+        }
+        return .pages(pages, count: doc.pageCount)
+    }
 }
 
 private struct DocumentCapture: ViewModifier {
@@ -73,12 +121,8 @@ private struct DocumentCapture: ViewModifier {
                 opening = true
                 Task {
                     defer { opening = false }
-                    let read = await Task.detached(priority: .userInitiated) { Self.pdfPages(url) }.value
-                    switch read {
-                    case .pages(let pages, let count) where !pages.isEmpty: show(pages, of: count)
-                    case .locked: unreadable = "This PDF is locked. Remove the password and try again."
-                    default: unreadable = "Couldn't open that PDF."
-                    }
+                    let read = await Task.detached(priority: .userInitiated) { PDFFile.pages(url) }.value
+                    if case .pages(let pages, let count) = read, read.problem == nil { show(pages, of: count) } else { unreadable = read.problem }
                 }
             }
             .disabled(opening)
@@ -95,6 +139,7 @@ private struct DocumentCapture: ViewModifier {
     private func open(_ wanted: CaptureRequest) {
         chosen = wanted.kind
         request = nil
+        if let opened = wanted.opened { return show(opened.pages, of: opened.count) }
         switch wanted.source {
         case .scan: scanning = true
         case .photos: choosingPhotos = true
@@ -120,33 +165,6 @@ private struct DocumentCapture: ViewModifier {
             pages.append(image)
         }
         show(pages)
-    }
-
-    enum PDFRead: Sendable {
-        /// the first pages and how many the file has
-        case pages([UIImage], count: Int)
-        case locked, unreadable
-    }
-
-    /// The first pages at about 200 dpi, the long side at most 2000 px. The importer opens the file in place (a security-scoped URL to
-    /// the original); a provider that hands over a copy puts it in this app's container, and that copy is deleted once read.
-    nonisolated static func pdfPages(_ url: URL) -> PDFRead {
-        let scoped = url.startAccessingSecurityScopedResource()
-        defer {
-            if scoped { url.stopAccessingSecurityScopedResource() }
-            let home = URL(fileURLWithPath: NSHomeDirectory()).resolvingSymlinksInPath().path + "/"
-            if url.resolvingSymlinksInPath().path.hasPrefix(home) { try? FileManager.default.removeItem(at: url) }
-        }
-        guard let doc = PDFDocument(url: url) else { return .unreadable }
-        guard !doc.isLocked else { return .locked }
-        let pages = (0..<min(doc.pageCount, PageBudget.maxPages)).compactMap { i -> UIImage? in
-            guard let page = doc.page(at: i) else { return nil }
-            let bounds = page.bounds(for: .cropBox)
-            let side = min(max(bounds.width, bounds.height) * 200 / 72, 2000)
-            // fits the square, applying the page's rotation and box origin; the image is scale 1 (checked on the simulator)
-            return page.thumbnail(of: CGSize(width: side, height: side), for: .cropBox)
-        }
-        return .pages(pages, count: doc.pageCount)
     }
 }
 

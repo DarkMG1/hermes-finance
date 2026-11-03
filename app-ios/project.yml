@@ -33,6 +33,10 @@ targets:
             CFBundleTypeRole: Viewer
             LSHandlerRank: Alternate
             LSItemContentTypes: [public.comma-separated-values-text]
+          - CFBundleTypeName: PDF document
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [com.adobe.pdf]
         LSSupportsOpeningDocumentsInPlace: false
         NSFaceIDUsageDescription: Unlock Hermes with Face ID
         NSCameraUsageDescription: Take a photo of a receipt.

@@ -21,6 +21,9 @@ final class AppLock {
     private let onFacesChanged: @MainActor () -> Void
 
     var canImportDocuments: Bool { isActive && !locked && connectGeneration == nil && !cover.isVisible }
+    private var unlockedAt: ContinuousClock.Instant?
+    /// Face ID opened the app a moment ago, for something sent to it: what that opens needn't ask again.
+    var justUnlocked: Bool { unlockedAt.map { ContinuousClock.now - $0 < .seconds(5) } ?? false }
 
     init(onFacesChanged: @escaping @MainActor () -> Void) {
         self.onFacesChanged = onFacesChanged
@@ -195,6 +198,7 @@ final class AppLock {
                 guard generation == started else { return }
                 locked = false
                 failure = nil
+                unlockedAt = ContinuousClock.now
                 // the scene is still inactive while the prompt dismisses; the unchanged generation proves no background since
                 cover.hide()
             case .failed(let message):

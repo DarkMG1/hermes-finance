@@ -50,7 +50,9 @@ struct HermesApp: App {
             .environment(model.receiptQueue)
             .tint(Palette.accent)
             .preferredColorScheme(appearance.colorScheme)
-            .onOpenURL { model.queueCSV(.success($0)) }
+            .onOpenURL { url in
+                if url.isFileURL, url.pathExtension.lowercased() == "pdf" { model.openPDF(url) } else { model.queueCSV(.success(url)) }
+            }
             .onChange(of: importReady, initial: true) { _, ready in
                 if ready { Task { await model.importCSV(ready: lock.canImportDocuments) } }
             }
@@ -63,7 +65,10 @@ struct HermesApp: App {
             }
             .onChange(of: scenePhase, initial: true) { _, phase in
                 // balances hide whenever Hermes leaves the screen; showing them again needs Face ID
-                if phase == .background { UserDefaults.standard.set(true, forKey: "hideBalances") }
+                if phase == .background {
+                    UserDefaults.standard.set(true, forKey: "hideBalances")
+                    model.openedPDF = nil
+                }
                 if phase == .active {
                     model.loadStoredConnection()
                     if !checkedInbox {
@@ -111,7 +116,15 @@ struct HermesApp: App {
 }
 
 struct MainTabs: View {
+    @Environment(AppModel.self) private var model
+    @Environment(AppLock.self) private var lock
     @State private var tab = 0
+    @State private var openingPDF = false
+
+    /// A gate already open picks the PDF up itself.
+    private var pdfWaiting: Bool {
+        lock.canImportDocuments && model.openedPDF != nil && model.importNote == nil && !model.profileGateOpen
+    }
 
     var body: some View {
         TabView(selection: $tab) {
@@ -123,6 +136,18 @@ struct MainTabs: View {
         }
         .environment(\.selectedTab, tab)
         .onChange(of: QuickActions.shared.snapRequests) { tab = 0 }
+        .onChange(of: pdfWaiting, initial: true) { _, waiting in
+            guard waiting else { return }
+            let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive }
+            // SwiftUI silently drops a sheet asked for over another one
+            if scene?.windows.first(where: { $0.isKeyWindow && $0.windowLevel == .normal })?.rootViewController?.presentedViewController == nil {
+                openingPDF = true
+            } else {
+                model.openedPDF = nil
+                model.importNote = "Close what's open in Hermes, then send the PDF again."
+            }
+        }
+        .sheet(isPresented: $openingPDF) { ProfileGate() }
     }
 }
 
