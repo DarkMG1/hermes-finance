@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { ProfileReadResult } from '@hermes/shared';
 import { buildApp } from '../../src/app.ts';
+import type { ProfileReadOutput } from '../../src/profile-reader.ts';
 import { FakeClaude, end, start, text as textRound, tool } from '../fake-claude.ts';
 import { AUTH, makeTestDeps, seedAccount, seedCategory, seedItem, seedPerson, seedSplit, seedTxn } from '../helpers.ts';
 
@@ -9,7 +11,7 @@ export const FIXTURE_DIR = 'app-ios/HermesKit/Tests/HermesKitTests/Fixtures';
 // Deterministic: fixed ids, the test clock, and random ids normalised before writing.
 export async function buildFixtures(): Promise<Record<string, string>> {
   process.env.TZ = 'UTC'; // snapshot dates use the process-local day
-  const { deps, plaid } = makeTestDeps();
+  const { deps, plaid, profileReader } = makeTestDeps();
   const { db } = deps;
   seedItem(deps, { id: 'item-1', plaidItemId: 'p-item-1', institutionName: 'Synthetic Bank', accessToken: 'tok' });
   db.prepare("UPDATE items SET last_synced_at = '2026-03-15T11:00:00.000Z' WHERE id = 'item-1'").run();
@@ -156,6 +158,42 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   out['chat-detail'] = chatIds(detail);
   db.prepare("INSERT INTO ai_usage (at, month, key, feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_microdollars) VALUES (?, '2026-03', 'main', 'chat', 'fixture-model', 1000, 50, 0, 0, 420000)").run(deps.now().toISOString());
   out['ai-usage'] = await get('/v1/ai/usage');
+  // the financial profile goes in last so the fixtures above stay as they are
+  db.prepare(`INSERT INTO jobs (id, employer, title, status, start_date, base_cents, bonus_target_pct, created_at, updated_at)
+    VALUES ('job-1', 'SYNTHETIC EMPLOYER', 'Synthetic Engineer', 'current', '2025-06-01', 12000000, 10, 'seed', 'seed')`).run();
+  db.prepare("INSERT INTO equity_grants VALUES ('grant-1', 'job-1', 'rsu', 400, NULL, NULL, '2025-06-01', 12, 48, 3)").run();
+  const stubRow = db.prepare('INSERT INTO pay_stubs VALUES (?, ?, ?, ?, ?, 420000, 50000, 15000, 26040, 6090, 21000, 1870, ?, ?, 2520000, \'seed\')');
+  stubRow.run('stub-1', 'job-1', '2026-03-13', '2026-02-28', '2026-03-13', 0, 300000);
+  stubRow.run('stub-2', null, '2026-02-27', null, null, 2500, 302500);
+  db.prepare("INSERT INTO pay_stub_deposits VALUES ('stub-1', 'txn-2')").run();
+  db.prepare("INSERT INTO tax_forms VALUES ('form-1', 'job-1', 2025, 'w2', 'SYNTHETIC EMPLOYER', 6500000, 800000, 'CA', 270000, 7000000, 7000000, 'seed')").run();
+  db.prepare(`INSERT INTO tax_returns VALUES ('return-1', 2025, 'federal', 'single', 6500000, 6520000, 6520000, 'standard', 1500000, 5020000, 650000, 0,
+    800000, 150000, 20000, 0, 'seed', 'seed')`).run();
+  await app.inject({ method: 'PUT', url: '/v1/profile', headers: { ...AUTH, 'idempotency-key': 'fixture-profile' },
+    payload: { state: 'CA', filingStatus: 'single', birthYear: 2000, dependents: 0, retirementPct: 6, retirementKind: 'pre_tax', hsa: true } });
+  out.profile = await get('/v1/profile');
+  out.job = await get('/v1/jobs/job-1');
+  out['tax-years'] = await get('/v1/tax-years');
+  out['transaction-pay-stub'] = await get('/v1/transactions/txn-2');
+  out['pay-stubs-unassigned'] = await get('/v1/pay-stubs/unassigned');
+  out['pay-stub-matches'] = await get('/v1/pay-stubs/stub-1/matches');
+  const page = Buffer.from([0xff, 0xd8, 0xff, 0xe0]).toString('base64');
+  for (const [kind, [draft, uncertain]] of Object.entries({
+    tax_return: [{ year: 2025, jurisdiction: 'federal', filingStatus: 'single', totalIncomeCents: 6520000, totalTaxCents: 650000, refundCents: 150000 }, ['agiCents']],
+    tax_form: [{ year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 6500000, federalWithheldCents: 800000, state: 'CA' }, ['state']],
+    pay_stub: [{ employer: 'SYNTHETIC EMPLOYER', payDate: '2026-03-13', grossCents: 420000, federalCents: 50000, netCents: 370000 }, ['grossCents']],
+    offer: [{ employer: 'SYNTHETIC EMPLOYER', title: 'Synthetic Engineer', baseCents: 12000000, grants: [{ kind: 'rsu', shares: 400, grantDate: '2026-06-01', cliffMonths: 12, vestMonths: 48, vestEveryMonths: 3 }] }, ['baseCents']],
+  } as const)) {
+    profileReader.next = ProfileReadResult.parse({ kind, draft, uncertain }) as ProfileReadOutput;
+    out[`profile-read-${kind.replace('_', '-')}`] = await post('/v1/profile/read', { kind, pages: [page] });
+  }
+  // an answer that read the profile, read back without the profile unlocked
+  deps.claude = new FakeClaude([[start(), ...tool(0, 'tu1', 'profile', {}), ...end('tool_use')], [start(), ...textRound(0, 'You file as single.'), ...end('end_turn')]]);
+  const locked = (await app.inject({ method: 'POST', url: '/v1/chats', headers: { ...AUTH, 'idempotency-key': 'fixture-profile-chat' } })).json().id as string;
+  await app.inject({ method: 'POST', url: `/v1/chats/${locked}/messages`, headers: AUTH, payload: { clientId: 'fixture-profile', text: 'How do I file?', profileUnlocked: true } });
+  const lockedDetail = await get(`/v1/chats/${locked}`) as { messages: { id: string }[] };
+  out['chat-detail-profile-locked'] = JSON.parse([locked, ...lockedDetail.messages.map((m) => m.id)]
+    .reduce((t, id, i) => t.replaceAll(id, i ? `msg-${i}` : 'chat-2'), JSON.stringify(lockedDetail))) as unknown;
   // ids minted at runtime are replaced so the files are stable
   const text = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
   const normalise = (s: string) => s.replace(/"accountId": "[0-9a-f-]{36}"/g, '"accountId": "fixture-applecard"').replace(/"itemId": "[0-9a-f-]{36}"/g, '"itemId": "fixture-item"');

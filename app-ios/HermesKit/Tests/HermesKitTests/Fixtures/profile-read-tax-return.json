@@ -1,0 +1,23 @@
+{
+  "kind": "tax_return",
+  "draft": {
+    "year": 2025,
+    "jurisdiction": "federal",
+    "filingStatus": "single",
+    "wagesCents": null,
+    "totalIncomeCents": 6520000,
+    "agiCents": null,
+    "deductionKind": null,
+    "deductionCents": null,
+    "taxableIncomeCents": null,
+    "totalTaxCents": 650000,
+    "creditsCents": null,
+    "withholdingCents": null,
+    "refundCents": 150000,
+    "capitalGainsCents": null,
+    "capitalLossCarryoverCents": null
+  },
+  "uncertain": [
+    "agiCents"
+  ]
+}

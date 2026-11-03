@@ -1,0 +1,27 @@
+{
+  "id": "txn-2",
+  "accountId": "acct-checking",
+  "source": "plaid",
+  "date": "2026-03-13",
+  "bankDate": null,
+  "amountCents": 300000,
+  "payee": "Synthetic Employer",
+  "bankDescription": "SYNTHETIC",
+  "merchantName": null,
+  "pending": false,
+  "categoryId": "cat-pay",
+  "notes": null,
+  "personId": null,
+  "paidByPersonId": null,
+  "repaymentDismissed": false,
+  "splitLines": [],
+  "reconciled": false,
+  "forgiven": false,
+  "hasReceipt": false,
+  "hasHistory": false,
+  "recurring": null,
+  "iou": null,
+  "payStub": {
+    "id": "stub-1"
+  }
+}

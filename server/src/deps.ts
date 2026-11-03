@@ -2,7 +2,8 @@ import type { Db } from './db.ts';
 import type { Config } from './config.ts';
 import type { PlaidPort } from './plaid/port.ts';
 import type { PricePort } from './prices/port.ts';
+import type { ProfileReader } from './profile-reader.ts';
 import type { ReceiptReader } from './receipt-reader.ts';
 import type { Claude } from './chat/anthropic.ts';
 
-export type Deps = { db: Db; config: Config; plaid: PlaidPort; prices: PricePort | null; receiptReader: ReceiptReader | null; claude: Claude | null; now: () => Date };
+export type Deps = { db: Db; config: Config; plaid: PlaidPort; prices: PricePort | null; receiptReader: ReceiptReader | null; profileReader: ProfileReader | null; claude: Claude | null; now: () => Date };

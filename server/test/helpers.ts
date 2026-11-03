@@ -7,23 +7,25 @@ import { encryptToken } from '../src/crypto.ts';
 import type { Deps } from '../src/deps.ts';
 import { FakePlaid } from './fake-plaid.ts';
 import { FakePrices } from './fake-prices.ts';
-import { FakeReader } from './fake-reader.ts';
+import { FakeProfileReader, FakeReader } from './fake-reader.ts';
 
 export const API_TOKEN = 'test-token-0123456789-0123456789-abcdef';
 export const AUTH = { authorization: `Bearer ${API_TOKEN}` };
 
-export function makeTestDeps(): { deps: Deps; plaid: FakePlaid; prices: FakePrices; reader: FakeReader } {
+export function makeTestDeps(): { deps: Deps; plaid: FakePlaid; prices: FakePrices; reader: FakeReader; profileReader: FakeProfileReader } {
   const dir = mkdtempSync(join(tmpdir(), 'hermes-test-'));
   const db = openDb(join(dir, 'hermes.db'));
   migrate(db);
   const plaid = new FakePlaid();
   const prices = new FakePrices();
   const reader = new FakeReader();
+  const profileReader = new FakeProfileReader();
   const deps: Deps = {
     db,
     plaid,
     prices,
     receiptReader: reader,
+    profileReader,
     claude: null,
     now: () => new Date('2026-03-15T12:00:00Z'),
     config: {
@@ -31,7 +33,7 @@ export function makeTestDeps(): { deps: Deps; plaid: FakePlaid; prices: FakePric
       syncIntervalMs: 60_000, gitSha: 'test-sha', tiingoApiKey: 'test-key', anthropicApiKey: 'test-key', anthropicModel: 'fake-model', anthropicBackupKey: null, chatModel: 'fake-chat-model', titleModel: 'fake-title-model', plaid: { clientId: 'x', secret: 'y', env: 'sandbox' },
     },
   };
-  return { deps, plaid, prices, reader };
+  return { deps, plaid, prices, reader, profileReader };
 }
 
 export function seedCategory(db: Db, c: { id: string; name: string; isIncome?: boolean; isTransfer?: boolean }): void {

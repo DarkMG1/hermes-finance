@@ -77,6 +77,7 @@ struct TransactionDetailSheet: View {
                 if current.pending { LabeledContent("Status", value: "Pending") }
                 if !current.bankDescription.isEmpty { LabeledContent("Bank description", value: current.bankDescription) }
             }
+            if let stub = current.payStub { PayStubSection(id: stub.id) }
             if !forgiven {
                 Section {
                     Toggle("Reconciled", isOn: Binding(get: { reconciled }, set: { on in Task { await setReconciled(on) } }))
@@ -412,6 +413,60 @@ struct TransactionDetailSheet: View {
         } catch {
             deleteWrites.didFail(error)
             self.error = deleteWrites.unresolved ? "Couldn't confirm the delete. Try again." : errorMessage(error)
+        }
+    }
+}
+
+/// A linked paycheck's figures, behind Face ID each time; dropped when the sheet closes or the app goes to the background.
+private struct PayStubSection: View {
+    @Environment(AppModel.self) private var model
+    @Environment(AppLock.self) private var lock
+    @Environment(\.scenePhase) private var scenePhase
+    let id: String
+    @State private var stub: PayStub?
+    @State private var busy = false
+    @State private var error: String?
+    /// a reply that lands after a trip to the background shows nothing: it needs a new Face ID
+    @State private var generation = RevealGeneration()
+
+    var body: some View {
+        Section("Pay stub") {
+            if let stub {
+                let lines = [("Gross pay", stub.grossCents), ("Federal tax", stub.federalCents.map { -$0 }), ("State tax", stub.stateCents.map { -$0 }),
+                             ("Social Security", stub.socialSecurityCents.map { -$0 }), ("Medicare", stub.medicareCents.map { -$0 }),
+                             ("Retirement", stub.retirementCents.map { -$0 }), ("Other deductions", stub.otherDeductionsCents.map { -$0 }),
+                             ("Other pay", stub.otherPayCents), ("Net pay", stub.netCents)]
+                ForEach(lines, id: \.0) { line in
+                    LabeledContent(line.0) { MoneyText(cents: line.1 ?? 0, colored: false) }
+                }
+            } else {
+                Button { Task { await show() } } label: {
+                    HStack { Text("Show"); Spacer(); if busy { ProgressView() } }
+                }
+                .disabled(busy)
+                InlineError(message: error)
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .background else { return }
+            generation.invalidate()
+            stub = nil
+        }
+    }
+
+    private func show() async {
+        busy = true
+        defer { busy = false }
+        error = nil
+        let started = generation.value
+        let check = await confirmShowBalances(lock: lock, model: model, reason: "Show pay stub")
+        guard check.shown, let client = model.client else { error = check.error; return }
+        // the client, never the reader: nothing from the stub goes to the disk cache
+        do {
+            let loaded = try await client.payStub(id: id)
+            if generation.isCurrent(started), scenePhase != .background { stub = loaded }
+        } catch {
+            self.error = errorMessage(error)
         }
     }
 }

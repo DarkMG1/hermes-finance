@@ -37,5 +37,6 @@
   "hasReceipt": false,
   "hasHistory": true,
   "recurring": null,
-  "iou": null
+  "iou": null,
+  "payStub": null
 }

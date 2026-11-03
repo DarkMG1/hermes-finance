@@ -1,0 +1,22 @@
+{
+  "kind": "pay_stub",
+  "draft": {
+    "payDate": "2026-03-13",
+    "periodStart": null,
+    "periodEnd": null,
+    "grossCents": 420000,
+    "federalCents": 50000,
+    "stateCents": null,
+    "socialSecurityCents": null,
+    "medicareCents": null,
+    "retirementCents": null,
+    "otherDeductionsCents": null,
+    "otherPayCents": null,
+    "netCents": 370000,
+    "ytdGrossCents": null,
+    "employer": "SYNTHETIC EMPLOYER"
+  },
+  "uncertain": [
+    "grossCents"
+  ]
+}

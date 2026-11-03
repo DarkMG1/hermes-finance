@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { RESULT_MAX, TOOLS, runTool } from '../src/chat/tools.ts';
+import { RESULT_MAX, TOOLS, runTool, type ToolContext } from '../src/chat/tools.ts';
 import { toolLabel } from '../src/chat/labels.ts';
 import { getExpenses, getSpending } from '../src/cashflow.ts';
 import { getNetWorth, localDay } from '../src/networth.ts';
@@ -8,6 +8,7 @@ import { getInvestments } from '../src/investments.ts';
 import { getRecurring } from '../src/recurring.ts';
 import { listAccounts, listTransactions } from '../src/ledger.ts';
 import { getPerson, listPeople } from '../src/people.ts';
+import { getJob, getProfile, listJobs, taxYears } from '../src/profile.ts';
 import { makeTestDeps, seedAccount, seedCategory, seedPerson, seedTxn } from './helpers.ts';
 
 function setup() {
@@ -19,7 +20,8 @@ function setup() {
   seedTxn(deps.db, { id: 't2', accountId: 'a1', date: '2026-03-05', amountCents: -2500, categoryId: 'c-food', payee: 'SYNTHETIC GROCER' });
   return { deps, db: deps.db, today: localDay(deps.now()) };
 }
-const call = (deps: ReturnType<typeof setup>['deps'], name: string, input: unknown) => JSON.parse(runTool(deps, name, input).content);
+const call = (deps: ReturnType<typeof setup>['deps'], name: string, input: unknown, ctx?: ToolContext) => JSON.parse(runTool(deps, name, input, ctx).content);
+const UNLOCKED = { profileUnlocked: true };
 
 test('spending tool returns exactly getSpending', () => {
   const { deps, db } = setup();
@@ -182,4 +184,55 @@ test('open_items matches the person screen and lists only people with something 
   assert.deepEqual(call(deps, 'open_items', {}).map((p: { personId: string }) => p.personId), ['p1', 'p3']);
   assert.deepEqual(call(deps, 'open_items', { personId: 'p2' }), []);
   assert.equal(toolLabel('open_items', {}), 'Open IOUs');
+});
+
+test('profile tools match the profile functions and never write', () => {
+  const { deps, db, today } = setup();
+  db.prepare("INSERT INTO jobs (id, employer, status, created_at, updated_at) VALUES ('j1', 'SYNTHETIC EMPLOYER', 'current', 'x', 'x')").run();
+  const stub = db.prepare(`INSERT INTO pay_stubs (id, job_id, pay_date, gross_cents, federal_cents, state_cents, social_security_cents, medicare_cents,
+    retirement_cents, other_deductions_cents, net_cents, created_at) VALUES (?, ?, ?, 100, 10, 5, 6, 2, 5, 2, 70, 'x')`);
+  stub.run('s1', 'j1', '2025-12-30'); stub.run('s2', 'j1', '2026-01-15'); stub.run('s3', 'j1', '2026-02-15'); stub.run('s4', null, '2026-02-15');
+  const tables = ['profile', 'jobs', 'pay_stubs', 'tax_forms', 'tax_returns', 'equity_grants'];
+  const counts = () => tables.map((t) => db.prepare(`SELECT COUNT(*) FROM ${t}`).pluck().get());
+  const before = counts();
+  assert.deepEqual(call(deps, 'profile', {}, UNLOCKED), getProfile(db));
+  assert.deepEqual(call(deps, 'jobs', {}, UNLOCKED), listJobs(db));
+  assert.deepEqual(call(deps, 'jobs', { id: 'j1' }, UNLOCKED), JSON.parse(JSON.stringify(getJob(db, 'j1', today))));
+  assert.equal(runTool(deps, 'jobs', { id: 'nope' }, UNLOCKED).isError, true);
+  assert.deepEqual(call(deps, 'tax_years', {}, UNLOCKED), taxYears(db));
+  const all = call(deps, 'pay_stubs', {}, UNLOCKED);
+  assert.deepEqual(all.stubs.map((s: { id: string }) => s.id), ['s3', 's4', 's2', 's1']);
+  assert.deepEqual(all.ytd, [
+    { jobId: 'j1', year: 2025, grossCents: 100, federalCents: 10, stateCents: 5, socialSecurityCents: 6, medicareCents: 2, retirementCents: 5, otherDeductionsCents: 2, otherPayCents: 0, netCents: 70 },
+    { jobId: null, year: 2026, grossCents: 100, federalCents: 10, stateCents: 5, socialSecurityCents: 6, medicareCents: 2, retirementCents: 5, otherDeductionsCents: 2, otherPayCents: 0, netCents: 70 },
+    { jobId: 'j1', year: 2026, grossCents: 200, federalCents: 20, stateCents: 10, socialSecurityCents: 12, medicareCents: 4, retirementCents: 10, otherDeductionsCents: 4, otherPayCents: 0, netCents: 140 },
+  ]);
+  const ranged = call(deps, 'pay_stubs', { from: '2026-01-01', to: '2026-01-31', jobId: 'j1' }, UNLOCKED);
+  assert.deepEqual(ranged.stubs.map((s: { id: string }) => s.id), ['s2']);
+  const mid = call(deps, 'pay_stubs', { from: '2026-02-01', jobId: 'j1' }, UNLOCKED);
+  assert.deepEqual(mid.stubs.map((s: { id: string }) => s.id), ['s3']);
+  assert.deepEqual(mid.ytd.map((y: { year: number; grossCents: number; netCents: number }) => [y.year, y.grossCents, y.netCents]), [[2026, 200, 140]]);
+  assert.deepEqual(call(deps, 'pay_stubs', { from: '2030-01-01' }, UNLOCKED), { stubs: [], ytd: [] });
+  assert.equal(runTool(deps, 'pay_stubs', { from: 'bad' }, UNLOCKED).isError, true);
+  assert.deepEqual(counts(), before);
+});
+
+test('profile tools refuse unless the question was asked with the profile unlocked', () => {
+  const { deps } = setup();
+  for (const name of ['profile', 'jobs', 'pay_stubs', 'tax_years']) {
+    for (const ctx of [undefined, {}, { profileUnlocked: false }]) {
+      const r = runTool(deps, name, {}, ctx);
+      assert.equal(r.isError, true, name);
+      assert.match(r.content, /financial profile is locked/);
+    }
+    assert.equal(runTool(deps, name, {}, UNLOCKED).isError, false, name);
+  }
+  assert.equal(runTool(deps, 'categories', {}).isError, false, 'other tools need no unlock');
+});
+
+test('profile tool labels', () => {
+  assert.equal(toolLabel('profile', {}), 'About me');
+  assert.equal(toolLabel('jobs', {}), 'Jobs');
+  assert.equal(toolLabel('pay_stubs', { from: '2026-01-01' }), 'Pay stubs · Since 2026-01-01');
+  assert.equal(toolLabel('tax_years', {}), 'Tax years');
 });

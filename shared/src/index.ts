@@ -50,6 +50,8 @@ export const Transaction = z.object({
   recurring: z.object({ id: z.string(), name: z.string(), frequency: RecurringFrequency }).nullable(),
   /** Unsplit person-tagged rows: an item's leftCents (null on a payback) and what a payback paid. */
   iou: z.object({ leftCents: Cents.nullable(), paidBack: z.array(PaidBack.extend({ payee: z.string() })) }).nullable(),
+  /** The pay stub linked to this deposit; only its id, so its figures stay behind Face ID (GET /v1/pay-stubs/:id). */
+  payStub: z.object({ id: Id }).nullable().optional(),
 });
 export type Transaction = z.infer<typeof Transaction>;
 
@@ -436,11 +438,167 @@ export type ChatToolUse = z.infer<typeof ChatToolUse>;
 export const ChatMessage = z.object({
   id: Id, role: z.enum(['user', 'assistant']), text: z.string(), tools: z.array(ChatToolUse),
   status: z.enum(['streaming', 'done', 'failed', 'stopped']), errorCode: z.string().nullable(), createdAt: z.string(),
+  /** An answer that used financial profile data, read without the profile unlocked: its text and tools are left out until it is. */
+  profileLocked: z.boolean().optional(),
 });
 export type ChatMessage = z.infer<typeof ChatMessage>;
 export const ChatDetail = ChatSummary.extend({ messages: z.array(ChatMessage) });
 export type ChatDetail = z.infer<typeof ChatDetail>;
-export const SendChatBody = z.object({ clientId: z.string().min(1).max(200), text: z.string().trim().min(1).max(CHAT_TEXT_MAX) }).strict();
+/** profileUnlocked: the owner passed Face ID for the financial profile this Ask visit; without it the profile tools refuse, and a chat that
+ *  already holds profile data is 403 PROFILE_LOCKED. */
+export const SendChatBody = z.object({ clientId: z.string().min(1).max(200), text: z.string().trim().min(1).max(CHAT_TEXT_MAX), profileUnlocked: z.boolean().optional() }).strict();
 export type SendChatBody = z.infer<typeof SendChatBody>;
 export const AiUsage = z.object({ month: z.string(), costCents: Cents, backupActive: z.boolean() });
 export type AiUsage = z.infer<typeof AiUsage>;
+
+const FilingStatus = z.enum(['single', 'married_joint', 'married_separate', 'head_of_household']);
+const Money = Cents.min(0).max(MAX_AMOUNT_CENTS);
+const StateCode = z.string().regex(/^[A-Z]{2}$/, 'expected a 2-letter state code');
+const AboutMe = z.object({
+  state: StateCode.nullable(), filingStatus: FilingStatus.nullable(),
+  birthYear: z.number().int().min(1900).nullable(), dependents: z.number().int().min(0).max(20).nullable(),
+  retirementPct: z.number().min(0).max(100).nullable(), retirementKind: z.enum(['pre_tax', 'roth', 'mixed']).nullable(),
+  /** has a health savings account */
+  hsa: z.boolean().nullable(), note: z.string().max(2000).nullable(),
+});
+export const Profile = AboutMe.extend({ updatedAt: z.string().nullable() });
+export type Profile = z.infer<typeof Profile>;
+/** Left-out fields keep their value; null clears. birthYear is at most the owner's current year. */
+export const PutProfileBody = AboutMe.partial().strict();
+export type PutProfileBody = z.infer<typeof PutProfileBody>;
+
+const JobFields = z.object({
+  employer: z.string().trim().min(1).max(200), title: z.string().trim().max(200).nullable(),
+  status: z.enum(['offered', 'accepted', 'declined', 'current', 'past']), startDate: DateInput.nullable(), endDate: DateInput.nullable(),
+  /** annual base pay */
+  baseCents: Money.nullable(), bonusTargetPct: z.number().min(0).max(1000).nullable(),
+  signingBonusCents: Money.nullable(), relocationCents: Money.nullable(), note: z.string().max(2000).nullable(),
+});
+const datesInOrder = (j: { startDate?: string | null; endDate?: string | null }) => !j.startDate || !j.endDate || j.startDate <= j.endDate;
+export const Job = JobFields.extend({ id: Id, createdAt: z.string(), updatedAt: z.string() });
+export type Job = z.infer<typeof Job>;
+export const CreateJobBody = JobFields.partial().required({ employer: true, status: true }).strict()
+  .refine(datesInOrder, { message: 'must be on or after startDate', path: ['endDate'] });
+export type CreateJobBody = z.infer<typeof CreateJobBody>;
+export const PatchJobBody = JobFields.partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+export type PatchJobBody = z.infer<typeof PatchJobBody>;
+
+const GrantFields = z.object({
+  kind: z.enum(['rsu', 'option']), shares: z.number().positive().max(1e12).nullable(), valueCents: Money.nullable(),
+  /** options only: the price per share */
+  strikeCents: Money.nullable(), grantDate: DateInput,
+  cliffMonths: z.number().int().min(0).max(240), vestMonths: z.number().int().min(1).max(240), vestEveryMonths: z.number().int().min(1).max(240),
+});
+export const EquityGrant = GrantFields.extend({ id: Id, jobId: Id });
+export type EquityGrant = z.infer<typeof EquityGrant>;
+/** POST takes every field (shares, valueCents and strikeCents may be left out as null); PATCH takes any of them and checks the result;
+ *  a PATCH to rsu without a strikeCents clears the strike. */
+export const GrantBody = GrantFields.partial({ shares: true, valueCents: true, strikeCents: true, cliffMonths: true }).strict()
+  .refine((g) => g.shares != null || g.valueCents != null, { message: 'shares or valueCents is required', path: ['shares'] })
+  .refine((g) => g.kind !== 'option' || g.strikeCents != null, { message: 'an option needs a strike price', path: ['strikeCents'] })
+  .refine((g) => g.kind === 'option' || g.strikeCents == null, { message: 'only an option has a strike price', path: ['strikeCents'] })
+  .refine((g) => (g.cliffMonths ?? 0) <= g.vestMonths, { message: 'must be at most vestMonths', path: ['cliffMonths'] })
+  .refine((g) => g.vestEveryMonths <= g.vestMonths, { message: 'must be at most vestMonths', path: ['vestEveryMonths'] });
+export type GrantBody = z.infer<typeof GrantBody>;
+/** a cleared cliff (null) is 0, as when a create leaves it out */
+export const PatchGrantBody = GrantFields.partial().extend({ cliffMonths: GrantFields.shape.cliffMonths.nullable().transform((v) => v ?? 0).optional() })
+  .strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+export type PatchGrantBody = z.infer<typeof PatchGrantBody>;
+export const VestEvent = z.object({ date: DateStr, shares: z.number().nullable(), valueCents: Cents.nullable(), grantId: Id });
+export type VestEvent = z.infer<typeof VestEvent>;
+const PayStubFields = z.object({
+  jobId: Id.nullable(), payDate: DateInput, periodStart: DateInput.nullable(), periodEnd: DateInput.nullable(),
+  grossCents: Money, federalCents: Money, stateCents: Money, socialSecurityCents: Money, medicareCents: Money, retirementCents: Money,
+  otherDeductionsCents: Money,
+  /** after-tax additions (reimbursements, stipends) */
+  otherPayCents: Money, netCents: Money, ytdGrossCents: Money.nullable(),
+});
+/** transactionIds: the linked deposits Plaid still has, oldest first (a paycheck split across accounts has several). */
+export const PayStub = PayStubFields.extend({ id: Id, transactionIds: z.array(Id), createdAt: z.string() });
+export type PayStub = z.infer<typeof PayStub>;
+const STUB_PARTS = ['federalCents', 'stateCents', 'socialSecurityCents', 'medicareCents', 'retirementCents', 'otherDeductionsCents', 'otherPayCents'] as const;
+/** gross minus every deduction plus other pay */
+export const stubNet = (s: Partial<Record<(typeof STUB_PARTS)[number], number | null>> & { grossCents: number }) =>
+  STUB_PARTS.reduce((n, k) => (k === 'otherPayCents' ? n + (s[k] ?? 0) : n - (s[k] ?? 0)), s.grossCents);
+/** Left-out deduction lines and other pay are 0; gross minus every line plus other pay must equal net within a cent. PATCH checks the merged stub. */
+export const PayStubBody = PayStubFields.partial().required({ payDate: true, grossCents: true, netCents: true }).strict()
+  .refine((s) => Math.abs(stubNet(s) - s.netCents) <= 1, { message: 'gross minus deductions plus other pay must equal net', path: ['netCents'] })
+  .refine((s) => s.ytdGrossCents == null || s.ytdGrossCents >= s.grossCents, { message: 'must be at least grossCents', path: ['ytdGrossCents'] })
+  .refine((s) => !s.periodStart || !s.periodEnd || s.periodStart <= s.periodEnd, { message: 'must be on or after periodStart', path: ['periodEnd'] });
+export type PayStubBody = z.infer<typeof PayStubBody>;
+/** a cleared deduction line (null) is 0, as when a create leaves it out */
+export const PatchPayStubBody = PayStubFields.partial()
+  .extend(Object.fromEntries(STUB_PARTS.map((k) => [k, Money.nullable().transform((v) => v ?? 0).optional()])) as { [K in typeof STUB_PARTS[number]]: z.ZodOptional<z.ZodPipe<z.ZodNullable<typeof Money>, z.ZodTransform<number, number | null>>> })
+  .strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+export type PatchPayStubBody = z.infer<typeof PatchPayStubBody>;
+/** The stub's deposits, replacing any linked before; they add up to its net exactly. Empty unlinks. */
+export const LinkPayStubBody = z.object({ transactionIds: z.array(Id).max(10) }).strict();
+export type LinkPayStubBody = z.infer<typeof LinkPayStubBody>;
+/** Deposits on bank accounts within 3 days of the pay date, at most the net and held by no other stub, closest first; suggestions are
+ *  single deposits and pairs that add up to the net (ids into deposits). */
+export const PayStubMatches = z.object({ deposits: z.array(Transaction), suggestions: z.array(z.array(Id)) });
+export type PayStubMatches = z.infer<typeof PayStubMatches>;
+
+const TaxFormFields = z.object({
+  jobId: Id.nullable(), year: z.number().int().min(2000), kind: z.enum(['w2', '1099_nec', '1099_int', '1099_div', '1099_b', '1099_misc', 'other']),
+  payer: z.string().trim().min(1).max(200),
+  /** wages (W-2 box 1), box 1, or the form's total */
+  amountCents: Money, federalWithheldCents: Money.nullable(), state: StateCode.nullable(), stateWithheldCents: Money.nullable(),
+  ssWagesCents: Money.nullable(), medicareWagesCents: Money.nullable(),
+});
+export const TaxForm = TaxFormFields.extend({ id: Id, createdAt: z.string() });
+export type TaxForm = z.infer<typeof TaxForm>;
+/** year runs from 2000 to the owner's next year */
+export const TaxFormBody = TaxFormFields.partial().required({ year: true, kind: true, payer: true, amountCents: true }).strict();
+export type TaxFormBody = z.infer<typeof TaxFormBody>;
+export const PatchTaxFormBody = TaxFormFields.partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+export type PatchTaxFormBody = z.infer<typeof PatchTaxFormBody>;
+
+const TaxReturnFields = z.object({
+  year: z.number().int().min(2000), jurisdiction: z.union([z.literal('federal'), StateCode], { error: "expected 'federal' or a 2-letter state code" }),
+  filingStatus: FilingStatus.nullable(), wagesCents: Money.nullable(), totalIncomeCents: LedgerCents.nullable(), agiCents: LedgerCents.nullable(),
+  deductionKind: z.enum(['standard', 'itemized']).nullable(), deductionCents: Money.nullable(), taxableIncomeCents: Money.nullable(),
+  totalTaxCents: Money.nullable(), creditsCents: Money.nullable(), withholdingCents: Money.nullable(),
+  /** positive refund, negative owed */
+  refundCents: LedgerCents.nullable(), capitalGainsCents: LedgerCents.nullable(), capitalLossCarryoverCents: Money.nullable(),
+});
+export const TaxReturn = TaxReturnFields.extend({ id: Id, createdAt: z.string(), updatedAt: z.string() });
+export type TaxReturn = z.infer<typeof TaxReturn>;
+/** Upserts by year + jurisdiction: left-out fields keep their value; null clears. */
+export const TaxReturnBody = TaxReturnFields.partial().required({ year: true, jurisdiction: true }).strict();
+export type TaxReturnBody = z.infer<typeof TaxReturnBody>;
+/** Newest year first; effectiveRate is the federal return's totalTax / totalIncome (4 places), null without one. */
+export const TaxYears = z.object({
+  years: z.array(z.object({ year: z.number().int(), returns: z.array(TaxReturn), forms: z.array(TaxForm), effectiveRate: z.number().nullable() })),
+});
+export type TaxYears = z.infer<typeof TaxYears>;
+
+export const JobDetail = Job.extend({
+  grants: z.array(EquityGrant), nextVests: z.array(VestEvent), stubs: z.array(PayStub), forms: z.array(TaxForm),
+});
+export type JobDetail = z.infer<typeof JobDetail>;
+
+// What Claude read off a document for the owner to review: a missing field or a value that doesn't fit is null.
+const draft = <S extends z.ZodRawShape>(o: z.ZodObject<S>) => z.object(Object.fromEntries(Object.entries(o.shape)
+  .map(([k, s]) => [k, (s as z.ZodType).nullable().default(null).catch(null)])) as unknown as { [K in keyof S]: z.ZodCatch<z.ZodDefault<z.ZodNullable<S[K]>>> });
+export const ProfileDrafts = {
+  tax_return: draft(TaxReturnFields),
+  tax_form: draft(TaxFormFields.omit({ jobId: true })),
+  pay_stub: draft(PayStubFields.omit({ jobId: true }).extend({ employer: JobFields.shape.employer })),
+  offer: draft(JobFields.omit({ status: true })).extend({ grants: z.array(draft(GrantFields).nullable().catch(null)).default([]).catch([])
+    .transform((g) => g.filter((x) => x !== null).slice(0, 20)) }),
+};
+export const ProfileKind = z.enum(['tax_return', 'tax_form', 'pay_stub', 'offer']);
+export type ProfileKind = z.infer<typeof ProfileKind>;
+/** pages are base64 JPEGs; the whole body is at most 3 MB */
+export const ProfileReadBody = z.object({ kind: ProfileKind, pages: z.array(z.string().min(1)).min(1).max(8) }).strict();
+export type ProfileReadBody = z.infer<typeof ProfileReadBody>;
+/** field names Claude is unsure of */
+export const ProfileUncertain = z.array(z.string().max(100)).max(100).default([]).catch([]);
+export const ProfileReadResult = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('tax_return'), draft: ProfileDrafts.tax_return, uncertain: ProfileUncertain }),
+  z.object({ kind: z.literal('tax_form'), draft: ProfileDrafts.tax_form, uncertain: ProfileUncertain }),
+  z.object({ kind: z.literal('pay_stub'), draft: ProfileDrafts.pay_stub, uncertain: ProfileUncertain }),
+  z.object({ kind: z.literal('offer'), draft: ProfileDrafts.offer, uncertain: ProfileUncertain }),
+]);
+export type ProfileReadResult = z.infer<typeof ProfileReadResult>;

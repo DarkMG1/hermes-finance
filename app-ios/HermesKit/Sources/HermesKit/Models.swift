@@ -71,6 +71,8 @@ public struct LedgerTransaction: Codable, Sendable, Identifiable, Hashable {
     public let iou: TransactionIOU?
     /// The bank's own date under an owner-set one; nil on manual rows and from servers before 2.1.1.
     public let bankDate: String?
+    /// The pay stub linked to this deposit; nil when none, and from servers before 2.2.0.
+    public let payStub: PayStubSummary?
 }
 
 public struct TransactionIOU: Codable, Sendable, Hashable {

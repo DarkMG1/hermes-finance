@@ -170,4 +170,100 @@ extension APIClient {
     public func deleteRecurring(id: String) async throws {
         do { try await send("DELETE", "/v1/recurring/\(id)", body: nil, idempotencyKey: nil, timeout: 20) } catch ClientError.api(status: 404, _) {}
     }
+
+    public func profile() async throws -> Profile { try decode(try await getData("/v1/profile")) }
+
+    /// Whether the server has the financial profile, without loading any of it (it stays behind Face ID); false on an older server.
+    public func hasProfile() async throws -> Bool {
+        do { _ = try await getData("/v1/profile/exists"); return true } catch ClientError.api(status: 404, _) { return false }
+    }
+
+    /// Sends every set field and a null for each one cleared since `original`.
+    public func putProfile(_ body: PutProfileBody, from original: PutProfileBody?, idempotencyKey: String) async throws -> Profile {
+        try await write("PUT", "/v1/profile", body: edit(body, from: original, keepUnchanged: true), key: idempotencyKey)
+    }
+
+    /// Claude reads the pages (JPEGs the phone already blacked out); nothing is stored, so no idempotency key.
+    public func readProfileDocument(kind: ProfileKind, pages: [Data]) async throws -> ProfileReadResult {
+        let body: [String: JSONValue] = ["kind": .string(kind.rawValue), "pages": .array(pages.map { .string($0.base64EncodedString()) })]
+        return try decode(try await send("POST", "/v1/profile/read", body: JSONEncoder().encode(body), idempotencyKey: nil, timeout: 120).body)
+    }
+
+    public func jobs() async throws -> [Job] { try decode(try await getData("/v1/jobs")) }
+    public func job(id: String) async throws -> JobDetail { try decode(try await getData("/v1/jobs/\(id)")) }
+
+    public func createJob(_ body: CreateJobBody, idempotencyKey: String) async throws -> JobDetail {
+        try await write("POST", "/v1/jobs", body: body, key: idempotencyKey)
+    }
+
+    // Patches send only what changed from `original` (a cleared field as null); skip the call when nothing did, the server needs a field.
+    public func patchJob(id: String, body: CreateJobBody, from original: CreateJobBody, idempotencyKey: String) async throws -> JobDetail {
+        try await write("PATCH", "/v1/jobs/\(id)", body: edit(body, from: original, keepUnchanged: false), key: idempotencyKey)
+    }
+
+    /// Also deletes its grants; its pay stubs and forms stay, without a job.
+    public func deleteJob(id: String, idempotencyKey: String) async throws {
+        try await send("DELETE", "/v1/jobs/\(id)", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
+    }
+
+    public func createGrant(jobId: String, body: GrantBody, idempotencyKey: String) async throws -> EquityGrant {
+        try await write("POST", "/v1/jobs/\(jobId)/grants", body: body, key: idempotencyKey)
+    }
+
+    public func patchGrant(jobId: String, id: String, body: GrantBody, from original: GrantBody, idempotencyKey: String) async throws -> EquityGrant {
+        try await write("PATCH", "/v1/jobs/\(jobId)/grants/\(id)", body: edit(body, from: original, keepUnchanged: false), key: idempotencyKey)
+    }
+
+    public func deleteGrant(jobId: String, id: String, idempotencyKey: String) async throws {
+        try await send("DELETE", "/v1/jobs/\(jobId)/grants/\(id)", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
+    }
+
+    public func createPayStub(_ body: PayStubBody, idempotencyKey: String) async throws -> PayStub {
+        try await write("POST", "/v1/pay-stubs", body: body, key: idempotencyKey)
+    }
+
+    /// A new net or pay date that the linked deposits no longer match drops the links.
+    public func patchPayStub(id: String, body: PayStubBody, from original: PayStubBody, idempotencyKey: String) async throws -> PayStub {
+        try await write("PATCH", "/v1/pay-stubs/\(id)", body: edit(body, from: original, keepUnchanged: false), key: idempotencyKey)
+    }
+
+    public func payStub(id: String) async throws -> PayStub { try decode(try await getData("/v1/pay-stubs/\(id)")) }
+
+    /// Pay stubs without a job, newest first.
+    public func unassignedPayStubs() async throws -> [PayStub] { try decode(try await getData("/v1/pay-stubs/unassigned")) }
+
+    public func deletePayStub(id: String, idempotencyKey: String) async throws {
+        try await send("DELETE", "/v1/pay-stubs/\(id)", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
+    }
+
+    public func payStubMatches(id: String) async throws -> PayStubMatches { try decode(try await getData("/v1/pay-stubs/\(id)/matches")) }
+
+    /// The deposits replace any linked before and add up to the net exactly; none unlinks. A deposit another stub has is 409 ALREADY_LINKED.
+    public func linkPayStub(id: String, transactionIds: [String], idempotencyKey: String) async throws -> PayStub {
+        try await write("PUT", "/v1/pay-stubs/\(id)/link", body: ["transactionIds": transactionIds], key: idempotencyKey)
+    }
+
+    public func createTaxForm(_ body: TaxFormBody, idempotencyKey: String) async throws -> TaxForm {
+        try await write("POST", "/v1/tax-forms", body: body, key: idempotencyKey)
+    }
+
+    public func patchTaxForm(id: String, body: TaxFormBody, from original: TaxFormBody, idempotencyKey: String) async throws -> TaxForm {
+        try await write("PATCH", "/v1/tax-forms/\(id)", body: edit(body, from: original, keepUnchanged: false), key: idempotencyKey)
+    }
+
+    public func deleteTaxForm(id: String, idempotencyKey: String) async throws {
+        try await send("DELETE", "/v1/tax-forms/\(id)", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
+    }
+
+    public func taxYears() async throws -> TaxYears { try decode(try await getData("/v1/tax-years")) }
+
+    /// Upserts by year + jurisdiction: left-out fields keep the saved return's values, so pass the return being edited as `original`
+    /// to clear what the owner cleared. Without one (a document read) every blank field goes out as null: the return becomes what was reviewed.
+    public func putTaxReturn(_ body: TaxReturnBody, from original: TaxReturnBody?, idempotencyKey: String) async throws -> TaxReturn {
+        try await write("PUT", "/v1/tax-returns", body: edit(body, from: original, keepUnchanged: true), key: idempotencyKey)
+    }
+
+    public func deleteTaxReturn(id: String, idempotencyKey: String) async throws {
+        try await send("DELETE", "/v1/tax-returns/\(id)", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
+    }
 }

@@ -4,11 +4,11 @@ import HermesKit
 /// Streams one answer. Cancelling the calling task only drops the connection: the server still finishes and saves the answer.
 @MainActor
 enum ChatStream {
-    static func send(client: APIClient, chatId: String, clientId: String, text: String, onEvent: (ChatEvent) -> Void) async throws {
+    static func send(client: APIClient, chatId: String, body: SendChatBody, onEvent: (ChatEvent) -> Void) async throws {
         let (url, headers) = client.streamRequest(path: "/v1/chats/\(chatId)/messages")
         var request = URLRequest(url: url, timeoutInterval: 300)
         request.httpMethod = "POST"
-        request.httpBody = try JSONEncoder().encode(["clientId": clientId, "text": text])
+        request.httpBody = try JSONEncoder().encode(body)
         for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         let (bytes, response) = try await URLSessionTransport.session.bytes(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0

@@ -2,7 +2,7 @@ import type { Db } from '../db.ts';
 import type { Config } from '../config.ts';
 import { localDay } from '../days.ts';
 
-export type Feature = 'chat' | 'receipt';
+export type Feature = 'chat' | 'receipt' | 'profile';
 export type Usage = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
 type Key = 'main' | 'backup';
 type Event = { type: string; [k: string]: unknown };
@@ -107,7 +107,8 @@ export function createClaude(deps: { db: Db; config: Config; now: () => Date }, 
     let key: Key = backupActive(db, m) && config.anthropicBackupKey ? 'backup' : 'main';
     const json = JSON.stringify(body);
     for (;;) {
-      const timer = idleTimer(feature === 'chat' ? 120_000 : 60_000);
+      // the profile reader's 8 pages can take as long as a chat answer; the app waits 120 s for both
+      const timer = idleTimer(feature === 'receipt' ? 60_000 : 120_000);
       let res: Response;
       try {
         res = await fetchFn('https://api.anthropic.com/v1/messages', {

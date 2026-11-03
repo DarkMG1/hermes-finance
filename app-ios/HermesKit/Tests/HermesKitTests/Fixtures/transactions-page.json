@@ -22,7 +22,8 @@
       "hasReceipt": false,
       "hasHistory": true,
       "recurring": null,
-      "iou": null
+      "iou": null,
+      "payStub": null
     },
     {
       "id": "txn-2",
@@ -46,7 +47,8 @@
       "hasReceipt": false,
       "hasHistory": false,
       "recurring": null,
-      "iou": null
+      "iou": null,
+      "payStub": null
     }
   ],
   "nextCursor": "WyIyMDI2LTAzLTEzIiwidHhuLTIiXQ"

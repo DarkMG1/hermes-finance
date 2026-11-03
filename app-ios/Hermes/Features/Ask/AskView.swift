@@ -4,6 +4,7 @@ import SwiftUI
 /// Saved chats, newest first. A new chat is created on its first question, so an abandoned compose leaves nothing behind.
 struct AskView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.askProfileUnlocked) private var profileUnlocked
     @State private var chats: [ChatSummary]?
     @State private var error: String?
     @State private var outdated = false
@@ -37,6 +38,8 @@ struct AskView: View {
         .navigationDestination(isPresented: $composing) { ConversationView(chatId: nil) }
         .refreshable { await load() }
         .task { await load() }
+        // titles written after a chat got profile data show only while it's unlocked
+        .onChange(of: profileUnlocked.wrappedValue) { Task { await load() } }
     }
 
     private func relative(_ iso: String) -> String? {
@@ -46,7 +49,7 @@ struct AskView: View {
     private func load() async {
         guard let client = model.client else { return }
         do {
-            chats = try await client.chats().chats
+            chats = try await client.chats(profileUnlocked: profileUnlocked.wrappedValue).chats
             error = nil
             outdated = false
         } catch ClientError.api(404, _) {

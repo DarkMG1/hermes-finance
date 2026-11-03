@@ -1,0 +1,17 @@
+{
+  "kind": "tax_form",
+  "draft": {
+    "year": 2025,
+    "kind": "w2",
+    "payer": "SYNTHETIC EMPLOYER",
+    "amountCents": 6500000,
+    "federalWithheldCents": 800000,
+    "state": "CA",
+    "stateWithheldCents": null,
+    "ssWagesCents": null,
+    "medicareWagesCents": null
+  },
+  "uncertain": [
+    "state"
+  ]
+}

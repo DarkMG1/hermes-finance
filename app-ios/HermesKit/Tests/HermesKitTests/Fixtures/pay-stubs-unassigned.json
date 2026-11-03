@@ -1,0 +1,21 @@
+[
+  {
+    "id": "stub-2",
+    "jobId": null,
+    "payDate": "2026-02-27",
+    "periodStart": null,
+    "periodEnd": null,
+    "grossCents": 420000,
+    "federalCents": 50000,
+    "stateCents": 15000,
+    "socialSecurityCents": 26040,
+    "medicareCents": 6090,
+    "retirementCents": 21000,
+    "otherDeductionsCents": 1870,
+    "otherPayCents": 2500,
+    "netCents": 302500,
+    "ytdGrossCents": 2520000,
+    "transactionIds": [],
+    "createdAt": "seed"
+  }
+]

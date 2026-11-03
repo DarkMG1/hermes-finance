@@ -6,7 +6,7 @@ import { idempotentWrite } from '../idempotency.ts';
 import { parseBody } from '../validate.ts';
 import { answer, type ChatEvent } from '../chat/agent.ts';
 import { usage } from '../chat/anthropic.ts';
-import { addUserMessage, createChat, deleteChat, dropFailedTail, findByClientId, getChat, listChats, startAssistant } from '../chat/store.ts';
+import { addUserMessage, chatUsesProfile, createChat, deleteChat, dropFailedTail, findByClientId, getChat, listChats, startAssistant } from '../chat/store.ts';
 
 type Running = { ac: AbortController; done: Promise<unknown> };
 const busyChats = new WeakMap<Deps['db'], Map<string, Running>>();
@@ -25,14 +25,19 @@ export function chatRoutes(app: FastifyInstance, deps: Deps): void {
   };
   const chatBusy = () => new ApiError(409, 'CHAT_BUSY', 'an answer is still being written');
 
-  app.get('/v1/chats', async () => listChats(db));
+  app.get<{ Querystring: { profileUnlocked?: string } }>('/v1/chats', async (req) => listChats(db, req.query.profileUnlocked !== '1'));
 
   app.post('/v1/chats', async (req, reply) => {
     const r = idempotentWrite(deps, req, () => ({ status: 201, body: createChat(db, deps.now().toISOString()) }));
     return reply.code(r.status).send(r.body);
   });
 
-  app.get<{ Params: { id: string } }>('/v1/chats/:id', async (req) => find(req.params.id));
+  // ?profileUnlocked=1 once the owner passed Face ID for the profile; without it answers that used profile data come back empty
+  app.get<{ Params: { id: string }; Querystring: { profileUnlocked?: string } }>('/v1/chats/:id', async (req) => {
+    const chat = getChat(db, req.params.id, req.query.profileUnlocked !== '1');
+    if (!chat) throw new ApiError(404, 'NOT_FOUND', 'chat not found');
+    return chat;
+  });
 
   app.delete<{ Params: { id: string } }>('/v1/chats/:id', async (req, reply) => {
     if (busy.has(req.params.id)) throw chatBusy();
@@ -54,6 +59,8 @@ export function chatRoutes(app: FastifyInstance, deps: Deps): void {
     const chatId = req.params.id;
     const chat = find(chatId);
     if (!deps.claude) throw new ApiError(503, 'AI_NOT_CONFIGURED', 'AI is not configured');
+    // the history holds profile data Claude could repeat, and a resend could replay it
+    if (!body.profileUnlocked && chatUsesProfile(db, chatId, true)) throw new ApiError(403, 'PROFILE_LOCKED', 'unlock the financial profile to go on with this chat');
     if (busy.has(chatId)) throw chatBusy();
     const prior = findByClientId(db, body.clientId);
     if (prior && prior.chatId !== chatId) throw new ApiError(409, 'IDEMPOTENCY_KEY_REUSED', 'clientId was used in another chat');
@@ -65,7 +72,7 @@ export function chatRoutes(app: FastifyInstance, deps: Deps): void {
     // a failed answer is replaced together with its question, so a rerun of the same clientId keeps one user row
     const assistantId = stored ? null : db.transaction(() => {
       dropFailedTail(db, chatId);
-      addUserMessage(db, chatId, body.clientId, body.text, now);
+      addUserMessage(db, chatId, body.clientId, body.text, now, !body.profileUnlocked);
       return startAssistant(db, chatId, now);
     })();
 

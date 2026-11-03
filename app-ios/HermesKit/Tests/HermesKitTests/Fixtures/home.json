@@ -23,7 +23,8 @@
       "hasReceipt": false,
       "hasHistory": true,
       "recurring": null,
-      "iou": null
+      "iou": null,
+      "payStub": null
     },
     {
       "id": "txn-2",
@@ -47,7 +48,8 @@
       "hasReceipt": false,
       "hasHistory": false,
       "recurring": null,
-      "iou": null
+      "iou": null,
+      "payStub": null
     },
     {
       "id": "txn-3",
@@ -88,7 +90,8 @@
       "hasReceipt": false,
       "hasHistory": true,
       "recurring": null,
-      "iou": null
+      "iou": null,
+      "payStub": null
     },
     {
       "id": "txn-4",
@@ -122,7 +125,8 @@
             "payee": "Synthetic Split"
           }
         ]
-      }
+      },
+      "payStub": null
     },
     {
       "id": "txn-5",
@@ -146,7 +150,8 @@
       "hasReceipt": false,
       "hasHistory": false,
       "recurring": null,
-      "iou": null
+      "iou": null,
+      "payStub": null
     },
     {
       "id": "txn-6",
@@ -170,7 +175,8 @@
       "hasReceipt": false,
       "hasHistory": true,
       "recurring": null,
-      "iou": null
+      "iou": null,
+      "payStub": null
     }
   ],
   "reconnect": [

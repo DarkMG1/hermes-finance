@@ -1,0 +1,29 @@
+{
+  "kind": "offer",
+  "draft": {
+    "employer": "SYNTHETIC EMPLOYER",
+    "title": "Synthetic Engineer",
+    "startDate": null,
+    "endDate": null,
+    "baseCents": 12000000,
+    "bonusTargetPct": null,
+    "signingBonusCents": null,
+    "relocationCents": null,
+    "note": null,
+    "grants": [
+      {
+        "kind": "rsu",
+        "shares": 400,
+        "valueCents": null,
+        "strikeCents": null,
+        "grantDate": "2026-06-01",
+        "cliffMonths": 12,
+        "vestMonths": 48,
+        "vestEveryMonths": 3
+      }
+    ]
+  },
+  "uncertain": [
+    "baseCents"
+  ]
+}
