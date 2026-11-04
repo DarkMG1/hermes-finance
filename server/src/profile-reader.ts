@@ -52,7 +52,7 @@ const KINDS: Record<ProfileKind, [label: string, hints: string]> = {
   pay_stub: ['pay stub', 'Amounts are for this pay period; ytdGrossCents is the year-to-date gross. otherDeductionsCents: the sum of every deduction and tax '
     + 'without its own field (local tax, disability, insurance, HSA and the rest). otherPayCents: after-tax additions such as reimbursements. '
     + 'Gross minus all deductions plus otherPayCents must equal netCents. employer: the employer name.'],
-  offer: ['offer letter', 'baseCents: the annual base salary. bonusTargetPct: a percent (15 for 15%). grants: each equity grant; vestMonths is the whole vesting length, vestEveryMonths the interval after the cliff.'],
+  offer: ['offer letter', 'baseCents: the annual base salary as stated, null for hourly pay or any letter without a yearly figure (never work one out). hourlyCents: the hourly rate as stated. hoursPerWeek: the weekly hours as stated (20 for 40 hours every 2 weeks). bonusTargetPct: a percent (15 for 15%). grants: each equity grant; vestMonths is the whole vesting length, vestEveryMonths the interval after the cliff.'],
 };
 
 type MessagesReply = { content?: { type: string; name?: string; input?: unknown }[] };
@@ -84,6 +84,8 @@ Never return SSNs, ITINs, EINs or account numbers. List field names you are unsu
       const parsed = schema.safeParse(call?.input);
       if (!parsed.success) throw new ReaderError('INVALID_OUTPUT');
       const { uncertain, ...draft } = parsed.data;
+      // a letter that doesn't state one of these comes back as 0 despite the instruction; 0 would read as an offer of nothing
+      if (kind === 'offer') for (const k of ['baseCents', 'hourlyCents', 'bonusTargetPct', 'signingBonusCents', 'relocationCents']) if ((draft as Record<string, unknown>)[k] === 0) (draft as Record<string, unknown>)[k] = null;
       return { kind, draft, uncertain, model } as ProfileReadOutput;
     },
   };

@@ -108,6 +108,8 @@ struct DraftFields<B>: View {
                         if !field.required || text.wrappedValue.isEmpty { Text(field.required ? "Choose" : "None").tag("") }
                         ForEach(options, id: \.value) { Text($0.label).tag($0.value) }
                     }
+                } else if field.key == "note" {
+                    NotesField(text: text, label: field.label)
                 } else {
                     Field(label: field.label, error: field.parses(text.wrappedValue) ? nil : field.hint) {
                         TextField(field.label, text: text)
@@ -387,6 +389,8 @@ struct ProfileDraftForm: View {
         .init(key: "startDate", label: "Start date", kind: .date(\.startDate)),
         .init(key: "endDate", label: "End date", kind: .date(\.endDate)),
         .init(key: "baseCents", label: "Base pay a year", kind: .money(\.baseCents)),
+        .init(key: "hourlyCents", label: "Hourly rate", kind: .money(\.hourlyCents)),
+        .init(key: "hoursPerWeek", label: "Hours per week", kind: .number(\.hoursPerWeek)),
         .init(key: "bonusTargetPct", label: "Bonus target %", kind: .number(\.bonusTargetPct)),
         .init(key: "signingBonusCents", label: "Signing bonus", kind: .money(\.signingBonusCents)),
         .init(key: "relocationCents", label: "Relocation", kind: .money(\.relocationCents)),

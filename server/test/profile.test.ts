@@ -59,6 +59,13 @@ test('jobs: create, list, patch, validate status and dates, delete', async () =>
   assert.deepEqual((await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'offered', baseCents: 12_000_000, startDate: '2026-06-01' }, 'job')).json(), job);
   assert.deepEqual((await get('/v1/jobs')).json().map((j: { id: string }) => j.id), [job.id]);
   assert.equal((await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'hired' })).json().field, 'status');
+  const hourly = (await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'current', hourlyCents: 3750, hoursPerWeek: 20 }, 'hourly')).json();
+  assert.deepEqual([hourly.baseCents, hourly.hourlyCents, hourly.hoursPerWeek], [null, 3750, 20]);
+  assert.equal((await send('POST', '/v1/jobs', { employer: 'X', status: 'current', hoursPerWeek: 0 })).json().field, 'hoursPerWeek');
+  assert.equal((await send('POST', '/v1/jobs', { employer: 'X', status: 'current', hoursPerWeek: 169 })).json().field, 'hoursPerWeek');
+  const cleared = (await send('PATCH', `/v1/jobs/${hourly.id}`, { hourlyCents: null })).json();
+  assert.deepEqual([cleared.hourlyCents, cleared.hoursPerWeek], [null, 20]);
+  assert.equal((await send('DELETE', `/v1/jobs/${hourly.id}`)).statusCode, 200);
   assert.equal((await send('POST', '/v1/jobs', { status: 'current' })).json().field, 'employer');
   assert.equal((await send('POST', '/v1/jobs', { employer: 'X', status: 'past', startDate: '2026-02-01', endDate: '2026-01-31' })).json().field, 'endDate');
   assert.equal((await send('PATCH', `/v1/jobs/${job.id}`, { endDate: '2026-05-31' })).json().field, 'endDate', 'checked against the saved start date');
@@ -138,7 +145,7 @@ test('028 keeps AI usage rows, lets the profile reader record, and allows one pr
   const ins = db.prepare("INSERT INTO ai_usage (at, month, key, feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_microdollars) VALUES ('x', '2026-03', 'main', ?, 'm', 1, 1, 0, 0, 7)");
   ins.run('receipt');
   ins.run('chat');
-  assert.equal(migrate(db), 28);
+  assert.equal(migrate(db), 29);
   assert.deepEqual(db.prepare('SELECT id, feature, cost_microdollars AS c FROM ai_usage ORDER BY id').all(), [{ id: 1, feature: 'receipt', c: 7 }, { id: 2, feature: 'chat', c: 7 }]);
   ins.run('profile');
   assert.throws(() => ins.run('other'), /CHECK/);

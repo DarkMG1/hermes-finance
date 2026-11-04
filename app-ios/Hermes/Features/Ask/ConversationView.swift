@@ -132,7 +132,10 @@ struct ConversationView: View {
         }
         // what an unlocked read showed goes with the unlock; the server's copy hides it again
         .onChange(of: profileUnlocked.wrappedValue) { _, unlocked in
-            guard !unlocked else { return }
+            guard !unlocked else {
+                Task { await load() }
+                return
+            }
             typed = nil
             thread = nil
             // an answer still streaming keeps writing into the dropped thread; its saved copy loads once it ends
@@ -223,7 +226,6 @@ struct ConversationView: View {
             return false
         }
         profileUnlocked.wrappedValue = true
-        await load()
         return true
     }
 

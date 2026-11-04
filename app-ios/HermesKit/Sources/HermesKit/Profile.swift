@@ -28,6 +28,8 @@ public struct CreateJobBody: Codable, Sendable, Equatable {
     public var endDate: String?
     /// annual base pay
     public var baseCents: Int?
+    public var hourlyCents: Int?
+    public var hoursPerWeek: Double?
     public var bonusTargetPct: Double?
     public var signingBonusCents: Int?
     public var relocationCents: Int?

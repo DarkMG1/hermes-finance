@@ -6,6 +6,8 @@
     "startDate": null,
     "endDate": null,
     "baseCents": 12000000,
+    "hourlyCents": null,
+    "hoursPerWeek": null,
     "bonusTargetPct": null,
     "signingBonusCents": null,
     "relocationCents": null,

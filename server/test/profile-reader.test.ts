@@ -123,6 +123,18 @@ const makeReader = (fetchFn: typeof fetch) => {
 };
 const reply = (content: unknown) => async () => new Response(JSON.stringify({ content, usage: { input_tokens: 10, output_tokens: 2 } }), { status: 200 });
 
+test('an offer read leaves pay it does not state blank instead of zero, and asks for no worked-out salary', async () => {
+  let text = '';
+  const { reader } = makeReader(async (_url, init) => {
+    text = (JSON.parse(String(init!.body)) as { messages: { content: { text?: string }[] }[] }).messages[0]!.content.at(-1)!.text!;
+    return reply([{ type: 'tool_use', name: 'record_offer', input: { employer: 'SYNTHETIC EMPLOYER', baseCents: 0, hourlyCents: 3750, hoursPerWeek: 20, bonusTargetPct: 0, signingBonusCents: 0, relocationCents: 250000, grants: [] } }])();
+  });
+  const r = await reader.read('offer', [JPEG]);
+  assert.ok(r.kind === 'offer');
+  assert.deepEqual([r.draft.baseCents, r.draft.hourlyCents, r.draft.hoursPerWeek, r.draft.bonusTargetPct, r.draft.signingBonusCents, r.draft.relocationCents], [null, 3750, 20, null, null, 250000]);
+  assert.match(text, /null for hourly pay.*never work one out.*hourlyCents: the hourly rate.*hoursPerWeek: the weekly hours/s);
+});
+
 test('the Anthropic reader sends every page and one tool per kind, without forcing it, and records profile usage', async () => {
   for (const kind of ['tax_return', 'tax_form', 'pay_stub', 'offer'] as const) {
     const sent: { model: string; tool_choice?: unknown; tools: { name: string; input_schema: { properties: Record<string, unknown> } }[];

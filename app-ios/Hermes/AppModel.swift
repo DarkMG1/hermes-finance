@@ -22,6 +22,8 @@ final class AppModel {
     let receiptQueue = ReceiptQueue()
     private(set) var csvImports = CSVImportQueue()
     var importNote: String?
+    var openedPDF: OpenedPDF?
+    var profileGateOpen = false
     private var importWrites = WriteGuard()
 
     private let keychain = KeychainStore(service: "dev.darkmg1.hermesfinance")
@@ -76,6 +78,7 @@ final class AppModel {
         importNote = hadImports ? "Connect to a server before importing an Apple Card CSV." : nil
         for url in csvImports.files { removeInboxCSV(url) }
         csvImports = CSVImportQueue()
+        openedPDF = nil
         importWrites = WriteGuard()
         referenceRefresh.invalidate()
         receiptQueue.selectServer(nil)
@@ -88,6 +91,19 @@ final class AppModel {
         categories = []
         accounts = []
         people = []
+    }
+
+    /// iOS's copy is gone once read, so nothing unredacted waits on disk behind Face ID; the pages wait in memory until the next background.
+    func openPDF(_ url: URL) {
+        Task {
+            let read = await Task.detached(priority: .userInitiated) { PDFFile.pages(url) }.value
+            guard UIApplication.shared.applicationState != .background else { return }
+            if case .pages(let pages, let count) = read, read.problem == nil {
+                openedPDF = OpenedPDF(pages: pages, count: count)
+            } else {
+                importNote = read.problem
+            }
+        }
     }
 
     func queueCSV(_ result: Result<URL, Error>) {

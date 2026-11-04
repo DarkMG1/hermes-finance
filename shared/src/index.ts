@@ -471,7 +471,7 @@ const JobFields = z.object({
   employer: z.string().trim().min(1).max(200), title: z.string().trim().max(200).nullable(),
   status: z.enum(['offered', 'accepted', 'declined', 'current', 'past']), startDate: DateInput.nullable(), endDate: DateInput.nullable(),
   /** annual base pay */
-  baseCents: Money.nullable(), bonusTargetPct: z.number().min(0).max(1000).nullable(),
+  baseCents: Money.nullable(), hourlyCents: Money.nullable(), hoursPerWeek: z.number().gt(0).max(168).nullable(), bonusTargetPct: z.number().min(0).max(1000).nullable(),
   signingBonusCents: Money.nullable(), relocationCents: Money.nullable(), note: z.string().max(2000).nullable(),
 });
 const datesInOrder = (j: { startDate?: string | null; endDate?: string | null }) => !j.startDate || !j.endDate || j.startDate <= j.endDate;

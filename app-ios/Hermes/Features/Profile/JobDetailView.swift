@@ -80,6 +80,8 @@ struct JobDetailView: View {
         if let start = job.startDate { LabeledContent("Start", value: DayText.display(start)) }
         if let end = job.endDate { LabeledContent("End", value: DayText.display(end)) }
         if let base = job.baseCents { LabeledContent("Base pay a year") { MoneyText(cents: base, colored: false) } }
+        if let hourly = job.hourlyCents { LabeledContent("Hourly rate") { MoneyText(cents: hourly, colored: false) } }
+        if let hours = job.hoursPerWeek { LabeledContent("Hours per week", value: hours.formatted()) }
         if let bonus = job.bonusTargetPct { LabeledContent("Bonus target", value: (bonus / 100).formatted(.percent)) }
         if let signing = job.signingBonusCents { LabeledContent("Signing bonus") { MoneyText(cents: signing, colored: false) } }
         if let relocation = job.relocationCents { LabeledContent("Relocation") { MoneyText(cents: relocation, colored: false) } }
