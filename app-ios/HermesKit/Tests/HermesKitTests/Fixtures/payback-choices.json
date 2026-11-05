@@ -6,7 +6,7 @@
       "date": "2026-03-12",
       "payee": "Synthetic Split",
       "totalCents": 1500,
-      "leftCents": 1500,
+      "leftCents": 1200,
       "hasReceipt": false,
       "paybacks": []
     }

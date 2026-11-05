@@ -323,6 +323,19 @@ test('editing a linked payback after a later unlinked one: GET offers its linked
   assert.equal((await send('PUT', '/v1/transactions/p/payback', 'ed-1', { personId: 'p1', items: [{ transactionId: 'x', amountCents: 1000 }] })).statusCode, 200);
 });
 
+test('the picker counts a row they paid: a deposit sees only what is still owed', async () => {
+  const { deps, get, send } = app();
+  seedTxn(deps.db, { id: 'x', accountId: 'a1', date: '2026-03-01', amountCents: -739, personId: 'p1' });
+  seedTxn(deps.db, { id: 'y', accountId: 'a1', date: '2026-03-02', amountCents: -1449, personId: 'p1' });
+  seedTxn(deps.db, { id: 'paid', accountId: 'manual', source: 'manual', date: '2026-03-03', amountCents: -1782, paidByPersonId: 'p1' });
+  seedTxn(deps.db, { id: 'dep', accountId: 'a1', date: '2026-03-04', amountCents: 406 });
+  const choices = await get('/v1/transactions/dep/payback?personId=p1');
+  assert.deepEqual(choices.items.map((i: { transactionId: string; leftCents: number }) => [i.transactionId, i.leftCents]), [['y', 406]]);
+  assert.equal((await send('PUT', '/v1/transactions/dep/payback', 'pc-1', { personId: 'p1', items: [{ transactionId: 'x', amountCents: 406 }] })).statusCode, 400);
+  assert.equal((await send('PUT', '/v1/transactions/dep/payback', 'pc-2', { personId: 'p1', items: [{ transactionId: 'y', amountCents: 406 }] })).statusCode, 200);
+  assert.equal((await get('/v1/people/p1')).person.balanceCents, 0);
+});
+
 test('a new deposit can be linked to a one-off older than the 50/50 lines an unlinked settle-up covered', async () => {
   const { deps, send } = app();
   seedTxn(deps.db, { id: 'oneoff', accountId: 'a1', date: '2026-03-01', amountCents: -1500, personId: 'p1' });

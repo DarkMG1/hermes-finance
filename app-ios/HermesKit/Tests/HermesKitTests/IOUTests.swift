@@ -51,6 +51,13 @@ private func item(_ id: String, left: Int, total: Int? = nil, date: String = "20
     #expect(PaybackFill.amounts(many, selected: Set(many.map(\.id)), paybackCents: 1000).count == PaybackFill.maxItems)
 }
 
+@Test func noChoiceForOneItemOrAPaybackThatClearsThemAll() {
+    #expect(!PaybackFill.hasChoice([], paybackCents: 100))
+    #expect(!PaybackFill.hasChoice([item("a", left: 500)], paybackCents: 100))
+    #expect(!PaybackFill.hasChoice([item("a", left: 100), item("b", left: 200)], paybackCents: 300))
+    #expect(PaybackFill.hasChoice([item("a", left: 100), item("b", left: 200)], paybackCents: 299))
+}
+
 @Test func exactMatchIsPreselectedAndFirst() {
     let items = [item("a", left: 1000), item("b", left: 2500), item("c", left: 2500)]
     #expect(PaybackFill.ordered(items, paybackCents: 2500).map(\.transactionId) == ["b", "a", "c"])

@@ -28,13 +28,13 @@ extension AppModel {
         }
     }
 
-    /// Tags a payback to a person. True when there are open items to choose from: show `PaybackPicker` instead, it tags on save.
+    /// Tags a payback to a person. True when there is a choice to make: show `PaybackPicker` instead, it tags on save.
     /// Throws `PaybackChoicesUnavailable` when the read fails, so callers don't treat it as a write.
     func tagPayback(_ target: PaybackTarget, idempotencyKey: String) async throws -> Bool {
         guard let client else { return false }
         let choices: PaybackChoices?
         do { choices = try await paybackChoices(target) } catch { throw PaybackChoicesUnavailable(message: errorMessage(error)) }
-        if let choices, !choices.items.isEmpty || !choices.linked.isEmpty { return true }
+        if let choices, !choices.linked.isEmpty || PaybackFill.hasChoice(choices.items, paybackCents: target.paybackCents) { return true }
         if let lineId = target.lineId {
             _ = try await client.patchSplitLine(transactionId: target.transactionId, lineId: lineId,
                                                 body: PatchSplitLineBody(personId: .set(target.personId)), idempotencyKey: idempotencyKey)
@@ -60,7 +60,7 @@ struct PaybackPicker: View {
     @State private var error: String?
 
     var body: some View {
-        Sheet(title: "What is this paying back?", canSave: choices != nil, busy: busy, unresolved: writes.unresolved,
+        Sheet(title: "Paying back what?", canSave: choices != nil, busy: busy, unresolved: writes.unresolved,
               onCancel: { dismiss() }, onSave: { Task { await save() } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             InlineError(message: error)
             if let choices {
