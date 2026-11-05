@@ -35,7 +35,7 @@ const add = <T extends { transactionId: string; lineId: string | null; amountCen
 };
 
 /** One person's open items, computed on every read like the balance: links first (capped by what each side has left),
- * then (with fifo) every credit's unapplied money settles the oldest open items. Sum of leftCents = max(balance, 0) with fifo. */
+ * then every credit's unapplied money settles the oldest open items, unlinked paybacks only with fifo. Sum of leftCents = max(balance, 0) with fifo. */
 export function settle(entries: Tagged[], links: Link[], fifo = true): Settled {
   const items = new Map<string, ItemState>();
   for (const t of entries) if (isItem(t)) items.set(entryKey(t.transaction_id, t.line_id), { entry: t, leftCents: -t.amount, paybacks: [] });
@@ -56,8 +56,9 @@ export function settle(entries: Tagged[], links: Link[], fifo = true): Settled {
       add(paidBack.get(pk)!, { transactionId: item.entry.transaction_id, lineId: item.entry.line_id, amountCents: cents });
     }
   }
-  const open = fifo ? [...items.values()] : [];
+  const open = [...items.values()];
   for (const t of entries) {
+    if (!fifo && isPayback(t)) continue;
     let rest = credit.get(entryKey(t.transaction_id, t.line_id)) ?? 0;
     for (const item of open) {
       if (rest <= 0) break;
@@ -79,8 +80,9 @@ export function personLinks(db: Db, entries: Tagged[]): Link[] {
   return db.prepare('SELECT * FROM iou_links WHERE payback_transaction_id IN (SELECT value FROM json_each(?))').all(ids) as Link[];
 }
 
-/** without: an entryKey settled as if it weren't in the ledger (the payback being edited). Then only the other paybacks' links
- * apply, no FIFO: explicit links override it, so unlinked money never closes an item this payback may link (R2). */
+/** without: an entryKey settled as if it weren't in the ledger (the payback being edited). Then other paybacks count by their links
+ * only: explicit links override FIFO, so an unlinked payback never closes an item this one may link (R2). Credit that can't be linked
+ * (a row they paid, a forgiveness) still settles the oldest items. */
 export function settlePerson(db: Db, personId: string, without?: string): Settled {
   const entries = personEntries(db, personId).filter((t) => entryKey(t.transaction_id, t.line_id) !== without);
   return settle(entries, personLinks(db, entries), without === undefined);

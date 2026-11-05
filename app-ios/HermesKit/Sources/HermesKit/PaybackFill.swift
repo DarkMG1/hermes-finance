@@ -10,6 +10,11 @@ public enum PaybackFill {
         items.first { $0.leftCents == paybackCents }.map { [$0.id] } ?? []
     }
 
+    /// False when every answer ends the same: one item, or a payback that clears them all.
+    public static func hasChoice(_ items: [OpenItem], paybackCents: Int) -> Bool {
+        items.count > 1 && items.reduce(0) { $0 + $1.leftCents } > paybackCents
+    }
+
     /// The server's cap on items in one payback.
     public static let maxItems = 200
 

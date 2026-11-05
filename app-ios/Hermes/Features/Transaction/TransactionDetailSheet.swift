@@ -315,7 +315,8 @@ struct TransactionDetailSheet: View {
             await onChange()
             guard let target = paidBy.map(paybackTarget) else { return dismiss() }
             do {
-                guard let choices = try await model.paybackChoices(target), !choices.items.isEmpty else { return dismiss() }
+                guard let choices = try await model.paybackChoices(target),
+                      PaybackFill.hasChoice(choices.items, paybackCents: target.paybackCents) else { return dismiss() }
                 closeAfterPaying = true
                 paying = target
             } catch {

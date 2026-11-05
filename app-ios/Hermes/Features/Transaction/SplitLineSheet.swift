@@ -109,7 +109,11 @@ struct SplitLineSheet: View {
             writes.didSucceed()
             await onChange()
             // the tag is saved either way: with no items (or no read) it stays "just the balance"
-            if let target, let choices = try? await model.paybackChoices(target), !choices.items.isEmpty { paying = target } else { dismiss() }
+            if let target, let choices = try? await model.paybackChoices(target), PaybackFill.hasChoice(choices.items, paybackCents: target.paybackCents) {
+                paying = target
+            } else {
+                dismiss()
+            }
         } catch {
             writes.didFail(error)
             self.error = writes.unresolved ? "Couldn't confirm the save. Tap Save to retry." : errorMessage(error)
