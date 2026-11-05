@@ -80,37 +80,47 @@ struct WhoOwesView: View {
     }
 
     private func suggestionRow(_ suggestion: RepaymentSuggestion) -> some View {
-        VStack(alignment: .leading, spacing: Space.s) {
+        let date = DayText.display(suggestion.transaction.date)
+        return VStack(alignment: .leading, spacing: Space.s) {
             Button { selected = suggestion.transaction } label: {
-                ListRow(title: suggestion.transaction.payee, subtitle: DayText.display(suggestion.transaction.date)) {
+                ListRow(title: suggestion.transaction.payee, subtitle: suggestion.personId.map { "\(date) · \(model.personName($0))" } ?? date) {
                     MoneyText(cents: suggestion.transaction.amountCents)
                 }
             }
-            .buttonStyle(.plain)
-            Group {
+            HStack(spacing: Space.s) {
                 if let personId = suggestion.personId {
-                    Button("Confirm \(model.personName(personId))") { Task { await tag(suggestion.transaction, personId) } }
+                    Button { Task { await tag(suggestion.transaction, personId) } } label: { suggestionAction("Confirm", primary: true) }
                 }
-                HStack(spacing: Space.l) {
-                    Menu(suggestion.personId == nil ? "Who paid?" : "Someone else") {
-                        ForEach(model.people.filter { !$0.archived }) { person in
-                            Button(person.name) { Task { await tag(suggestion.transaction, person.id) } }
-                        }
-                        Button("New person…") { addingFor = suggestion.transaction }
+                Menu {
+                    ForEach(model.people.filter { !$0.archived }) { person in
+                        Button(person.name) { Task { await tag(suggestion.transaction, person.id) } }
                     }
-                    Button("Not a repayment") {
-                        Task {
-                            await perform("\(suggestion.id)|dismiss", lock: suggestion.id) { client, key in
-                                try await client.dismissSuggestion(transactionId: suggestion.id, idempotencyKey: key)
-                            }
+                    Button("New person…") { addingFor = suggestion.transaction }
+                } label: {
+                    suggestionAction(suggestion.personId == nil ? "Who paid?" : "Change", primary: suggestion.personId == nil)
+                }
+                Button {
+                    Task {
+                        await perform("\(suggestion.id)|dismiss", lock: suggestion.id) { client, key in
+                            try await client.dismissSuggestion(transactionId: suggestion.id, idempotencyKey: key)
                         }
                     }
+                } label: {
+                    suggestionAction("Ignore")
                 }
             }
-            .textStyle(.subhead, color: Palette.accent)
-            .multilineTextAlignment(.leading)
             .disabled(busyIds.contains(suggestion.id))
         }
+        .buttonStyle(.plain)
+    }
+
+    private func suggestionAction(_ title: String, primary: Bool = false) -> some View {
+        Text(title)
+            .textStyle(.subhead, color: primary ? Palette.onAccent : Palette.accent)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Space.s)
+            .background(primary ? Palette.accent : Palette.accent.opacity(0.15), in: RoundedRectangle(cornerRadius: Radius.medium, style: .continuous))
     }
 
     private func repaymentAccountCard(_ settings: PeopleSettings) -> some View {
