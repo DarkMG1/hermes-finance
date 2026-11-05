@@ -87,25 +87,28 @@ struct WhoOwesView: View {
                 }
             }
             .buttonStyle(.plain)
-            HStack(spacing: Space.l) {
+            Group {
                 if let personId = suggestion.personId {
                     Button("Confirm \(model.personName(personId))") { Task { await tag(suggestion.transaction, personId) } }
                 }
-                Menu(suggestion.personId == nil ? "Who paid?" : "Someone else") {
-                    ForEach(model.people.filter { !$0.archived }) { person in
-                        Button(person.name) { Task { await tag(suggestion.transaction, person.id) } }
+                HStack(spacing: Space.l) {
+                    Menu(suggestion.personId == nil ? "Who paid?" : "Someone else") {
+                        ForEach(model.people.filter { !$0.archived }) { person in
+                            Button(person.name) { Task { await tag(suggestion.transaction, person.id) } }
+                        }
+                        Button("New person…") { addingFor = suggestion.transaction }
                     }
-                    Button("New person…") { addingFor = suggestion.transaction }
-                }
-                Button("Not a repayment") {
-                    Task {
-                        await perform("\(suggestion.id)|dismiss", lock: suggestion.id) { client, key in
-                            try await client.dismissSuggestion(transactionId: suggestion.id, idempotencyKey: key)
+                    Button("Not a repayment") {
+                        Task {
+                            await perform("\(suggestion.id)|dismiss", lock: suggestion.id) { client, key in
+                                try await client.dismissSuggestion(transactionId: suggestion.id, idempotencyKey: key)
+                            }
                         }
                     }
                 }
             }
             .textStyle(.subhead, color: Palette.accent)
+            .multilineTextAlignment(.leading)
             .disabled(busyIds.contains(suggestion.id))
         }
     }
