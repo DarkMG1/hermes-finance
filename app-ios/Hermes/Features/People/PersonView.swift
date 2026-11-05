@@ -27,7 +27,6 @@ struct PersonView: View {
             }
         }
     }
-    @State private var showHistory = false
     @State private var error: String?
 
     var body: some View {
@@ -57,10 +56,9 @@ struct PersonView: View {
                     if detail.history.isEmpty {
                         Text("Nothing yet").textStyle(.subhead, color: Palette.secondaryText)
                     } else {
-                        DisclosureGroup("History", isExpanded: $showHistory) {
+                        Fold(title: "History") {
                             ForEach(detail.history) { entry in entryView(entry) }
                         }
-                        .textStyle(.headline)
                     }
                 }
             }
