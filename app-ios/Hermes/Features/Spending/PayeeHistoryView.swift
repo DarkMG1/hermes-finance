@@ -134,7 +134,7 @@ struct PayeeHistoryView: View {
     }
 
     private func subtitle(_ row: PayeeHistoryRow) -> String {
-        [DayText.display(row.date), row.upcoming ? "Upcoming" : nil, row.reimbursed == true ? "Reimbursed" : nil,
+        [DayText.display(row.date), row.pending == true ? "Pending" : nil, row.upcoming ? "Upcoming" : nil, row.reimbursed == true ? "Reimbursed" : nil,
          row.totalCents.map { "\(Money.format($0)) · your share" }]
             .compactMap { $0 }.joined(separator: " · ")
     }

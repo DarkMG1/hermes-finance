@@ -74,7 +74,8 @@ struct ExpensesView: View {
 
     private func subtitle(_ row: ExpenseRow) -> String {
         let tag = row.isSplitDifference ? "Split difference" : row.categoryName
-        return [DayText.display(row.date), tag, row.isSplit && !row.isSplitDifference ? "Split" : nil].compactMap { $0 }.joined(separator: " · ")
+        return [DayText.display(row.date), row.pending == true ? "Pending" : nil, tag, row.isSplit && !row.isSplitDifference ? "Split" : nil]
+            .compactMap { $0 }.joined(separator: " · ")
     }
 
     private func changed() async {

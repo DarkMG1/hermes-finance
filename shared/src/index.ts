@@ -272,7 +272,7 @@ export type ExpensesQuery = z.infer<typeof ExpensesQuery>;
 export const ExpenseRow = z.object({
   transactionId: Id, lineId: Id.nullable(), date: DateStr, name: z.string(), categoryId: Id.nullable(), categoryName: z.string(),
   /** Out: spending is positive and a refund negative. In: income is positive. */
-  amountCents: Cents, isSplit: z.boolean(), isSplitDifference: z.boolean(),
+  amountCents: Cents, isSplit: z.boolean(), isSplitDifference: z.boolean(), pending: z.boolean(),
 });
 export type ExpenseRow = z.infer<typeof ExpenseRow>;
 
@@ -293,7 +293,7 @@ export type PayeeMonth = z.infer<typeof PayeeMonth>;
 /** shareCents: the owner's part, spending positive; totalCents: the whole charge, only when the charge itself matched and is split; upcoming: dated
  * after today; reimbursed: in the Reimbursement category. */
 export const PayeeHistoryRow = z.object({
-  transactionId: Id, date: DateStr, name: z.string(), shareCents: Cents, totalCents: Cents.nullable(), upcoming: z.boolean(), reimbursed: z.boolean(),
+  transactionId: Id, date: DateStr, name: z.string(), shareCents: Cents, totalCents: Cents.nullable(), upcoming: z.boolean(), reimbursed: z.boolean(), pending: z.boolean(),
 });
 export type PayeeHistoryRow = z.infer<typeof PayeeHistoryRow>;
 /** names: payee mode only, every other name its rows matched (first-seen spelling) and whether the owner left it out; excluded rows aren't counted. */

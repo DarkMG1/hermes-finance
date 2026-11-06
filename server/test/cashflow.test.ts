@@ -54,6 +54,17 @@ async function allRows(app: ReturnType<typeof buildApp>, query: string, limit: n
 }
 const sum = (rows: Row[]) => rows.reduce((s, r) => s + r.amountCents, 0);
 
+test('expenses and payee history mark a pending charge, its split lines and difference', async () => {
+  const { deps, app } = setup();
+  seedTxn(deps.db, { id: 'tp', accountId: 'a1', date: '2026-03-07', amountCents: -1200, payee: 'Synthetic Pending', pending: true });
+  seedSplit(deps.db, { id: 'tp-a', transactionId: 'tp', amountCents: -1000, categoryId: 'c-food' });
+  const rows = (await allRows(app, 'period=month&date=2026-03&kind=out', 50)) as (Row & { pending: boolean })[];
+  assert.deepEqual(rows.filter((r) => r.pending).map((r) => [r.transactionId, r.isSplitDifference]), [['tp', false], ['tp', true]]);
+  assert.equal(rows.find((r) => r.transactionId === 't1')?.pending, false);
+  const history = (await app.inject({ method: 'GET', url: '/v1/payee-history?name=Synthetic%20Pending', headers: AUTH })).json();
+  assert.deepEqual(history.rows.map((r: { pending: boolean }) => r.pending), [true]);
+});
+
 test('spending reports In, Out and Net; totalCents stays equal to Out', async () => {
   const { app } = setup();
   const s = (await app.inject({ method: 'GET', url: '/v1/spending?period=month&date=2026-03', headers: AUTH })).json();

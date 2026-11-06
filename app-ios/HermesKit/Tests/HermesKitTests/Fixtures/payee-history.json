@@ -60,7 +60,8 @@
       "shareCents": 2500,
       "totalCents": 4000,
       "upcoming": false,
-      "reimbursed": false
+      "reimbursed": false,
+      "pending": true
     }
   ],
   "nextCursor": null,

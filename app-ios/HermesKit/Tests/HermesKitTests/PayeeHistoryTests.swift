@@ -11,14 +11,16 @@ import Testing
 }
 
 @Test func unsplitUpcomingRowDecodes() throws {
-    let json = #"{"transactionId":"t","date":"2026-03-20","name":"Synthetic Deli","shareCents":1000,"totalCents":null,"upcoming":true,"reimbursed":true}"#
+    let json = #"{"transactionId":"t","date":"2026-03-20","name":"Synthetic Deli","shareCents":1000,"totalCents":null,"upcoming":true,"#
+        + #""reimbursed":true,"pending":true}"#
     let row = try JSONDecoder().decode(PayeeHistoryRow.self, from: Data(json.utf8))
-    #expect(row.totalCents == nil && row.upcoming && row.reimbursed == true)
+    #expect(row.totalCents == nil && row.upcoming && row.reimbursed == true && row.pending == true)
 }
 
 @Test func historyCachedBeforeReimbursedStillDecodes() throws {
     let json = #"{"transactionId":"t","date":"2026-03-20","name":"Synthetic Deli","shareCents":1000,"totalCents":null,"upcoming":false}"#
-    #expect(try JSONDecoder().decode(PayeeHistoryRow.self, from: Data(json.utf8)).reimbursed == nil)
+    let row = try JSONDecoder().decode(PayeeHistoryRow.self, from: Data(json.utf8))
+    #expect(row.reimbursed == nil && row.pending == nil)
 }
 
 @Test func historyNamesDecodeOrAreAbsent() throws {
