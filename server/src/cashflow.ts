@@ -10,12 +10,12 @@ const LINES = `
   WITH lines AS (
     SELECT t.id AS transaction_id, sl.id AS line_id, t.date AS date, t.created_at AS created_at, t.rowid AS row_order,
            COALESCE(sl.payee, t.payee, t.merchant_name, t.bank_description) AS name,
-           sl.category_id AS category_id, sl.amount_cents AS amount, t.plaid_category AS plaid_category, 0 AS drift, 1 AS is_split
+           sl.category_id AS category_id, sl.amount_cents AS amount, t.plaid_category AS plaid_category, 0 AS drift, 1 AS is_split, t.pending AS pending
       FROM split_lines sl JOIN transactions t ON t.id = sl.transaction_id
      WHERE t.removed_at IS NULL AND t.date >= ? AND t.date < ? AND sl.person_id IS NULL
     UNION ALL
     SELECT t.id, NULL, t.date, t.created_at, t.rowid, COALESCE(t.payee, t.merchant_name, t.bank_description),
-           t.category_id, t.amount_cents, t.plaid_category, 0, 0
+           t.category_id, t.amount_cents, t.plaid_category, 0, 0, t.pending
       FROM transactions t
      WHERE t.removed_at IS NULL AND t.date >= ? AND t.date < ?
        AND NOT EXISTS (SELECT 1 FROM split_lines sl WHERE sl.transaction_id = t.id)
@@ -23,7 +23,7 @@ const LINES = `
     UNION ALL
     -- any residual split difference counts as uncategorized spending so the total matches the transaction
     SELECT t.id, NULL, t.date, t.created_at, t.rowid, COALESCE(t.payee, t.merchant_name, t.bank_description),
-           NULL, t.amount_cents - SUM(sl.amount_cents), t.plaid_category, 1, 1
+           NULL, t.amount_cents - SUM(sl.amount_cents), t.plaid_category, 1, 1, t.pending
       FROM split_lines sl JOIN transactions t ON t.id = sl.transaction_id
      WHERE t.removed_at IS NULL AND t.date >= ? AND t.date < ?
      GROUP BY t.id HAVING t.amount_cents != SUM(sl.amount_cents)
@@ -104,14 +104,14 @@ export function getExpenses(db: Db, q: ExpensesQuery): ExpensesPage {
     SELECT * FROM page ${after} ORDER BY date DESC, created_at DESC, row_order DESC, line_key LIMIT ?`)
     .all(...args, ...filterArgs, ...afterArgs, q.limit + 1) as {
       transaction_id: string; line_id: string | null; date: string; created_at: string; row_order: number; name: string;
-      category_id: string | null; amount: number; drift: number; is_split: number; line_key: string; category_name: string;
+      category_id: string | null; amount: number; drift: number; is_split: number; pending: number; line_key: string; category_name: string;
     }[];
   const page = rows.slice(0, q.limit);
   const last = page[page.length - 1];
   return {
     rows: page.map((r): ExpenseRow => ({
       transactionId: r.transaction_id, lineId: r.line_id, date: r.date, name: r.name, categoryId: r.category_id, categoryName: r.category_name,
-      amountCents: q.kind === 'in' ? r.amount : -r.amount, isSplit: r.is_split === 1, isSplitDifference: r.drift === 1,
+      amountCents: q.kind === 'in' ? r.amount : -r.amount, isSplit: r.is_split === 1, isSplitDifference: r.drift === 1, pending: r.pending === 1,
     })),
     nextCursor: rows.length > q.limit && last ? encodeCursor([last.date, last.created_at, last.row_order, last.line_key]) : null,
   };
@@ -191,7 +191,7 @@ export function getPayeeHistory(db: Db, q: PayeeHistoryQuery, today: string): Pa
       rows.set(l.transaction_id, {
         row: {
           transactionId: l.transaction_id, date: l.date, name: named, shareCents: -l.amount, totalCents: l.is_split && whole ? -l.total : null,
-          upcoming: l.date > today, reimbursed: l.reimbursed === 1,
+          upcoming: l.date > today, reimbursed: l.reimbursed === 1, pending: l.pending === 1,
         },
         at: [l.date, l.created_at, l.row_order, l.transaction_id],
       });

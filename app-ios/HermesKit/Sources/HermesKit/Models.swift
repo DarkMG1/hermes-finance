@@ -297,6 +297,8 @@ public struct ExpenseRow: Codable, Sendable, Identifiable, Hashable {
     public let amountCents: Int
     public let isSplit: Bool
     public let isSplitDifference: Bool
+    /// nil from servers before 2.2.0
+    public let pending: Bool?
 
     public var id: String { "\(transactionId)/\(lineId ?? (isSplitDifference ? "difference" : "row"))" }
 }
@@ -324,6 +326,8 @@ public struct PayeeHistoryRow: Codable, Sendable, Identifiable {
     public let upcoming: Bool
     /// In the Reimbursement category: paid back, but still this payee's charge. Optional: History cached before 1.8.1 (182) has none.
     public let reimbursed: Bool?
+    /// nil from servers before 2.2.0
+    public let pending: Bool?
     public var id: String { transactionId }
 }
 

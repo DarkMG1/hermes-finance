@@ -9,7 +9,8 @@
       "categoryName": "Synthetic Food",
       "amountCents": 1250,
       "isSplit": false,
-      "isSplitDifference": false
+      "isSplitDifference": false,
+      "pending": false
     },
     {
       "transactionId": "txn-3",
@@ -20,7 +21,8 @@
       "categoryName": "Synthetic Food",
       "amountCents": 2500,
       "isSplit": true,
-      "isSplitDifference": false
+      "isSplitDifference": false,
+      "pending": true
     },
     {
       "transactionId": "txn-6",
@@ -31,7 +33,8 @@
       "categoryName": "Synthetic Food",
       "amountCents": 300,
       "isSplit": false,
-      "isSplitDifference": false
+      "isSplitDifference": false,
+      "pending": false
     }
   ],
   "nextCursor": null

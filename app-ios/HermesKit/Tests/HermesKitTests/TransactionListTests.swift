@@ -21,7 +21,7 @@ private func row(_ id: String, _ date: String = "2026-03-10", account: String = 
 
 @Test func historyPagesDedupeByRowIdentity() {
     let charge = PayeeHistoryRow(transactionId: "a", date: "2026-03-10", name: "Synthetic Quill",
-                                shareCents: 500, totalCents: nil, upcoming: false, reimbursed: nil)
+                                shareCents: 500, totalCents: nil, upcoming: false, reimbursed: nil, pending: nil)
     #expect([charge].appendingPage([charge]).count == 1)
 }
 
