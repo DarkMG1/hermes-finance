@@ -11,7 +11,6 @@ struct WhoOwesView: View {
     @State private var adding = false
     @State private var addingFor: LedgerTransaction?
     @State private var paying: PaybackTarget?
-    @State private var showSettled = false
     @State private var writes: [String: WriteGuard] = [:]
     @State private var busyIds: Set<String> = []
     @State private var errors = RequestErrors()
@@ -38,10 +37,9 @@ struct WhoOwesView: View {
                 let settled = loaded.value.filter { $0.balanceCents == 0 }
                 if !settled.isEmpty {
                     Card {
-                        DisclosureGroup("Settled", isExpanded: $showSettled) {
+                        Fold(title: "Settled") {
                             ForEach(settled) { person in personLink(person) }
                         }
-                        .textStyle(.headline)
                     }
                 }
                 if let settings { repaymentAccountCard(settings) }

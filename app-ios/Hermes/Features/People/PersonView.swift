@@ -27,7 +27,6 @@ struct PersonView: View {
             }
         }
     }
-    @State private var showEarlier = false
     @State private var error: String?
 
     var body: some View {
@@ -52,18 +51,14 @@ struct PersonView: View {
                         ForEach(openItems) { item in openRow(item) }
                     }
                 }
-                // entries up to and including the latest settle-up are the current period; older ones fold away
-                let cut = (detail.history.firstIndex(where: \.settled) ?? detail.history.count - 1) + 1
+                // what's still owed is in Open; everything else folds away until asked for
                 Card {
-                    if detail.history.isEmpty { Text("Nothing yet").textStyle(.subhead, color: Palette.secondaryText) }
-                    ForEach(detail.history.prefix(cut)) { entry in entryView(entry) }
-                }
-                if cut < detail.history.count {
-                    Card {
-                        DisclosureGroup("Earlier", isExpanded: $showEarlier) {
-                            ForEach(detail.history.dropFirst(cut)) { entry in entryView(entry) }
+                    if detail.history.isEmpty {
+                        Text("Nothing yet").textStyle(.subhead, color: Palette.secondaryText)
+                    } else {
+                        Fold(title: "History") {
+                            ForEach(detail.history) { entry in entryView(entry) }
                         }
-                        .textStyle(.headline)
                     }
                 }
             }
