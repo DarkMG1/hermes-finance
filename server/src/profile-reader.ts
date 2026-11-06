@@ -11,16 +11,21 @@ export interface ProfileReader { read(kind: ProfileKind, pages: Buffer[]): Promi
 
 // The app's Redaction rules, so what the photo boxes the text blanks: the app redacts the photo first, this catches what Claude still read.
 // SSN/ITIN or EIN shaped, bounded by digits only (a label glued on, "SSN000-00-0000", still counts); separators: hyphen, en or em dash,
-// dot, or a run of spaces; an SSN has both or neither, so a ZIP+4 (00000-0000) is kept; a `$` before or `.digit` after makes it an amount.
+// dot, or a run of spaces; an SSN has both or neither, so a ZIP+4 (00000-0000) is kept; nine digits each split by spaces (a form's
+// one-digit-per-cell box); a `$` before or `.digit` after makes it an amount.
 const SEP = '(?:[-\u2013\u2014.]| +)';
-const IDENTIFIER = new RegExp(`(?<![\\d$])(?:\\d{3}(?:${SEP}\\d{2}${SEP}|\\d{2})\\d{4}|\\d{2}${SEP}\\d{7})(?!\\d|\\.\\d)`);
+const IDENTIFIER = new RegExp(`(?<![\\d$])(?:\\d{3}(?:${SEP}\\d{2}${SEP}|\\d{2})\\d{4}|\\d{2}${SEP}\\d{7}|\\d(?: +\\d){8})(?!\\d|\\.\\d)`);
+// with an identifier's label: any run of 5+ digits, spaces and dashes (not a date), like the app's digits under such a label
+const ID_KEYWORD = /\b(?:social security|ssn|itin|taxpayer identification|identifying number|employer identification|ein)\b/i;
+const DIGIT_RUN = /(?<![\d$]|\d[.,])\d[\d \-\u2013\u2014]*\d(?!\d|[.,]\d)/g;
 // account and routing numbers: with one of these words, 8 to 17 digits in a run or in groups split by spaces or hyphens (not a date)
 const KEYWORD = /\b(?:accounts?|acct|routing|aba|rtn)\b/i;
 const RUN = /(?<![\d$]|\d[.,])\d{8,17}(?!\d|[.,]\d)/;
 const GROUPS = /(?<![\d$]|\d[.,])\d{3,}(?:[ -]\d{2,}){1,4}(?!\d|[.,]\d)/g;
 const DATE = /^\d{4}[- ]\d{1,2}[- ]\d{1,2}$/;
 const grouped = (m: string) => { const n = m.replace(/\D/g, '').length; return n >= 8 && n <= 17 && !DATE.test(m); };
-const sensitive = (s: string) => IDENTIFIER.test(s) || (KEYWORD.test(s) && (RUN.test(s) || [...s.matchAll(GROUPS)].some((m) => grouped(m[0]))));
+const labelled = (m: string) => m.replace(/\D/g, '').length >= 5 && !DATE.test(m);
+const sensitive = (s: string) => IDENTIFIER.test(s) || (ID_KEYWORD.test(s) && [...s.matchAll(DIGIT_RUN)].some((m) => labelled(m[0]))) || (KEYWORD.test(s) && (RUN.test(s) || [...s.matchAll(GROUPS)].some((m) => grouped(m[0]))));
 export const scrubIdentifiers = <T>(v: T): T => (typeof v === 'string' ? (sensitive(v) ? null : v)
   : Array.isArray(v) ? v.map(scrubIdentifiers)
     : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, scrubIdentifiers(x)])) : v) as T;

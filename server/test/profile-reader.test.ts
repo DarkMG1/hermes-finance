@@ -105,9 +105,12 @@ test('scrubIdentifiers blanks SSN, ITIN and EIN shaped strings anywhere and keep
 
 test("scrubIdentifiers follows the app's rules: digits bound an identifier, and account or routing numbers go with their word", () => {
   for (const s of ['SSN000-00-0000', 'EIN00-0000000', 'ID000000000', 'x000-00-0000y', 'Account 00001234567', 'Routing 000000000', 'acct# 1234 5678 9012',
-    'Acct 1234-5678-90', 'ABA:000000000', 'Direct deposit account 0000 1234 5678.']) assert.equal(scrubIdentifiers(s), null, s);
+    'Acct 1234-5678-90', 'ABA:000000000', 'Direct deposit account 0000 1234 5678.', '0 0 0 0 0 0 0 0 0', 'SSN 00 00 00 00', 'EIN 0 0000 00']) {
+    assert.equal(scrubIdentifiers(s), null, s);
+  }
   for (const s of ['$000000000', '000000000.00', '$00-0000000', 'Account ending in 1234', 'Account opened 2026-04-15', '00001234567 transfers',
-    'Account total $00001234567.00', 'Accounting 00001234567', 'Synthetic City, ST 00000-0000', 'Phone 1234 5678 9012']) assert.equal(scrubIdentifiers(s), s, s);
+    'Account total $00001234567.00', 'Accounting 00001234567', 'Synthetic City, ST 00000-0000', 'Phone 1234 5678 9012', '0 0 0 0 0 0 0 0',
+    'SSN ends 0000', 'SSN wages 48500.00', 'SSN 2026-04-15', '00 00 00 00']) assert.equal(scrubIdentifiers(s), s, s);
 });
 
 test('uncertain keeps only the draft\'s own field names', async () => {

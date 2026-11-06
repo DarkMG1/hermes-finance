@@ -112,3 +112,22 @@ private func boxed(_ text: String) -> Bool { !Redaction.boxes([line(text)]).isEm
     #expect(Redaction.boxes([line("000-00", y: 0.5, x: 0.1, w: 0.1), line("-0000", y: 0.5, x: 0.3, w: 0.1)]).count == 2)
     #expect(Redaction.boxes([line("000 00", y: 0.2), line("0000", y: 0.6)]).isEmpty, "different rows")
 }
+
+@Test func aOneDigitPerCellIdentifierIsBoxed() {
+    #expect(boxed("0 0 0 0 0 0 0 0 0"))
+    #expect(boxed("Your social security number 0 0 0 0 0 0 0 0 0"))
+    #expect(!boxed("0 0 0 0 0 0 0 0"), "eight digits")
+}
+
+@Test func digitsJustUnderAnIdentifierLabelAreBoxedEvenWithDigitsMissing() {
+    let label = line("Your social security number", y: 0.40)
+    #expect(!Redaction.boxes([label, line("00 00 00 00", y: 0.42)]).isEmpty, "a cell border dropped a digit")
+    #expect(!Redaction.boxes([label, line("0 00 0 0", y: 0.42)]).isEmpty)
+    #expect(!Redaction.boxes([line("a Employee's SSN 00 00 00 00", y: 0.40)]).isEmpty, "same line")
+    #expect(Redaction.boxes([label, line("2026", y: 0.42)]).isEmpty, "four digits")
+    #expect(Redaction.boxes([label, line("48500.00", y: 0.42)]).isEmpty, "an amount")
+    #expect(Redaction.boxes([label, line("2026-04-15", y: 0.42)]).isEmpty, "a date")
+    #expect(Redaction.boxes([label, line("00 00 00 00", y: 0.50)]).isEmpty, "too far below")
+    #expect(Redaction.boxes([label, line("00 00 00 00", y: 0.38)]).isEmpty, "above the label")
+    #expect(Redaction.boxes([line("00 00 00 00")]).isEmpty, "no label")
+}
