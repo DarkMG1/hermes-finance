@@ -29,7 +29,6 @@ struct RedactionPreview: View {
     @State private var canRetry = false
     /// pages with nothing hidden on a document that normally prints an SSN or EIN, asked about before sending
     @State private var unchecked: [Int] = []
-    @GestureState private var drag: (start: CGPoint, end: CGPoint)?
 
     var body: some View {
         NavigationStack {
@@ -59,7 +58,7 @@ struct RedactionPreview: View {
                     if !pages[index].drawn.isEmpty {
                         Button("Undo last box") { pages[index].drawn.removeLast() }.disabled(reading)
                     }
-                    Text("Black boxes hide ID and account numbers. Drag across anything else you want hidden.")
+                    Text("Black boxes hide ID and account numbers. Drag across anything else you want hidden; pinch to zoom, two fingers to move.")
                         .textStyle(.caption, color: Palette.secondaryText)
                     if !Redaction.pagesToCheck(kind: kind, boxCounts: [pages[index].boxes.count]).isEmpty {
                         Text("Nothing hidden on this page — check it before sending.").textStyle(.caption, color: Palette.loss)
@@ -102,44 +101,13 @@ struct RedactionPreview: View {
     }
 
     private func pageView(_ page: RedactedPage) -> some View {
-        Image(uiImage: page.image)
-            .resizable()
-            .scaledToFit()
-            .overlay {
-                GeometryReader { geo in
-                    let w = geo.size.width, h = geo.size.height
-                    ForEach(Array(page.boxes.enumerated()), id: \.offset) { _, b in
-                        Rectangle().fill(Color.black)
-                            .frame(width: b.w * w, height: b.h * h)
-                            .position(x: (b.x + b.w / 2) * w, y: (b.y + b.h / 2) * h)
-                    }
-                    if let drag {
-                        let r = Self.box(drag.start, drag.end, in: geo.size)
-                        Rectangle().stroke(Palette.accent, lineWidth: 2)
-                            .frame(width: r.w * w, height: r.h * h)
-                            .position(x: (r.x + r.w / 2) * w, y: (r.y + r.h / 2) * h)
-                    }
-                    Color.clear.contentShape(Rectangle())
-                        .gesture(DragGesture(minimumDistance: Space.xs)
-                            .updating($drag) { value, state, _ in state = (value.startLocation, value.location) }
-                            .onEnded { value in
-                                let b = Self.box(value.startLocation, value.location, in: geo.size)
-                                if b.w > 0, b.h > 0 { pages[index].drawn.append(b) }
-                            })
-                        .disabled(reading)
-                }
-            }
-            .accessibilityElement(children: .ignore)
-            // dragging has no VoiceOver path; hiding the whole page is always safe
-            .accessibilityAction(named: "Black out whole page") { pages[index].drawn.append(Box(x: 0, y: 0, w: 1, h: 1)) }
-            .accessibilityLabel("Page \(index + 1) of \(pages.count), \(page.boxes.count) \(page.boxes.count == 1 ? "item" : "items") hidden")
-    }
-
-    private static func box(_ a: CGPoint, _ b: CGPoint, in size: CGSize) -> Box {
-        func clamp(_ v: CGFloat, _ side: CGFloat) -> Double { Double(min(max(v / max(side, 1), 0), 1)) }
-        let x0 = clamp(min(a.x, b.x), size.width), x1 = clamp(max(a.x, b.x), size.width)
-        let y0 = clamp(min(a.y, b.y), size.height), y1 = clamp(max(a.y, b.y), size.height)
-        return Box(x: x0, y: y0, w: x1 - x0, h: y1 - y0)
+        ZoomView(page: index) {
+            PageCanvas(image: page.image, boxes: page.boxes, enabled: !reading) { pages[index].drawn.append($0) }
+        }
+        .accessibilityElement(children: .ignore)
+        // dragging has no VoiceOver path; hiding the whole page is always safe
+        .accessibilityAction(named: "Black out whole page") { pages[index].drawn.append(Box(x: 0, y: 0, w: 1, h: 1)) }
+        .accessibilityLabel("Page \(index + 1) of \(pages.count), \(page.boxes.count) \(page.boxes.count == 1 ? "item" : "items") hidden")
     }
 
     private func prepare() async {
@@ -231,6 +199,102 @@ struct RedactionPreview: View {
             case "READER_NOT_CONFIGURED": "Reading isn't set up on the server."
             default: errorMessage(error)
             }
+        }
+    }
+}
+
+/// One page with its black boxes; a one-finger drag draws a new box. Coordinates are the page's own, so zoom doesn't change them.
+private struct PageCanvas: View {
+    let image: UIImage
+    let boxes: [Box]
+    let enabled: Bool
+    let onBox: (Box) -> Void
+    @GestureState private var drag: (start: CGPoint, end: CGPoint)?
+
+    var body: some View {
+        Image(uiImage: image)
+            .resizable()
+            .scaledToFit()
+            .overlay {
+                GeometryReader { geo in
+                    let w = geo.size.width, h = geo.size.height
+                    ForEach(Array(boxes.enumerated()), id: \.offset) { _, b in
+                        Rectangle().fill(Color.black)
+                            .frame(width: b.w * w, height: b.h * h)
+                            .position(x: (b.x + b.w / 2) * w, y: (b.y + b.h / 2) * h)
+                    }
+                    if let drag {
+                        let r = Self.box(drag.start, drag.end, in: geo.size)
+                        Rectangle().stroke(Palette.accent, lineWidth: 2)
+                            .frame(width: r.w * w, height: r.h * h)
+                            .position(x: (r.x + r.w / 2) * w, y: (r.y + r.h / 2) * h)
+                    }
+                    Color.clear.contentShape(Rectangle())
+                        .gesture(DragGesture(minimumDistance: Space.xs)
+                            .updating($drag) { value, state, _ in state = (value.startLocation, value.location) }
+                            .onEnded { value in
+                                let b = Self.box(value.startLocation, value.location, in: geo.size)
+                                if b.w > 0, b.h > 0 { onBox(b) }
+                            })
+                        .disabled(!enabled)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private static func box(_ a: CGPoint, _ b: CGPoint, in size: CGSize) -> Box {
+        func clamp(_ v: CGFloat, _ side: CGFloat) -> Double { Double(min(max(v / max(side, 1), 0), 1)) }
+        let x0 = clamp(min(a.x, b.x), size.width), x1 = clamp(max(a.x, b.x), size.width)
+        let y0 = clamp(min(a.y, b.y), size.height), y1 = clamp(max(a.y, b.y), size.height)
+        return Box(x: x0, y: y0, w: x1 - x0, h: y1 - y0)
+    }
+}
+
+/// Pinch to zoom up to 5×, two fingers to move; one finger stays with the content. Back to 1× on a new `page`.
+private struct ZoomView<Content: View>: UIViewRepresentable {
+    let page: Int
+    @ViewBuilder let content: Content
+
+    final class Scroll: UIScrollView, UIScrollViewDelegate {
+        let host: UIHostingController<Content>
+        var page = 0
+
+        init(content: Content) {
+            host = UIHostingController(rootView: content)
+            super.init(frame: .zero)
+            host.view.backgroundColor = .clear
+            // the scroll view is already inside the safe area; insets here would shift the page off its boxes
+            host.safeAreaRegions = []
+            addSubview(host.view)
+            delegate = self
+            minimumZoomScale = 1
+            maximumZoomScale = 5
+            showsHorizontalScrollIndicator = false
+            showsVerticalScrollIndicator = false
+            panGestureRecognizer.minimumNumberOfTouches = 2
+        }
+
+        @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            // at 1× the page fills the view; zooming scales it from there
+            if zoomScale == 1, host.view.frame.size != bounds.size {
+                host.view.frame = CGRect(origin: .zero, size: bounds.size)
+                contentSize = bounds.size
+            }
+        }
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? { host.view }
+    }
+
+    func makeUIView(context: Context) -> Scroll { Scroll(content: content) }
+
+    func updateUIView(_ view: Scroll, context: Context) {
+        view.host.rootView = content
+        if view.page != page {
+            view.page = page
+            view.setZoomScale(1, animated: false)
         }
     }
 }
