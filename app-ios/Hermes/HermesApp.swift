@@ -67,7 +67,8 @@ struct HermesApp: App {
                 // balances hide whenever Hermes leaves the screen; showing them again needs Face ID
                 if phase == .background {
                     UserDefaults.standard.set(true, forKey: "hideBalances")
-                    model.openedPDF = nil
+                    // an open financial profile keeps its PDF behind the lock, like the rest of what's open there
+                    if !lock.profileOpen { model.openedPDF = nil }
                 }
                 if phase == .active {
                     model.loadStoredConnection()
