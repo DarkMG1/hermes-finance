@@ -124,14 +124,6 @@ struct ConversationView: View {
         .navigationTitle(title.isEmpty ? "New chat" : title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbarVisibility(covered ? .hidden : .automatic, for: .navigationBar)
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(profileUnlocked.wrappedValue ? "Lock financial profile" : "Unlock financial profile",
-                       systemImage: profileUnlocked.wrappedValue ? "lock.open" : "lock") {
-                    if profileUnlocked.wrappedValue { profileUnlocked.wrappedValue = false } else { Task { await unlockProfile() } }
-                }
-            }
-        }
         // what an unlocked read showed goes with the unlock; the server's copy hides it again
         .onChange(of: profileUnlocked.wrappedValue) { _, unlocked in
             guard !unlocked else {
@@ -412,7 +404,7 @@ private struct AnswerRow: View, Equatable {
     private var failure: some View {
         let final = ["AI_CREDITS_EXHAUSTED": "AI credits used up for this month", "AI_NOT_CONFIGURED": "AI isn't set up on the server",
                      "CHAT_TOO_LONG": "This chat is too long. Start a new one.",
-                     "PROFILE_LOCKED": "This chat uses your financial profile. Unlock it with the lock button, then ask again."]
+                     "PROFILE_LOCKED": "This chat uses your financial profile. Unlock it, then ask again."]
         let retryable = ["MAX_TOKENS": "The answer got too long. Ask for less.", "REFUSED": "Claude couldn't answer that."]
         if let text = final[message.errorCode ?? ""] {
             Text(text).textStyle(.caption, color: Palette.loss)
