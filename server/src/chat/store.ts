@@ -76,6 +76,11 @@ export function getChat(db: Db, id: string, hideProfile = false): ChatDetail | n
   return { ...chat, messages };
 }
 
+/** The automatic title only replaces the first question's, so it never overwrites this; typed by the owner, it isn't profile data. */
+export function renameChat(db: Db, id: string, title: string): boolean {
+  return db.prepare('UPDATE chat_conversations SET title = ?, profile_title = 0 WHERE id = ?').run(title, id).changes > 0;
+}
+
 export function deleteChat(db: Db, id: string): boolean {
   return db.prepare('DELETE FROM chat_conversations WHERE id = ?').run(id).changes > 0;
 }

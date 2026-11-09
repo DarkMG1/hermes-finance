@@ -1,12 +1,12 @@
 import type { FastifyInstance } from 'fastify';
-import { SendChatBody } from '@hermes/shared';
+import { RenameChatBody, SendChatBody } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { parseBody } from '../validate.ts';
 import { answer, type ChatEvent } from '../chat/agent.ts';
 import { usage } from '../chat/anthropic.ts';
-import { addUserMessage, chatUsesProfile, createChat, deleteChat, dropFailedTail, findByClientId, getChat, listChats, startAssistant } from '../chat/store.ts';
+import { addUserMessage, chatUsesProfile, createChat, deleteChat, dropFailedTail, findByClientId, getChat, listChats, renameChat, startAssistant } from '../chat/store.ts';
 
 type Running = { ac: AbortController; done: Promise<unknown> };
 const busyChats = new WeakMap<Deps['db'], Map<string, Running>>();
@@ -37,6 +37,13 @@ export function chatRoutes(app: FastifyInstance, deps: Deps): void {
     const chat = getChat(db, req.params.id, req.query.profileUnlocked !== '1');
     if (!chat) throw new ApiError(404, 'NOT_FOUND', 'chat not found');
     return chat;
+  });
+
+  // setting a title twice is the same title: no idempotency key
+  app.patch<{ Params: { id: string } }>('/v1/chats/:id', async (req, reply) => {
+    const { title } = parseBody(RenameChatBody, req.body);
+    if (!renameChat(db, req.params.id, title)) throw new ApiError(404, 'NOT_FOUND', 'chat not found');
+    return reply.code(204).send();
   });
 
   app.delete<{ Params: { id: string } }>('/v1/chats/:id', async (req, reply) => {
