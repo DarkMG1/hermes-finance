@@ -3,6 +3,7 @@ import type { Db } from '../db.ts';
 import { addDays } from '../days.ts';
 import type { Deps } from '../deps.ts';
 import { getJob, getProfile, getReturn, listJobs, payStubs } from '../profile.ts';
+import { advise } from './advice.ts';
 import { computeFederal } from './federal.ts';
 import { federalFigures, stateFigures } from './figures.ts';
 import { getScenario, getTaxInputs } from './inputs.ts';
@@ -55,7 +56,8 @@ function planSales(db: Db, lots: ReturnType<typeof buildLots>, sell: NonNullable
   return { sales, blocked: null };
 }
 
-function assemble(deps: Deps, year: number, today: string, change: WhatIf = {}) {
+/** Advice is computed only for the plain projection (no change), and never inside its own what-ifs. */
+function assemble(deps: Deps, year: number, today: string, change: WhatIf = {}, withAdvice = true) {
   const { db } = deps;
   const notes: string[] = [];
   const note = (s: string) => { if (!notes.includes(s)) notes.push(s); };
@@ -162,7 +164,7 @@ function assemble(deps: Deps, year: number, today: string, change: WhatIf = {}) 
     carryover = { shortCents: 0, longCents: prior.capitalLossCarryoverCents };
     note('Prior-year carryover total treated as long-term');
   } else if (!prior && year - 1 >= thisYear) {
-    carryover = assemble(deps, year - 1, today).unusedCarryover;
+    carryover = assemble(deps, year - 1, today, {}, false).unusedCarryover;
     if (carryover.shortCents || carryover.longCents) note(`Capital loss carryover from the ${year - 1} projection`);
   } else if (!prior) note(`No ${year - 1} federal return: no capital loss carryover counted`);
 
@@ -232,6 +234,16 @@ function assemble(deps: Deps, year: number, today: string, change: WhatIf = {}) 
     year, openYears: openYears(today), asOf: today, combinedBalanceCents: sum(returns, (r) => r.balanceCents), returns, assumptions: notes,
     figures: { federalYear: fed.year, fallback: fed.fallback }, waysToSave: [], headsUp: [],
   };
+  if (withAdvice && !Object.keys(change).length) {
+    const delta = (ch: WhatIf) => {
+      const a = assemble(deps, year, today, ch, false);
+      return a.planned.blocked ? null : a.projection.combinedBalanceCents - projection.combinedBalanceCents;
+    };
+    Object.assign(projection, advise({
+      db, year, projection, fed: fed.figures, safeHarborCents: federal.safeHarborCents, claimable, inputs, scenario, lots: lots.lots,
+      remainingPaychecks: projected.filter((x) => x.grossCents).length, stateModel: (code) => modelOf(code)?.model ?? null, delta,
+    }, today));
+  }
   return { projection, unusedCarryover: federal.unusedCarryover, planned };
 }
 
@@ -239,7 +251,7 @@ export const project = (deps: Deps, year: number, today: string, change?: WhatIf
 
 /** The projection before and after a change; a blocked sale changes nothing. deltaCents is the change in the combined balance (+ better). */
 export function whatIf(deps: Deps, year: number, today: string, change: WhatIf) {
-  const before = project(deps, year, today);
+  const before = assemble(deps, year, today, {}, false).projection;
   const a = assemble(deps, year, today, change);
   if (a.planned.blocked) return { before, after: before, deltaCents: 0, blocked: a.planned.blocked, sales: [] as Sale[] };
   return { before, after: a.projection, deltaCents: a.projection.combinedBalanceCents - before.combinedBalanceCents, blocked: null, sales: a.planned.sales };

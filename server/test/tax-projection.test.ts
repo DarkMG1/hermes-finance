@@ -106,7 +106,7 @@ test("this year = stubs to date + future paychecks through each job's end", asyn
   for (const a of ['Prior-year carryover total treated as long-term', 'No tuition entered: education credit not counted', 'No student loan interest entered',
     'Bank interest not included', 'No 401(k) contributions entered for 2026']) assert.ok(p.assumptions.includes(a), a);
   assert.ok(p.assumptions.some((a) => a.startsWith('SYNTHETIC EMPLOYER: future paychecks')), p.assumptions.join('\n'));
-  assert.deepEqual([p.waysToSave, p.headsUp], [[], []]);
+  assert.deepEqual([p.waysToSave.map((a) => a.kind), p.headsUp], [['roth_room', 'education_credit'], []]);
   // estimated lines say so on the line
   const wages = fed.lines.find((l) => l.key === 'wages')!;
   assert.deepEqual([wages.source, wages.assumption], ['pay stubs and projected paychecks', 'Includes pay on 8 projected paychecks (estimated)']);
