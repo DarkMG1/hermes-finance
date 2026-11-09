@@ -201,3 +201,18 @@ import Testing
     #expect(transport.requests.map { String(data: $0.body ?? Data(), encoding: .utf8) } == [#"{"filingStatus":"single","multipleJobs":true}"#, ""])
     #expect(transport.requests.map(\.method) == ["PUT", "DELETE"] && transport.requests.map(\.url.path) == ["/v1/jobs/job-1/w4", "/v1/jobs/job-1/w4"])
 }
+
+@Test func aStubAlreadySavedIsMarkedAndAnOlderServersIsNot() throws {
+    var json = try #require(JSONSerialization.jsonObject(with: fixture("profile-read-pay-stub")) as? [String: Any])
+    var stubs = try #require(json["stubs"] as? [[String: Any]])
+    stubs[1]["saved"] = true
+    stubs[0].removeValue(forKey: "saved")
+    json["stubs"] = stubs
+    let read = try JSONDecoder().decode(ProfileReadResult.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(read.reads.map(\.saved) == [false, true] && !read.saved)
+}
+
+@Test func aServerMessageShowsAsASentence() {
+    #expect(ClientError.api(status: 409, body: APIErrorBody(code: "DUPLICATE_STUB", message: "this pay stub is already saved")).message
+        == "This pay stub is already saved")
+}

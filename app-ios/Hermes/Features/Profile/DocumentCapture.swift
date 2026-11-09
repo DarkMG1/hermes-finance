@@ -181,8 +181,11 @@ extension View {
 /// Preview and read, then the review form, once per pay stub when the pages hold several; by hand goes straight to an empty form.
 private struct ProfileCaptureFlow: View {
     @Environment(\.profileDrafting) private var drafting
+    @Environment(\.dismiss) private var dismiss
     let capture: Capture
+    /// what's left to review: pay stubs already saved are skipped
     @State private var reads: [ProfileReadResult] = []
+    @State private var skipped: Int?
     @State private var at = 0
     /// the job picked on the stub before, offered on the next
     @State private var jobId: String?
@@ -193,17 +196,31 @@ private struct ProfileCaptureFlow: View {
             if at < reads.count {
                 let read = reads[at]
                 ProfileDraftForm(kind: capture.kind, draft: read.draft, uncertain: Set(read.uncertain), step: reads.count > 1 ? (at + 1, reads.count) : nil,
-                                 jobId: jobId, next: at + 1 < reads.count ? { jobId = $0; at += 1 } : nil)
+                                 jobId: jobId, note: at == 0 ? skippedNote : nil, next: at + 1 < reads.count ? { jobId = $0; at += 1 } : nil)
                     .id(at)
+            } else if let skipped {
+                NavigationStack {
+                    ContentUnavailableView(skipped == 1 ? "Already saved" : "All \(skipped) already saved", systemImage: "checkmark.circle",
+                                           description: Text(skipped == 1 ? "This pay stub is already saved." : "These pay stubs are already saved."))
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+                }
             } else if byHand || capture.pages.isEmpty {
                 ProfileDraftForm(kind: capture.kind, draft: .empty(capture.kind), uncertain: [])
             } else {
                 RedactionPreview(kind: capture.kind, originals: capture.pages, dropped: capture.dropped,
-                                 onRead: { reads = $0.reads }, onByHand: { byHand = true })
+                                 onRead: { read in
+                                     reads = read.reads.filter { !$0.saved }
+                                     skipped = read.reads.count - reads.count
+                                 }, onByHand: { byHand = true })
             }
         }
         .onAppear { drafting.wrappedValue = true }
         .onDisappear { drafting.wrappedValue = false }
+    }
+
+    private var skippedNote: String? {
+        guard let skipped, skipped > 0 else { return nil }
+        return skipped == 1 ? "Skipped 1 pay stub already saved." : "Skipped \(skipped) pay stubs already saved."
     }
 }
 

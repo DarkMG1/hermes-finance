@@ -41,8 +41,10 @@ export async function readProfile(deps: Deps, kind: ProfileKind, pages: Buffer[]
     const r = await deps.profileReader.read(kind, pages);
     const clean = (x: { draft: object; uncertain: string[] }) => ({ draft: scrubIdentifiers(x.draft), uncertain: x.uncertain.filter((k) => Object.hasOwn(x.draft, k)) });
     if (r.kind !== 'pay_stub') return { kind: r.kind, ...clean(r) } as ProfileReadResult;
-    const stubs = r.stubs.map(clean);
-    return { kind: r.kind, ...stubs[0]!, stubs } as ProfileReadResult;
+    // the same test as the duplicate refusal, without the job: the review skips what's already saved
+    const saved = deps.db.prepare('SELECT 1 FROM pay_stubs WHERE pay_date = ? AND gross_cents = ? AND net_cents = ?');
+    const stubs = r.stubs.map((s) => ({ ...clean(s), saved: !!saved.get(s.draft.payDate, s.draft.grossCents, s.draft.netCents) }));
+    return { kind: r.kind, draft: stubs[0]!.draft, uncertain: stubs[0]!.uncertain, stubs } as ProfileReadResult;
   } catch (e) {
     const code = e instanceof ReaderError ? e.code : 'UNKNOWN';
     if (code === 'AI_CREDITS_EXHAUSTED') throw new ApiError(402, 'AI_CREDITS_EXHAUSTED', 'the Anthropic API keys are out of credit');
@@ -99,9 +101,9 @@ Never return SSNs, ITINs, EINs or account numbers. List field names you are unsu
       const parsed = schema.safeParse(call?.input);
       if (!parsed.success) throw new ReaderError('INVALID_OUTPUT');
       if (kind === 'pay_stub') {
-        const stubs = (parsed.data as { stubs: ({ uncertain: string[] } & Record<string, unknown>)[] }).stubs.map(({ uncertain, ...draft }) => ({ draft, uncertain }));
+        const stubs = (parsed.data as { stubs: ({ uncertain: string[] } & Record<string, unknown>)[] }).stubs.map(({ uncertain, ...draft }) => ({ draft, uncertain, saved: false }));
         if (!stubs.length) throw new ReaderError('INVALID_OUTPUT');
-        return { kind, ...stubs[0]!, stubs, model } as ProfileReadOutput;
+        return { kind, draft: stubs[0]!.draft, uncertain: stubs[0]!.uncertain, stubs, model } as ProfileReadOutput;
       }
       const { uncertain, ...draft } = parsed.data as { uncertain: string[] } & Record<string, unknown>;
       // a letter that doesn't state one of these comes back as 0 despite the instruction; 0 would read as an offer of nothing

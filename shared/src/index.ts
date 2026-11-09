@@ -614,7 +614,9 @@ export const ProfileReadResult = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('tax_form'), draft: ProfileDrafts.tax_form, uncertain: ProfileUncertain }),
   /** stubs: every pay stub in the pages, in order; draft and uncertain are the first one's (what servers before 2.2.1 sent alone) */
   z.object({ kind: z.literal('pay_stub'), draft: ProfileDrafts.pay_stub, uncertain: ProfileUncertain,
-    stubs: z.array(z.object({ draft: ProfileDrafts.pay_stub, uncertain: ProfileUncertain })).min(1) }),
+    stubs: z.array(z.object({ draft: ProfileDrafts.pay_stub, uncertain: ProfileUncertain,
+      /** a stub with this pay date, gross and net is already saved */
+      saved: z.boolean() })).min(1) }),
   z.object({ kind: z.literal('offer'), draft: ProfileDrafts.offer, uncertain: ProfileUncertain }),
   z.object({ kind: z.literal('w4'), draft: ProfileDrafts.w4, uncertain: ProfileUncertain }),
 ]);

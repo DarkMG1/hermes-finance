@@ -39,7 +39,8 @@
       },
       "uncertain": [
         "grossCents"
-      ]
+      ],
+      "saved": false
     },
     {
       "draft": {
@@ -58,7 +59,8 @@
         "ytdGrossCents": null,
         "employer": "SYNTHETIC EMPLOYER"
       },
-      "uncertain": []
+      "uncertain": [],
+      "saved": false
     }
   ]
 }
