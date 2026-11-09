@@ -71,7 +71,7 @@ const KINDS: Record<ProfileKind, [label: string, hints: string]> = {
     + 'allowances: the regular withholding allowances (DE-4 line 1a, Worksheet A); when only a total is filled in (DE-4 line 1c), use it here. '
     + 'additionalAllowances: allowances for estimated deductions (DE-4 line 1b, Worksheet B). A box left blank is null; a written 0 is 0. '
     + 'extraWithholdingCents: the additional amount withheld each pay period (DE-4 line 2). exempt: true when exemption is claimed. employer: the employer name, if filled in.'],
-  offer: ['offer letter', 'baseCents: the annual base salary as stated, null for hourly pay or any letter without a yearly figure (never work one out). hourlyCents: the hourly rate as stated. hoursPerWeek: the weekly hours as stated (20 for 40 hours every 2 weeks). bonusTargetPct: a percent (15 for 15%). grants: each equity grant; vestMonths is the whole vesting length, vestEveryMonths the interval after the cliff.'],
+  offer: ['offer letter', 'baseCents: the annual base salary as stated, null for monthly or hourly pay or any letter without a yearly figure (never work one out). monthlyCents: the monthly salary as stated (internship offers often give one). hourlyCents: the hourly rate as stated. hoursPerWeek: the weekly hours as stated (20 for 40 hours every 2 weeks). bonusTargetPct: a percent (15 for 15%). grants: each equity grant; vestMonths is the whole vesting length, vestEveryMonths the interval after the cliff.'],
 };
 
 type MessagesReply = { content?: { type: string; name?: string; input?: unknown }[] };
@@ -112,7 +112,7 @@ Never return SSNs, ITINs, EINs or account numbers. List field names you are unsu
       }
       const { uncertain, ...draft } = parsed.data as { uncertain: string[] } & Record<string, unknown>;
       // a letter that doesn't state one of these comes back as 0 despite the instruction; 0 would read as an offer of nothing
-      if (kind === 'offer') for (const k of ['baseCents', 'hourlyCents', 'bonusTargetPct', 'signingBonusCents', 'relocationCents']) if ((draft as Record<string, unknown>)[k] === 0) (draft as Record<string, unknown>)[k] = null;
+      if (kind === 'offer') for (const k of ['baseCents', 'monthlyCents', 'hourlyCents', 'bonusTargetPct', 'signingBonusCents', 'relocationCents']) if ((draft as Record<string, unknown>)[k] === 0) (draft as Record<string, unknown>)[k] = null;
       return { kind, draft, uncertain, model } as ProfileReadOutput;
     },
   };
