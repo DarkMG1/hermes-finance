@@ -1,4 +1,7 @@
 import { test } from 'node:test';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import { RESULT_MAX, TOOLS, runTool, type ToolContext } from '../src/chat/tools.ts';
 import { toolLabel } from '../src/chat/labels.ts';
@@ -237,10 +240,16 @@ test('profile tool labels', () => {
   assert.equal(toolLabel('tax_years', {}), 'Tax years');
 });
 
-test('tax_reference gives a year\'s published figures in cents, and says which years it has for one it lacks', () => {
+test('tax_reference gives a year\'s federal figures in cents, the server file\'s state figures, and says which years it has for one it lacks', () => {
   const { deps } = makeTestDeps();
-  const fig = JSON.parse(runTool(deps, 'tax_reference', { year: 2026 }).content) as { figures: { federal: { standardDeduction: { single: number }; iraLimit: number } } };
-  assert.deepEqual([fig.figures.federal.standardDeduction.single, fig.figures.federal.iraLimit], [1_610_000, 750_000]);
+  const fed = JSON.parse(runTool(deps, 'tax_reference', { year: 2026 }).content) as { federal: { standardDeduction: { single: number }; iraLimit: number }; states?: unknown };
+  assert.deepEqual([fed.federal.standardDeduction.single, fed.federal.iraLimit, fed.states], [1_610_000, 750_000, undefined]);
+  const file = join(mkdtempSync(join(tmpdir(), 'hermes-tax-')), 'states.json');
+  writeFileSync(file, JSON.stringify({ 2026: { ZZ: { rate: 0.05, source: 'synthetic' } } }));
+  deps.config.stateTaxFile = file;
+  assert.deepEqual((JSON.parse(runTool(deps, 'tax_reference', { year: 2026 }).content) as { states: unknown }).states, { ZZ: { rate: 0.05, source: 'synthetic' } });
+  writeFileSync(file, 'not json');
+  assert.equal((JSON.parse(runTool(deps, 'tax_reference', { year: 2026 }).content) as { states?: unknown }).states, undefined, 'a broken file leaves the federal figures');
   assert.deepEqual(JSON.parse(runTool(deps, 'tax_reference', { year: 2031 }).content), { year: 2031, available: [2026], note: 'no 2031 figures in Hermes yet' });
   assert.equal(toolLabel('tax_reference', { year: 2026 }), 'Tax figures');
 });

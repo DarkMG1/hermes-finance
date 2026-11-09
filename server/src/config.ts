@@ -17,6 +17,8 @@ export type Config = {
   chatModel: string;
   /** HERMES_TITLE_MODEL: names a chat after its first answer. */
   titleModel: string;
+  /** HERMES_STATE_TAX_FILE: JSON of state tax figures by year and state code, kept on the server (which states says where the owner lives). */
+  stateTaxFile: string | null;
   plaid: { clientId: string; secret: string; env: 'sandbox' | 'production' };
 };
 
@@ -55,6 +57,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     anthropicBackupKey: env.ANTHROPIC_API_KEY_BACKUP?.trim() || null,
     chatModel: env.HERMES_CHAT_MODEL?.trim() || 'claude-opus-5-5',
     titleModel: env.HERMES_TITLE_MODEL?.trim() || 'claude-haiku-5-5',
+    stateTaxFile: env.HERMES_STATE_TAX_FILE?.trim() || null,
     plaid: { clientId: required(env, 'PLAID_CLIENT_ID'), secret: required(env, 'PLAID_SECRET'), env: plaidEnv },
   };
 }

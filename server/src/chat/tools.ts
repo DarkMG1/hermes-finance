@@ -101,8 +101,8 @@ const ENTRIES = new Map<string, Entry>([
       return chat && { id: chat.id, title: chat.title, createdAt: chat.createdAt,
         messages: chat.messages.map((m) => ({ role: m.role, date: localDay(new Date(m.createdAt)), text: clip(m.text) })) };
     }),
-  entry('tax_reference', 'Published tax figures for a year (federal brackets, standard deductions, IRA, Social Security, education credits and student loan interest limits; California and Michigan rates). Use these instead of figures from memory; a year not listed has none yet. All amounts are integer cents.',
-    z.object({ year: z.number().int().min(2000).max(2100) }).strict(), (_d, q) => taxReference(q.year)),
+  entry('tax_reference', 'Published tax figures for a year: federal brackets, standard deductions, IRA, Social Security, education credit and student loan interest limits, and the state figures the server has. Use these instead of figures from memory; a year not listed has none yet. All amounts are integer cents.',
+    z.object({ year: z.number().int().min(2000).max(2100) }).strict(), (d, q) => taxReference(q.year, d.config.stateTaxFile)),
   entry('show_chart', 'Shows the owner a bar or line chart above your answer, at most 2 per answer. Every value must come from a tool result in this conversation. For unit usd_cents values are integer cents; for unit percent values are percentage points (12.5 = 12.5%).',
     z.object({ kind: z.enum(['bar', 'line']), title: z.string().min(1).max(60), unit: z.enum(['usd_cents', 'count', 'percent']),
       points: z.array(z.object({ label: z.string().min(1).max(24), value: z.number() }).strict()).min(2).max(31) }).strict()
