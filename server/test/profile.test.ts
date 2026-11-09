@@ -160,6 +160,31 @@ test('W-4: one per job, replaced whole on save, shown on the job, deleted with i
   assert.equal(count(db, 'w4s'), 0, "a deleted job's W-4 goes with it");
 });
 
+test('state withholding forms: one per job and state, replaced whole, listed by state on the job, deleted with it', async () => {
+  const { get, send, db } = setup();
+  const job = (await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'current' })).json();
+  assert.deepEqual((await get(`/v1/jobs/${job.id}`)).json().stateW4s, []);
+  const de4 = { signedOn: '2026-01-05', filingStatus: 'single', allowances: 1, additionalAllowances: 0, extraWithholdingCents: 1000, exempt: false };
+  const put = await send('PUT', `/v1/jobs/${job.id}/state-w4/CA`, de4, 'ca');
+  assert.deepEqual([put.statusCode, put.json()], [200, { ...de4, state: 'CA', jobId: job.id, updatedAt: '2026-03-15T12:00:00.000Z' }]);
+  assert.deepEqual((await send('PUT', `/v1/jobs/${job.id}/state-w4/CA`, de4, 'ca')).json(), put.json(), 'one write per Idempotency-Key');
+  await send('PUT', `/v1/jobs/${job.id}/state-w4/NY`, { allowances: 2 });
+  const replaced = (await send('PUT', `/v1/jobs/${job.id}/state-w4/CA`, { filingStatus: 'married' })).json();
+  assert.deepEqual([replaced.filingStatus, replaced.allowances, replaced.exempt], ['married', null, null], 'a new form replaces that state\'s old one');
+  assert.deepEqual((await get(`/v1/jobs/${job.id}`)).json().stateW4s.map((w: { state: string; allowances: number | null }) => [w.state, w.allowances]),
+    [['CA', null], ['NY', 2]]);
+  for (const [url, body, field] of [[`/v1/jobs/${job.id}/state-w4/ca`, {}, 'state'], [`/v1/jobs/${job.id}/state-w4/CA`, { allowances: -1 }, 'allowances'],
+    [`/v1/jobs/${job.id}/state-w4/CA`, { filingStatus: 'married_joint' }, 'filingStatus'], [`/v1/jobs/${job.id}/state-w4/CA`, { state: 'NY' }, undefined]] as const) {
+    const r = await send('PUT', url, body);
+    assert.deepEqual([r.statusCode, r.json().field], [400, field], url + JSON.stringify(body));
+  }
+  assert.equal((await send('PUT', '/v1/jobs/missing/state-w4/CA', {})).statusCode, 404);
+  assert.equal((await send('DELETE', `/v1/jobs/${job.id}/state-w4/NY`)).statusCode, 200);
+  assert.equal((await send('DELETE', `/v1/jobs/${job.id}/state-w4/NY`)).statusCode, 404);
+  await send('DELETE', `/v1/jobs/${job.id}`);
+  assert.equal(count(db, 'state_w4s'), 0, "a deleted job's state forms go with it");
+});
+
 test('028 keeps AI usage rows, lets the profile reader record, and allows one profile row', () => {
   const db = openDb(join(mkdtempSync(join(tmpdir(), 'hermes-m28-')), 'h.db'));
   const m = join(import.meta.dirname, '..', 'migrations');
@@ -171,7 +196,7 @@ test('028 keeps AI usage rows, lets the profile reader record, and allows one pr
   const ins = db.prepare("INSERT INTO ai_usage (at, month, key, feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_microdollars) VALUES ('x', '2026-03', 'main', ?, 'm', 1, 1, 0, 0, 7)");
   ins.run('receipt');
   ins.run('chat');
-  assert.equal(migrate(db), 30);
+  assert.equal(migrate(db), 31);
   assert.deepEqual(db.prepare('SELECT id, feature, cost_microdollars AS c FROM ai_usage ORDER BY id').all(), [{ id: 1, feature: 'receipt', c: 7 }, { id: 2, feature: 'chat', c: 7 }]);
   ins.run('profile');
   assert.throws(() => ins.run('other'), /CHECK/);

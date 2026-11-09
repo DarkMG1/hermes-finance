@@ -104,5 +104,18 @@
     "extraWithholdingCents": 2500,
     "exempt": false,
     "updatedAt": "2026-03-15T12:00:00.000Z"
-  }
+  },
+  "stateW4s": [
+    {
+      "jobId": "job-1",
+      "state": "CA",
+      "signedOn": "2026-01-05",
+      "filingStatus": "single",
+      "allowances": 1,
+      "additionalAllowances": 0,
+      "extraWithholdingCents": null,
+      "exempt": false,
+      "updatedAt": "2026-03-15T12:00:00.000Z"
+    }
+  ]
 }

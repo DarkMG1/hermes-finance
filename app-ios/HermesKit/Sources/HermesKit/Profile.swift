@@ -120,6 +120,22 @@ public struct W4Body: Codable, Sendable, Equatable {
     public init() {}
 }
 
+/// A job's state withholding certificate (California's DE-4 and the like); saving replaces the job's form for that state.
+public struct StateW4Body: Codable, Sendable, Equatable {
+    /// the 2-letter code: which state's form, so it goes in the request's path
+    public var state: String?
+    public var signedOn: String?
+    /// single, married or head_of_household
+    public var filingStatus: String?
+    public var allowances: Int?
+    /// for estimated deductions (the DE-4's worksheet B)
+    public var additionalAllowances: Int?
+    /// per pay period
+    public var extraWithholdingCents: Int?
+    public var exempt: Bool?
+    public init() {}
+}
+
 /// Upserts by year + jurisdiction ("federal" or a 2-letter state code).
 public struct TaxReturnBody: Codable, Sendable, Equatable {
     public var year: Int?
@@ -193,8 +209,10 @@ public struct JobDetail: Codable, Sendable, Equatable {
     public let forms: [TaxForm]
     /// nil without one, or from a server before 2.2.1
     public let w4: W4Body?
+    /// by state; none from a server before 2.2.1
+    public let stateW4s: [StateW4Body]
 
-    private enum Keys: String, CodingKey { case grants, nextVests, stubs, forms, w4 }
+    private enum Keys: String, CodingKey { case grants, nextVests, stubs, forms, w4, stateW4s }
 
     public init(from decoder: Decoder) throws {
         job = try Job(from: decoder)
@@ -204,6 +222,7 @@ public struct JobDetail: Codable, Sendable, Equatable {
         stubs = try c.decode([PayStub].self, forKey: .stubs)
         forms = try c.decode([TaxForm].self, forKey: .forms)
         w4 = try c.decodeIfPresent(W4Body.self, forKey: .w4)
+        stateW4s = try c.decodeIfPresent([StateW4Body].self, forKey: .stateW4s) ?? []
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -214,6 +233,7 @@ public struct JobDetail: Codable, Sendable, Equatable {
         try c.encode(stubs, forKey: .stubs)
         try c.encode(forms, forKey: .forms)
         try c.encodeIfPresent(w4, forKey: .w4)
+        try c.encode(stateW4s, forKey: .stateW4s)
     }
 
     public subscript<T>(dynamicMember path: KeyPath<CreateJobBody, T>) -> T { job.fields[keyPath: path] }
@@ -243,7 +263,7 @@ public struct PayStubMatches: Codable, Sendable {
 }
 
 public enum ProfileKind: String, Codable, Sendable, CaseIterable {
-    case taxReturn = "tax_return", taxForm = "tax_form", payStub = "pay_stub", offer, w4
+    case taxReturn = "tax_return", taxForm = "tax_form", payStub = "pay_stub", offer, w4, stateW4 = "state_w4"
 }
 
 /// What Claude read off a document for the owner to review; nothing is stored until it is saved. A pay stub's job and a form's
@@ -254,6 +274,7 @@ public enum ProfileDraft: Sendable, Equatable {
     case payStub(PayStubBody, employer: String?)
     case offer(CreateJobBody, grants: [GrantBody])
     case w4(W4Body, employer: String?)
+    case stateW4(StateW4Body, employer: String?)
 }
 
 public struct ProfileReadResult: Decodable, Sendable, Equatable {
@@ -306,6 +327,7 @@ public struct ProfileReadResult: Decodable, Sendable, Equatable {
         case .payStub: .payStub(try c.decode(PayStubBody.self, forKey: .draft), employer: try extra.decodeIfPresent(String.self, forKey: .employer))
         case .offer: .offer(try c.decode(CreateJobBody.self, forKey: .draft), grants: try extra.decodeIfPresent([GrantBody].self, forKey: .grants) ?? [])
         case .w4: .w4(try c.decode(W4Body.self, forKey: .draft), employer: try extra.decodeIfPresent(String.self, forKey: .employer))
+        case .stateW4: .stateW4(try c.decode(StateW4Body.self, forKey: .draft), employer: try extra.decodeIfPresent(String.self, forKey: .employer))
         }
         return (draft, uncertain)
     }

@@ -44,5 +44,5 @@ test('fixtures satisfy the shared contract', async () => {
   Reimbursements.parse(f['reimbursements.json']);
   assert.ok(Transaction.parse(f['transaction-recurring.json']).recurring);
   assert.deepEqual(PayeeHistory.parse(f['payee-history.json']).names, [{ name: 'Synthetic Split Extra', excluded: true }]);
-  for (const kind of ['tax-return', 'tax-form', 'pay-stub', 'offer', 'w4']) assert.equal(ProfileReadResult.parse(f[`profile-read-${kind}.json`]).kind, kind.replace('-', '_'));
+  for (const kind of ['tax-return', 'tax-form', 'pay-stub', 'offer', 'w4', 'state-w4']) assert.equal(ProfileReadResult.parse(f[`profile-read-${kind}.json`]).kind, kind.replace('-', '_'));
 });

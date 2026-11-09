@@ -586,8 +586,22 @@ export type W4 = z.infer<typeof W4>;
 export const W4Body = W4Fields.partial().strict();
 export type W4Body = z.infer<typeof W4Body>;
 
+/** A job's state withholding certificate (California's DE-4 and the like), one per state: allowances rather than the W-4's steps. */
+const StateW4Fields = z.object({
+  state: StateCode, signedOn: DateInput.nullable(), filingStatus: z.enum(['single', 'married', 'head_of_household']).nullable(),
+  allowances: z.number().int().min(0).max(99).nullable(), additionalAllowances: z.number().int().min(0).max(99).nullable(),
+  extraWithholdingCents: Money.nullable(), exempt: z.boolean().nullable(),
+});
+export const StateW4 = StateW4Fields.extend({ jobId: Id, updatedAt: z.string() });
+export type StateW4 = z.infer<typeof StateW4>;
+/** Replaces the job's form for that state: a left-out field is null. */
+export const StateW4Body = StateW4Fields.omit({ state: true }).partial().strict();
+export type StateW4Body = z.infer<typeof StateW4Body>;
+
 export const JobDetail = Job.extend({
   grants: z.array(EquityGrant), nextVests: z.array(VestEvent), stubs: z.array(PayStub), forms: z.array(TaxForm), w4: W4.nullable(),
+  /** by state */
+  stateW4s: z.array(StateW4),
 });
 export type JobDetail = z.infer<typeof JobDetail>;
 
@@ -599,10 +613,11 @@ export const ProfileDrafts = {
   tax_form: draft(TaxFormFields.omit({ jobId: true })),
   pay_stub: draft(PayStubFields.omit({ jobId: true }).extend({ employer: JobFields.shape.employer })),
   w4: draft(W4Fields.extend({ employer: JobFields.shape.employer })),
+  state_w4: draft(StateW4Fields.extend({ employer: JobFields.shape.employer })),
   offer: draft(JobFields.omit({ status: true })).extend({ grants: z.array(draft(GrantFields).nullable().catch(null)).default([]).catch([])
     .transform((g) => g.filter((x) => x !== null).slice(0, 20)) }),
 };
-export const ProfileKind = z.enum(['tax_return', 'tax_form', 'pay_stub', 'offer', 'w4']);
+export const ProfileKind = z.enum(['tax_return', 'tax_form', 'pay_stub', 'offer', 'w4', 'state_w4']);
 export type ProfileKind = z.infer<typeof ProfileKind>;
 /** pages are base64 JPEGs; the whole body is at most 8 MB */
 export const ProfileReadBody = z.object({ kind: ProfileKind, pages: z.array(z.string().min(1)).min(1).max(24) }).strict();
@@ -619,5 +634,6 @@ export const ProfileReadResult = z.discriminatedUnion('kind', [
       saved: z.boolean() })).min(1) }),
   z.object({ kind: z.literal('offer'), draft: ProfileDrafts.offer, uncertain: ProfileUncertain }),
   z.object({ kind: z.literal('w4'), draft: ProfileDrafts.w4, uncertain: ProfileUncertain }),
+  z.object({ kind: z.literal('state_w4'), draft: ProfileDrafts.state_w4, uncertain: ProfileUncertain }),
 ]);
 export type ProfileReadResult = z.infer<typeof ProfileReadResult>;

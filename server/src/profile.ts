@@ -1,4 +1,4 @@
-import type { EquityGrant, Job, JobDetail, PayStub, PayStubMatches, Profile, PutProfileBody, TaxForm, TaxReturn, TaxYears, VestEvent, W4 } from '@hermes/shared';
+import type { EquityGrant, Job, JobDetail, PayStub, PayStubMatches, Profile, PutProfileBody, StateW4, TaxForm, TaxReturn, TaxYears, VestEvent, W4 } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { lookups, rowToTransaction, TXN_COLS, type TxnRow } from './ledger.ts';
 import { addInterval, memberships } from './recurring.ts';
@@ -29,6 +29,11 @@ export function getW4(db: Db, jobId: string): W4 | null {
   const w = db.prepare(W4_SELECT).get(jobId) as (W4 & { multipleJobs: unknown; exempt: unknown }) | undefined;
   return w ? { ...w, multipleJobs: flag(w.multipleJobs), exempt: flag(w.exempt) } : null;
 }
+const STATE_W4 = `SELECT job_id AS jobId, state, signed_on AS signedOn, filing_status AS filingStatus, allowances, additional_allowances AS additionalAllowances,
+  extra_withholding_cents AS extraWithholdingCents, exempt, updated_at AS updatedAt FROM state_w4s`;
+const stateW4Rows = (rows: unknown[]): StateW4[] => (rows as (StateW4 & { exempt: unknown })[]).map((w) => ({ ...w, exempt: flag(w.exempt) }));
+export const getStateW4 = (db: Db, jobId: string, state: string): StateW4 | undefined =>
+  stateW4Rows(db.prepare(`${STATE_W4} WHERE job_id = ? AND state = ?`).all(jobId, state))[0];
 const RETURN = `SELECT id, year, jurisdiction, filing_status AS filingStatus, wages_cents AS wagesCents, total_income_cents AS totalIncomeCents,
   agi_cents AS agiCents, deduction_kind AS deductionKind, deduction_cents AS deductionCents, taxable_income_cents AS taxableIncomeCents,
   total_tax_cents AS totalTaxCents, credits_cents AS creditsCents, withholding_cents AS withholdingCents, refund_cents AS refundCents,
@@ -125,7 +130,7 @@ export function getJob(db: Db, id: string, today: string): JobDetail | null {
     .sort((a, b) => a.date.localeCompare(b.date)).slice(0, 4);
   const stubs = stubRows(db.prepare(`${STUB} WHERE job_id = ? ORDER BY pay_date DESC, created_at DESC, id`).all(id));
   const forms = db.prepare(`${FORM} WHERE job_id = ? ORDER BY year DESC, payer, id`).all(id) as TaxForm[];
-  return { ...job, grants, nextVests, stubs, forms, w4: getW4(db, id) };
+  return { ...job, grants, nextVests, stubs, forms, w4: getW4(db, id), stateW4s: stateW4Rows(db.prepare(`${STATE_W4} WHERE job_id = ? ORDER BY state`).all(id)) };
 }
 
 /** Vest events dated after `after`: the cliff vests everything accrued through it, then one event every vestEveryMonths counted from the
