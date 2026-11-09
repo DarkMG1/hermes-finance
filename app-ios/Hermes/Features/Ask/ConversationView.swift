@@ -184,9 +184,12 @@ struct ConversationView: View {
             let lastQuestion = { (messages: [ChatMessage]) in messages.last { $0.role == "user" }?.text }
             guard stream == nil, !resync || detail.messages.count > thread?.messages.count ?? 0
                     || lastQuestion(detail.messages) == lastQuestion(thread?.messages ?? []) else { return }
+            let first = thread == nil
             thread = ChatThread(detail)
             title = detail.title
             loadError = nil
+            // the initial bottom anchor applied to the empty screen before the chat came in: open on the newest answer
+            if first { Task { position.scrollTo(edge: .bottom) } }
         } catch {
             guard !Task.isCancelled else { return }
             loadError = errorMessage(error)
