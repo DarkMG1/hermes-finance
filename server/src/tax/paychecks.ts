@@ -50,11 +50,14 @@ export function futurePaychecks(job: JobDetail, stubs: PayStub[], year: number, 
   const name = job.employer;
   const sorted = stubs.toSorted((a, b) => a.payDate.localeCompare(b.payDate));
   const last = sorted.at(-1);
-  const gaps = sorted.slice(1).map((s, i) => days(sorted[i]!.payDate, s.payDate)).filter((d) => d > 0);
+  // a stub under 7 days after the one before is off-cycle (a bonus or stipend run): it sets neither the cadence nor the schedule
+  const onCycle: PayStub[] = [];
+  for (const s of sorted) if (!onCycle.length || days(onCycle.at(-1)!.payDate, s.payDate) >= 7) onCycle.push(s);
+  const gaps = onCycle.slice(1).map((s, i) => days(onCycle[i]!.payDate, s.payDate));
   const gap = gaps.length ? median(gaps) : !last && job.baseCents === null && job.monthlyCents !== null ? 30 : 14;
   const monthly = gap >= 28;
   const periods = monthly ? 12 : Math.round(365 / gap);
-  const gross = last?.grossCents ?? (job.baseCents !== null ? Math.round(job.baseCents / 26) : job.monthlyCents
+  const gross = last ? median(sorted.slice(-3).map((s) => s.grossCents)) : (job.baseCents !== null ? Math.round(job.baseCents / 26) : job.monthlyCents
     ?? (job.hourlyCents !== null && job.hoursPerWeek !== null ? Math.round(job.hourlyCents * job.hoursPerWeek * 2) : 0));
   const annual = gross * periods;
   // a job with stubs keeps its stubs' state; a new job pays where the owner lives
@@ -67,11 +70,12 @@ export function futurePaychecks(job: JobDetail, stubs: PayStub[], year: number, 
   const check = (date: string, grossCents: number, fed: number, state: number, assumption: string): Paycheck =>
     ({ date, grossCents, federalCents: Math.round(grossCents * fed), stateCents: Math.round(grossCents * state), state: stateOf(date), estimated: true, assumption });
 
-  const notes = [`${name}: future paychecks ${last ? "at the latest stub's gross" : 'from the recorded pay'}, every ${monthly ? 'month' : `${gap} days`}${gaps.length ? '' : ' (assumed)'} through ${end}`];
+  const notes = [`${name}: future paychecks ${last ? 'at the median gross of the last 3 stubs' : 'from the recorded pay'}, every ${monthly ? 'month' : `${gap} days`}${gaps.length ? '' : ' (assumed)'} through ${end}`];
   if (!recent.length) notes.push(`Estimated withholding: ${job.w4 ? 'from its W-4' : 'a standard W-4'} by the IRS percentage method`);
   const out: Paycheck[] = [];
   if (gross > 0) {
-    const anchor = last?.payDate ?? job.startDate ?? today;
+    const anchor = onCycle.at(-1)?.payDate ?? job.startDate ?? today;
+    if (!last && !job.startDate) notes.push(`${name}: no start date or pay stubs, so pay before ${today} isn't counted`);
     for (let k = 1; ; k++) {
       const date = monthly ? addInterval(anchor, 'monthly', k)! : addDays(anchor, gap * k);
       if (date > end) break;

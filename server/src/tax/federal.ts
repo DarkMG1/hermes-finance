@@ -16,6 +16,8 @@ export type FederalInput = {
   withheldCents: number; priorYearTaxCents: number | null; priorYearAgiCents: number | null;
   /** Where each input came from, shown on its line; `figures` names the tax figures used. */
   sources?: Partial<Record<keyof FederalInput | 'figures', string>>;
+  /** What was assumed to get an input, shown on its line (wages, dividends, withholding). */
+  assumptions?: Partial<Record<'wagesCents' | 'ordinaryDividendsCents' | 'withheldCents', string>>;
 };
 
 const DEFAULT_SOURCES: Record<keyof FederalInput | 'figures', string> = {
@@ -23,7 +25,7 @@ const DEFAULT_SOURCES: Record<keyof FederalInput | 'figures', string> = {
   ordinaryDividendsCents: 'investment income', qualifiedDividendsCents: 'investment income', sales: 'investment sales',
   carryover: 'carryover from prior-year return', studentLoanInterestCents: 'owner input: student loan interest', k401PreTaxCents: 'pay stubs',
   tuitionCents: 'owner input: tuition', scholarshipsCents: 'owner input: scholarships', aotcYearsUsed: 'prior returns', withheldCents: 'pay stubs',
-  priorYearTaxCents: 'prior-year return', priorYearAgiCents: 'prior-year return', sources: '', figures: 'IRS published figures',
+  priorYearTaxCents: 'prior-year return', priorYearAgiCents: 'prior-year return', sources: '', assumptions: '', figures: 'IRS published figures',
 };
 
 // Statutory, not indexed: 110% safe harbor above $150,000 prior AGI; NIIT and additional Medicare tax start at $200,000 (single).
@@ -60,11 +62,13 @@ export function computeFederal(input: FederalInput, f: FederalFigures): ReturnRe
 
   // Income
   const wages = input.wagesCents - input.k401PreTaxCents;
-  add('wages', 'Wages', wages, src.wagesCents, input.k401PreTaxCents > 0 && 'Pre-tax 401(k) contributions taken off gross pay');
+  add('wages', 'Wages', wages, src.wagesCents, input.assumptions?.wagesCents ?? false,
+    input.k401PreTaxCents > 0 && 'Pre-tax 401(k) contributions taken off gross pay');
   const scholarshipIncome = Math.max(0, input.scholarshipsCents - input.tuitionCents);
   if (scholarshipIncome) add('scholarshipIncome', 'Taxable scholarships', scholarshipIncome, src.scholarshipsCents, 'Scholarships pay tuition first; the rest is taxable');
   if (input.interestCents) add('interest', 'Taxable interest', input.interestCents, src.interestCents);
-  if (input.ordinaryDividendsCents) add('ordinaryDividends', 'Ordinary dividends', input.ordinaryDividendsCents, src.ordinaryDividendsCents);
+  if (input.ordinaryDividendsCents) add('ordinaryDividends', 'Ordinary dividends', input.ordinaryDividendsCents, src.ordinaryDividendsCents,
+    input.assumptions?.ordinaryDividendsCents ?? false);
   if (input.qualifiedDividendsCents) add('qualifiedDividends', 'Qualified dividends (included above)', input.qualifiedDividendsCents, src.qualifiedDividendsCents);
 
   const taxable = input.sales.filter((s) => s.taxable);
@@ -138,7 +142,7 @@ export function computeFederal(input: FederalInput, f: FederalFigures): ReturnRe
 
   const taxCents = incomeTax - nonrefundable;
   add('totalTax', 'Total tax', taxCents, 'calculated');
-  add('withheld', 'Federal tax withheld', input.withheldCents, src.withheldCents);
+  add('withheld', 'Federal tax withheld', input.withheldCents, src.withheldCents, input.assumptions?.withheldCents ?? false);
   if (refundable) add('refundableCredits', 'Refundable credits', refundable, 'calculated');
   const balanceCents = input.withheldCents + refundable - taxCents;
   add('balance', balanceCents >= 0 ? 'Refund' : 'Amount owed', balanceCents, 'calculated');

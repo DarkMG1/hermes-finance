@@ -21,6 +21,7 @@ export function openYears(today: string): number[] {
 
 // Plaid's subtype word for a payout is on the personal-data denylist, so no source line spells it (as with the Zelle phrase)
 const PAYOUT = ['divi', 'dend'].join('');
+const usd = (cents: number) => `$${(cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const sum = <T>(xs: T[], f: (x: T) => number) => xs.reduce((a, x) => a + f(x), 0);
 const sheltered = (db: Db, accountId: string) => SHELTERED.has(String(db.prepare('SELECT subtype FROM accounts WHERE id = ?').pluck().get(accountId) ?? '').toLowerCase());
 
@@ -78,7 +79,8 @@ function assemble(deps: Deps, year: number, today: string, change: WhatIf = {}) 
     ...(move ? [{ code: move.to, from: move.date, to: end }] : []),
   ];
   if (move) note(`Scenario: moving to ${move.to} on ${move.date}`);
-  if (!home) note('No home state in the profile: no state return');
+  if (!home) note('No home state in the profile: no resident state return; pay is taxed only where it was earned');
+  if (!future && change.scenario && Object.keys(change.scenario).length) note(`Scenario inputs apply to next year only: ignored for ${year}`);
   const stateOn = (date: string) => residency.find((p) => p.from <= date && date <= p.to)?.code ?? null;
 
   // Figures
@@ -133,7 +135,10 @@ function assemble(deps: Deps, year: number, today: string, change: WhatIf = {}) 
     .all(`%${PAYOUT}%`, `${divYear}-01-01`, `${divYear}-12-31`) as { date: string; cents: number; subtype: string | null }[])
     .filter((d) => !SHELTERED.has((d.subtype ?? '').toLowerCase())).map((d) => ({ date: `${year}${d.date.slice(4)}`, cents: d.cents }));
   if (divs.length) note('Dividends counted as ordinary until the 1099-DIV shows the qualified part');
-  if (future && divs.length) note(`Assumes ${divYear}'s dividends so far repeat in ${year}`);
+  const divTotal = sum(divs, (d) => d.cents);
+  const divNote = future ? `Next year's dividends = this year's so far (${usd(divTotal)} through ${today})` : null;
+  if (divNote) note(divNote);
+  else if (year === thisYear) note(`Dividends after ${today} not projected`);
   note('Bank interest not included');
 
   const lots = buildLots(db, today);
@@ -141,7 +146,10 @@ function assemble(deps: Deps, year: number, today: string, change: WhatIf = {}) 
     ? year < thisYear ? { sales: [], blocked: `${year} is over: a sale now counts in ${thisYear}` } : planSales(db, lots, change.sell, future ? start : today)
     : { sales: [], blocked: null };
   if (planned.blocked) note(`Proposed sale not counted: ${planned.blocked}`);
-  else if (planned.sales.length) note(`Proposed sale on ${planned.sales[0]!.date} at today's price; a buy of the same security in the 30 days after would wash a loss`);
+  else if (planned.sales.length) {
+    note(`Proposed sale on ${planned.sales[0]!.date} at today's price; a buy of the same security in the 30 days after would wash a loss`);
+    if (future) note(`Sale counted on Jan 1 of ${year} for the holding period`);
+  }
   const sales = [...lots.sales.filter((s) => s.date >= start && s.date <= end), ...planned.sales];
   const unknown = sales.filter((s) => s.taxable && s.term === 'unknown').length;
   if (unknown) note(`${unknown} sales of shares bought before the trade history: cost unknown — enter their cost on the Tax screen`);
@@ -159,17 +167,28 @@ function assemble(deps: Deps, year: number, today: string, change: WhatIf = {}) 
   } else if (!prior) note(`No ${year - 1} federal return: no capital loss carryover counted`);
 
   // Federal
+  const extra = change.extraWithholdingCents ?? 0;
+  const paySource = projected.some((p) => p.grossCents) ? 'pay stubs and projected paychecks' : 'pay stubs';
+  const projectedNote = (what: string) => {
+    const n = projected.filter((p) => p.grossCents).length;
+    return n ? `Includes ${what} ${n} projected paycheck${n === 1 ? '' : 's'} (estimated)` : undefined;
+  };
+  const extraNote = extra ? `Includes ${usd(extra)} extra withholding (what-if)` : undefined;
   const federal = computeFederal({
     filingStatus, claimable, fullTimeStudent: profile.fullTimeStudent ?? false, wagesCents: gross, interestCents: 0,
-    ordinaryDividendsCents: sum(divs, (d) => d.cents), qualifiedDividendsCents: 0, sales, carryover, studentLoanInterestCents,
+    ordinaryDividendsCents: divTotal, qualifiedDividendsCents: 0, sales, carryover, studentLoanInterestCents,
     k401PreTaxCents: k401, tuitionCents, scholarshipsCents, aotcYearsUsed: null,
-    withheldCents: sum(pay, (p) => p.federalCents) + (change.extraWithholdingCents ?? 0),
+    withheldCents: sum(pay, (p) => p.federalCents) + extra,
     priorYearTaxCents: prior?.totalTaxCents ?? null, priorYearAgiCents: prior?.agiCents ?? null,
-    sources: { wagesCents: 'pay stubs and projected paychecks', withheldCents: 'pay stubs and projected paychecks', k401PreTaxCents: future ? 'scenario: 401(k)' : 'owner input: 401(k)',
+    sources: { wagesCents: paySource, withheldCents: paySource, k401PreTaxCents: future ? 'scenario: 401(k)' : 'owner input: 401(k)',
       figures: `IRS figures for ${fed.year}`, ...(future && { ordinaryDividendsCents: `${divYear} dividends repeated` }) },
+    assumptions: {
+      wagesCents: projectedNote('pay on'), ordinaryDividendsCents: divNote ?? undefined,
+      withheldCents: [projectedNote('withholding on'), extraNote].filter(Boolean).join('; ') || undefined,
+    },
   }, fed.figures);
 
-  // States: pay sourced where earned, investment income where lived; the federal loss limit and carryover land at year end
+  // States: pay sourced where earned, investment income where lived
   const share = gross ? (gross - k401) / gross : 1;
   const gains = sales.filter((s) => s.taxable).map((s) => ({ wagesCents: 0, investmentCents: s.proceedsCents - s.costCents + s.washDisallowedCents, sourceState: null, date: s.date }));
   const items: StateInput['incomeByPeriod'] = [
@@ -177,11 +196,25 @@ function assemble(deps: Deps, year: number, today: string, change: WhatIf = {}) 
     ...divs.map((d) => ({ wagesCents: 0, investmentCents: d.cents, sourceState: null, date: d.date })),
     ...gains,
   ];
-  const adjust = (federal.lines.find((l) => l.key === 'capitalGain')?.cents ?? 0) - sum(gains, (g) => g.investmentCents);
-  if (adjust) items.push({ wagesCents: 0, investmentCents: adjust, sourceState: null, date: end });
+  // the federal loss limit and carryover spread over the gains and losses by size, on their own dates (at year end when there are none)
+  let adjust = (federal.lines.find((l) => l.key === 'capitalGain')?.cents ?? 0) - sum(gains, (g) => g.investmentCents);
+  let weight = sum(gains, (g) => Math.abs(g.investmentCents));
+  if (adjust && !weight) items.push({ wagesCents: 0, investmentCents: adjust, sourceState: null, date: end });
+  for (const g of weight ? gains : []) {
+    const part = Math.round(adjust * Math.abs(g.investmentCents) / weight);
+    weight -= Math.abs(g.investmentCents);
+    adjust -= part;
+    g.investmentCents += part;
+  }
   const codes = [...new Set([...residency.map((p) => p.code), ...pay.map((p) => p.state).filter((c): c is string => !!c).sort()])];
+  if (k401 && codes.length) note('401(k) contributions lower state wages by the same share as federal');
+  if (scholarshipsCents > tuitionCents && codes.length) note('Taxable scholarships not included in state income');
+  const projectedIn = (code: string) => pay.some((p) => 'estimated' in p && p.state === code && p.grossCents);
   const state = (code: string, other: number) =>
-    computeState(stateInput(code, items, sum(pay.filter((p) => p.state === code), (p) => p.stateCents), other), modelOf(code)?.model ?? null);
+    computeState({ ...stateInput(code, items, sum(pay.filter((p) => p.state === code), (p) => p.stateCents), other),
+      withheldSource: projectedIn(code) ? 'pay stubs and projected paychecks' : 'pay stubs',
+      withheldAssumption: projectedIn(code) ? 'Includes withholding on projected paychecks (estimated)' : undefined },
+    modelOf(code)?.model ?? null);
   // credit for another state's tax: its tax on the income both states tax, as a share of what it taxes
   const first = new Map(codes.map((c) => [c, state(c, 0)]));
   const states = codes.map((code) => {

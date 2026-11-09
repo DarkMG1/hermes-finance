@@ -107,6 +107,12 @@ test("this year = stubs to date + future paychecks through each job's end", asyn
     'Bank interest not included', 'No 401(k) contributions entered for 2026']) assert.ok(p.assumptions.includes(a), a);
   assert.ok(p.assumptions.some((a) => a.startsWith('SYNTHETIC EMPLOYER: future paychecks')), p.assumptions.join('\n'));
   assert.deepEqual([p.waysToSave, p.headsUp], [[], []]);
+  // estimated lines say so on the line
+  const wages = fed.lines.find((l) => l.key === 'wages')!;
+  assert.deepEqual([wages.source, wages.assumption], ['pay stubs and projected paychecks', 'Includes pay on 8 projected paychecks (estimated)']);
+  assert.equal(fed.lines.find((l) => l.key === 'withheld')!.assumption, 'Includes withholding on 8 projected paychecks (estimated)');
+  const xaWithheld = xa.lines.find((l) => l.key === 'withheld')!;
+  assert.deepEqual([xaWithheld.source, xaWithheld.assumption], ['pay stubs and projected paychecks', 'Includes withholding on projected paychecks (estimated)']);
 });
 
 test('combined balance sums the returns', async () => {
@@ -144,7 +150,7 @@ test('next year uses the scenario (move date splits residency; relocation overri
   assert.equal(line(ret(p, 'XA'), 'stateIncome'), 0);
   assert.equal(line(ret(p, 'XB'), 'stateIncome'), line(ret(p, 'XB'), 'totalIncome'));
   assert.equal(line(fed, 'longTermNet'), -$(2_000));
-  for (const a of ['Scenario: moving to XB on 2027-03-01', '2026 XA figures used for 2027 until published', '2026 XB figures used for 2027 until published',
+  for (const a of ['Scenario: moving to XB on 2027-03-01', '401(k) contributions lower state wages by the same share as federal', '2026 XA figures used for 2027 until published', '2026 XB figures used for 2027 until published',
     'Capital loss carryover from the 2026 projection', 'Student and dependent status: assumes the same as this year']) assert.ok(p.assumptions.includes(a), a);
   assert.ok(p.assumptions.some((a) => a.includes('Estimated withholding')), p.assumptions.join('\n'));
   // Roth contributions don't change the tax
@@ -163,8 +169,9 @@ test('jurisdictions come from stub states, profile state and the scenario', asyn
   // a state the file lacks is "not supported", never a silent 0
   assert.deepEqual([ret(now, 'XC').supported, ret(now, 'XC').lines.map((l) => l.key)], [false, ['unsupported']]);
   assert.ok(now.assumptions.includes('Pay stub state not recorded; counted as XA'));
-  // this year ignores next year's scenario
+  // this year ignores next year's scenario, and says so when one is passed
   assert.ok(!now.returns.some((r) => r.jurisdiction === 'XB'));
+  assert.ok(project(deps, 2026, TODAY, { scenario: { moveTo: 'XB', moveDate: '2026-06-01' } }).assumptions.includes('Scenario inputs apply to next year only: ignored for 2026'));
   assert.deepEqual(project(deps, 2027, TODAY).returns.map((r) => r.jurisdiction), ['federal', 'XA', 'XB']);
 });
 
@@ -189,6 +196,9 @@ test('what-if sale shows short/long split and delta', async () => {
   // only the taxable account's payout counts
   assert.equal(line(before, 'ordinaryDividends'), $(100));
   assert.ok(r.before.assumptions.includes('Dividends counted as ordinary until the 1099-DIV shows the qualified part'));
+  assert.ok(r.before.assumptions.includes(`Dividends after ${TODAY} not projected`));
+  const repeated = ret(project(deps, 2027, TODAY), 'federal').lines.find((l) => l.key === 'ordinaryDividends')!;
+  assert.deepEqual([repeated.cents, repeated.assumption], [$(100), `Next year's dividends = this year's so far ($100.00 through ${TODAY})`]);
   assert.deepEqual([line(after, 'shortTermNet'), line(after, 'longTermNet')], [$(250), $(1_000)]);
   // federal: 250 short at 10% = 25 (the long 1,000 falls in the 0% band); XA: 1,250 × 4% = 50
   assert.equal(after.taxCents - before.taxCents, $(25));
@@ -196,7 +206,9 @@ test('what-if sale shows short/long split and delta', async () => {
   assert.equal(r.deltaCents, -$(75));
   assert.equal(r.after.combinedBalanceCents - r.before.combinedBalanceCents, r.deltaCents);
   // extra withholding moves the balance by the same amount
-  assert.equal(whatIf(deps, 2026, TODAY, { extraWithholdingCents: $(300) }).deltaCents, $(300));
+  const extra = whatIf(deps, 2026, TODAY, { extraWithholdingCents: $(300) });
+  assert.equal(extra.deltaCents, $(300));
+  assert.match(ret(extra.after, 'federal').lines.find((l) => l.key === 'withheld')!.assumption ?? '', /Includes \$300\.00 extra withholding \(what-if\)/);
 });
 
 test('what-if over an unverified lot is blocked', async () => {
@@ -224,7 +236,7 @@ test('empty year', () => {
   assert.deepEqual(p.returns.map((r) => [r.jurisdiction, r.taxCents, r.withheldCents, r.balanceCents]), [['federal', 0, 0, 0]]);
   assert.equal(p.combinedBalanceCents, 0);
   assert.deepEqual(p.figures, { federalYear: 2027, fallback: true });
-  for (const a of ['No pay stubs or jobs paying in 2030: no wages counted', 'No home state in the profile: no state return',
+  for (const a of ['No pay stubs or jobs paying in 2030: no wages counted', 'No home state in the profile: no resident state return; pay is taxed only where it was earned',
     'No filing status in the profile: single assumed', '2027 federal figures used for 2030 until published']) assert.ok(p.assumptions.includes(a), a);
 });
 
@@ -252,4 +264,33 @@ test('a proposed loss sale is washed by a buy in the 30 days before, in any acco
   // a 500 loss on 10 shares; the 5 bought in the Roth replace half of them
   assert.deepEqual(r.sales.map((s) => [s.proceedsCents, s.costCents, s.term, s.washDisallowedCents]), [[$(1_000), $(1_500), 'short', $(250)]]);
   assert.equal(line(ret(r.after, 'federal'), 'shortTermNet'), -$(250));
+});
+
+test("an off-cycle stub sets neither the cadence nor every future check's gross", async () => {
+  const { db, send } = await setup();
+  const jobId = await currentJob(send);
+  // a bonus run 3 days after the last regular stub
+  await send('POST', '/v1/pay-stubs', { jobId, payDate: '2026-03-09', grossCents: $(5_000), federalCents: $(1_100), stateCents: $(200), netCents: $(3_700), state: 'XA' });
+  const job = getJob(db, jobId, TODAY)!;
+  const pay = futurePaychecks(job, job.stubs, 2026, TODAY, {
+    figures: federalFigures(2026).figures, scenario: null, stateOn: () => 'XA', stateTax: () => null, stateSupplementalRate: () => null,
+  });
+  // still every 14 days from 03-06, at the median gross of the last 3 stubs (2,000, 2,000, 5,000)
+  assert.deepEqual(pay.map((p) => p.date), ['2026-03-20', '2026-04-03', '2026-04-17', '2026-05-01', '2026-05-15', '2026-05-29', '2026-06-12', '2026-06-26']);
+  assert.ok(pay.every((p) => p.grossCents === $(2_000)));
+});
+
+test('a loss limit in a move year stays on the sale date: the new state taxes no phantom income', async () => {
+  const { deps, db, send } = await setup();
+  await send('PUT', '/v1/tax/scenario/2027', { moveDate: '2027-03-01', moveTo: 'XB' });
+  seedAccount(db, { id: 'brk', type: 'investment', subtype: 'brokerage' });
+  security(db, 'sx', 'SYNA');
+  buy(db, 'brk', 'sx', '2025-06-01', 100, $(15_000));
+  holding(db, 'brk', 'sx', 100, $(50), $(15_000));
+  // sold Jan 1 2027 while in XA: a 10,000 loss, 3,000 of it allowed
+  const r = whatIf(deps, 2027, TODAY, { sell: [{ accountId: 'brk', securityId: 'sx', quantity: 100 }] });
+  assert.equal(line(ret(r.after, 'federal'), 'capitalGain'), -$(3_000));
+  assert.equal(line(ret(r.after, 'XA'), 'stateIncome'), -$(3_000));
+  assert.equal(line(ret(r.after, 'XB'), 'stateIncome'), 0);
+  assert.ok(r.after.assumptions.includes('Sale counted on Jan 1 of 2027 for the holding period'));
 });

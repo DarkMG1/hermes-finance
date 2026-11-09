@@ -9,6 +9,8 @@ export type StateInput = {
   /** Income items by date received; `sourceState` is where it was earned (null: no particular state). */
   incomeByPeriod: { wagesCents: number; investmentCents: number; sourceState: string | null; date: string }[];
   totalIncomeCents: number; claimable: boolean; withheldCents: number; otherStateTaxCents: number;
+  /** Where the withholding came from and what was assumed to get it (default: pay stubs, nothing assumed). */
+  withheldSource?: string; withheldAssumption?: string;
 };
 
 const pct = (share: number) => `${(share * 100).toFixed(1)}%`;
@@ -63,7 +65,7 @@ export function computeState(input: StateInput, model: StateModel | null): Retur
     tax = Math.max(0, tax - credit);
   }
   add('totalTax', 'Total tax', tax, 'calculated');
-  add('withheld', 'State tax withheld', withheldCents, 'pay stubs');
+  add('withheld', 'State tax withheld', withheldCents, input.withheldSource ?? 'pay stubs', input.withheldAssumption);
   const balanceCents = withheldCents - tax;
   add('balance', balanceCents >= 0 ? 'Refund' : 'Amount owed', balanceCents, 'calculated');
   return { jurisdiction: code, supported: true, lines, taxCents: tax, withheldCents, balanceCents };
