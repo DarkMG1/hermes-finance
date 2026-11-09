@@ -39,7 +39,8 @@ export const getStateW4 = (db: Db, jobId: string, state: string): StateW4 | unde
 const RETURN = `SELECT id, year, jurisdiction, filing_status AS filingStatus, wages_cents AS wagesCents, total_income_cents AS totalIncomeCents,
   agi_cents AS agiCents, deduction_kind AS deductionKind, deduction_cents AS deductionCents, taxable_income_cents AS taxableIncomeCents,
   total_tax_cents AS totalTaxCents, credits_cents AS creditsCents, withholding_cents AS withholdingCents, refund_cents AS refundCents,
-  capital_gains_cents AS capitalGainsCents, capital_loss_carryover_cents AS capitalLossCarryoverCents, claimed_as_dependent AS claimedAsDependent,
+  capital_gains_cents AS capitalGainsCents, capital_loss_carryover_cents AS capitalLossCarryoverCents,
+  capital_loss_carryover_short_cents AS capitalLossCarryoverShortCents, capital_loss_carryover_long_cents AS capitalLossCarryoverLongCents, claimed_as_dependent AS claimedAsDependent,
   created_at AS createdAt, updated_at AS updatedAt FROM tax_returns`;
 const returnRows = (rows: unknown[]): TaxReturn[] => (rows as (TaxReturn & { claimedAsDependent: unknown })[]).map((r) => ({ ...r, claimedAsDependent: flag(r.claimedAsDependent) }));
 

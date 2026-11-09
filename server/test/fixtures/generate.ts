@@ -168,7 +168,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   db.prepare("INSERT INTO pay_stub_deposits VALUES ('stub-1', 'txn-2')").run();
   db.prepare("INSERT INTO tax_forms VALUES ('form-1', 'job-1', 2025, 'w2', 'SYNTHETIC EMPLOYER', 6500000, 800000, 'CA', 270000, 7000000, 7000000, 'seed')").run();
   db.prepare(`INSERT INTO tax_returns VALUES ('return-1', 2025, 'federal', 'single', 6500000, 6520000, 6520000, 'standard', 1500000, 5020000, 650000, 0,
-    800000, 150000, 20000, 0, 'seed', 'seed', 0)`).run();
+    800000, 150000, 20000, 0, 'seed', 'seed', 0, 5000, 15000)`).run();
   await app.inject({ method: 'PUT', url: '/v1/profile', headers: { ...AUTH, 'idempotency-key': 'fixture-profile' },
     payload: { state: 'CA', filingStatus: 'single', birthYear: 2000, dependents: 0, retirementPct: 6, retirementKind: 'pre_tax', hsa: true } });
   out.profile = await get('/v1/profile');

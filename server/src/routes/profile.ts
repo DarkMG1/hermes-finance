@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { CreateJobBody, GrantBody, LinkPayStubBody, PatchGrantBody, PatchJobBody, PatchPayStubBody, PatchTaxFormBody, PayStubBody, ProfileReadBody, PutProfileBody,
-  StateW4Body, TaxFormBody, TaxReturnBody, W4Body } from '@hermes/shared';
+import { CreateJobBody, GrantBody, LinkPayStubBody, PatchGrantBody, PatchJobBody, PatchPayStubBody, PatchRothContributionBody, PatchTaxFormBody, PayStubBody, ProfileReadBody, PutProfileBody,
+  RothContributionBody, StateW4Body, TaxFormBody, TaxInputsBody, TaxReturnBody, TaxScenarioBody, W4Body } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { readProfile } from '../profile-reader.ts';
 import { getForm, getGrant, getJob, getProfile, getReturn, getStateW4, getStub, getW4, linkable, listJobs, putProfile, stubMatches, taxYears, unassignedStubs } from '../profile.ts';
+import { getScenario, getTaxInputs, listRothContributions } from '../tax/inputs.ts';
 import { assertOwnerDate, parseBody } from '../validate.ts';
 import { isJpeg } from './receipts.ts';
 
@@ -27,7 +28,7 @@ const STUB_COLS = ['job_id', 'pay_date', 'period_start', 'period_end', 'gross_ce
 const FORM_COLS = ['job_id', 'year', 'kind', 'payer', 'amount_cents', 'federal_withheld_cents', 'state', 'state_withheld_cents', 'ss_wages_cents', 'medicare_wages_cents'];
 const RETURN_COLS = ['year', 'jurisdiction', 'filing_status', 'wages_cents', 'total_income_cents', 'agi_cents', 'deduction_kind', 'deduction_cents',
   'taxable_income_cents', 'total_tax_cents', 'credits_cents', 'withholding_cents', 'refund_cents', 'capital_gains_cents', 'capital_loss_carryover_cents',
-  'claimed_as_dependent'];
+  'capital_loss_carryover_short_cents', 'capital_loss_carryover_long_cents', 'claimed_as_dependent'];
 // left-out deduction lines and other pay are 0
 const stubValues = (s: PayStubBody) => [s.jobId ?? null, s.payDate, s.periodStart ?? null, s.periodEnd ?? null, s.grossCents, s.federalCents ?? 0, s.stateCents ?? 0,
   s.socialSecurityCents ?? 0, s.medicareCents ?? 0, s.retirementCents ?? 0, s.otherDeductionsCents ?? 0, s.otherPayCents ?? 0, s.netCents, s.ytdGrossCents ?? null,
@@ -37,6 +38,7 @@ const formValues = (f: TaxFormBody) => [f.jobId ?? null, f.year, f.kind, f.payer
 const returnValues = (t: TaxReturnBody) => [t.year, t.jurisdiction, t.filingStatus ?? null, t.wagesCents ?? null, t.totalIncomeCents ?? null, t.agiCents ?? null,
   t.deductionKind ?? null, t.deductionCents ?? null, t.taxableIncomeCents ?? null, t.totalTaxCents ?? null, t.creditsCents ?? null, t.withholdingCents ?? null,
   t.refundCents ?? null, t.capitalGainsCents ?? null, t.capitalLossCarryoverCents ?? null,
+  t.capitalLossCarryoverShortCents ?? null, t.capitalLossCarryoverLongCents ?? null,
   t.claimedAsDependent == null ? null : Number(t.claimedAsDependent)];
 const marks = (cols: string[]) => cols.map(() => '?').join(', ');
 
@@ -313,4 +315,86 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   });
 
   app.delete('/v1/tax-returns/:id', del('tax_returns', 'tax return'));
+
+  const yearParam = (raw: string) => {
+    const year = Number(raw);
+    if (!Number.isInteger(year) || year < 2000) throw new ApiError(400, 'INVALID_REQUEST', 'year: expected a year from 2000', 'year');
+    assertYear(year);
+    return year;
+  };
+  type YearReq = FastifyRequest<{ Params: { year: string } }>;
+
+  app.get<{ Params: { year: string } }>('/v1/tax/inputs/:year', async (req) => getTaxInputs(db, yearParam(req.params.year)));
+  app.put('/v1/tax/inputs/:year', async (req: YearReq, reply) => {
+    const year = yearParam(req.params.year);
+    const b = parseBody(TaxInputsBody, req.body);
+    const r = idempotentWrite(deps, req, () => {
+      db.prepare(`INSERT INTO tax_inputs (year, tuition_cents, scholarships_cents, student_loan_interest_cents, k401_cents, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (year) DO UPDATE SET tuition_cents = excluded.tuition_cents, scholarships_cents = excluded.scholarships_cents,
+          student_loan_interest_cents = excluded.student_loan_interest_cents, k401_cents = excluded.k401_cents, updated_at = excluded.updated_at`)
+        .run(year, b.tuitionCents ?? null, b.scholarshipsCents ?? null, b.studentLoanInterestCents ?? null, b.k401Cents ?? null, deps.now().toISOString());
+      return { status: 200, body: getTaxInputs(db, year) };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+
+  app.get<{ Params: { year: string } }>('/v1/tax/scenario/:year', async (req) => getScenario(db, yearParam(req.params.year)));
+  app.put('/v1/tax/scenario/:year', async (req: YearReq, reply) => {
+    const year = yearParam(req.params.year);
+    const b = parseBody(TaxScenarioBody, req.body);
+    if (b.moveDate && Number(b.moveDate.slice(0, 4)) !== year) throw new ApiError(400, 'INVALID_REQUEST', 'moveDate: must be within the year', 'moveDate');
+    const r = idempotentWrite(deps, req, () => {
+      db.prepare(`INSERT INTO tax_scenarios (year, move_date, move_to, relocation_cents, bonus_cents, k401_cents, roth_cents, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (year) DO UPDATE SET move_date = excluded.move_date, move_to = excluded.move_to, relocation_cents = excluded.relocation_cents,
+          bonus_cents = excluded.bonus_cents, k401_cents = excluded.k401_cents, roth_cents = excluded.roth_cents, updated_at = excluded.updated_at`)
+        .run(year, b.moveDate ?? null, b.moveTo ?? null, b.relocationCents ?? null, b.bonusCents ?? null, b.k401Cents ?? null, b.rothCents ?? null, deps.now().toISOString());
+      return { status: 200, body: getScenario(db, year) };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+
+  // a contribution counts for its deposit year, or the year before when deposited Jan 1 to Apr 15
+  const assertRothYear = (date: string, taxYear: number) => {
+    const y = Number(date.slice(0, 4));
+    if (taxYear !== y && !(taxYear === y - 1 && date.slice(5) <= '04-15')) {
+      throw new ApiError(400, 'INVALID_REQUEST', 'taxYear: must be the deposit year, or the year before for a deposit from Jan 1 to Apr 15', 'taxYear');
+    }
+  };
+  app.get<{ Querystring: { taxYear?: string } }>('/v1/tax/roth-contributions', async (req) => {
+    const taxYear = Number(req.query.taxYear);
+    if (!Number.isInteger(taxYear) || taxYear < 2000) throw new ApiError(400, 'INVALID_REQUEST', 'taxYear: expected a year from 2000', 'taxYear');
+    return { contributions: listRothContributions(db, taxYear) };
+  });
+  app.post('/v1/tax/roth-contributions', async (req, reply) => {
+    const b = parseBody(RothContributionBody, req.body);
+    assertDates(b, ['date']);
+    assertRothYear(b.date, b.taxYear);
+    const r = idempotentWrite(deps, req, () => {
+      const id = randomUUID();
+      db.prepare('INSERT INTO roth_contributions (id, date, amount_cents, tax_year) VALUES (?, ?, ?, ?)').run(id, b.date, b.amountCents, b.taxYear);
+      return { status: 201, body: { id, date: b.date, amountCents: b.amountCents, taxYear: b.taxYear, transactionId: null } };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+  app.put<{ Params: { id: string } }>('/v1/tax/roth-contributions/:id', async (req, reply) => {
+    const { taxYear } = parseBody(PatchRothContributionBody, req.body);
+    const r = idempotentWrite(deps, req, () => {
+      const row = db.prepare('SELECT date FROM roth_contributions WHERE id = ? AND dismissed = 0').get(req.params.id) as { date: string } | undefined;
+      if (!row) throw notFound('Roth contribution');
+      assertRothYear(row.date, taxYear);
+      db.prepare('UPDATE roth_contributions SET tax_year = ? WHERE id = ?').run(taxYear, req.params.id);
+      return { status: 200, body: db.prepare('SELECT id, date, amount_cents AS amountCents, tax_year AS taxYear, transaction_id AS transactionId FROM roth_contributions WHERE id = ?').get(req.params.id) };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+  app.delete<{ Params: { id: string } }>('/v1/tax/roth-contributions/:id', async (req, reply) => {
+    const r = idempotentWrite(deps, req, () => {
+      // a suggested row is kept as dismissed so the next list doesn't suggest it again
+      const changes = db.prepare('UPDATE roth_contributions SET dismissed = 1 WHERE id = ? AND transaction_id IS NOT NULL AND dismissed = 0').run(req.params.id).changes
+        || db.prepare('DELETE FROM roth_contributions WHERE id = ? AND transaction_id IS NULL').run(req.params.id).changes;
+      if (!changes) throw notFound('Roth contribution');
+      return { status: 200, body: { ok: true } };
+    });
+    return reply.code(r.status).send(r.body);
+  });
 }

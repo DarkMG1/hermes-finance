@@ -58,7 +58,8 @@ export async function readProfile(deps: Deps, kind: ProfileKind, pages: Buffer[]
 
 const KINDS: Record<ProfileKind, [label: string, hints: string]> = {
   tax_return: ['tax return', "jurisdiction: 'federal' for a federal return, else the 2-letter state code. refundCents: positive for a refund, negative when tax is owed. "
-    + "claimedAsDependent: true when the 'someone can claim you as a dependent' box is checked (on a state return, when the dependent exemption is claimed), false when it isn't."],
+    + "claimedAsDependent: true when the 'someone can claim you as a dependent' box is checked (on a state return, when the dependent exemption is claimed), false when it isn't. "
+    + 'capitalLossCarryoverShortCents and capitalLossCarryoverLongCents: the short-term and long-term lines of the capital loss carryover worksheet (carried to next year), as positive amounts.'],
   tax_form: ['W-2 or 1099 form', 'kind: w2 for a W-2, else the 1099 type. payer: the employer or payer name. amountCents: W-2 box 1 wages, else box 1 or the total.'],
   pay_stub: ['pay stub', 'The pages may hold several pay stubs: put each in stubs, in page order, once each (a stub over two pages is one entry). '
     + 'Amounts are for that stub\'s pay period; ytdGrossCents is the year-to-date gross. otherDeductionsCents: the sum of every deduction and tax '

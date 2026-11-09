@@ -567,6 +567,8 @@ const TaxReturnFields = z.object({
   totalTaxCents: Money.nullable(), creditsCents: Money.nullable(), withholdingCents: Money.nullable(),
   /** positive refund, negative owed */
   refundCents: LedgerCents.nullable(), capitalGainsCents: LedgerCents.nullable(), capitalLossCarryoverCents: Money.nullable(),
+  /** the carryover worksheet's short-term and long-term lines */
+  capitalLossCarryoverShortCents: Money.nullable(), capitalLossCarryoverLongCents: Money.nullable(),
   /** the "someone can claim you as a dependent" box, or a state return's dependent exemption */
   claimedAsDependent: z.boolean().nullable(),
 });
@@ -580,6 +582,30 @@ export const TaxYears = z.object({
   years: z.array(z.object({ year: z.number().int(), returns: z.array(TaxReturn), forms: z.array(TaxForm), effectiveRate: z.number().nullable() })),
 });
 export type TaxYears = z.infer<typeof TaxYears>;
+
+const TaxInputsFields = z.object({ tuitionCents: Money.nullable(), scholarshipsCents: Money.nullable(), studentLoanInterestCents: Money.nullable(), k401Cents: Money.nullable() });
+export const TaxInputs = TaxInputsFields.extend({ year: z.number().int(), updatedAt: z.string().nullable() });
+export type TaxInputs = z.infer<typeof TaxInputs>;
+/** Replaces the year's inputs: a left-out field is null. */
+export const TaxInputsBody = TaxInputsFields.partial().strict();
+export type TaxInputsBody = z.infer<typeof TaxInputsBody>;
+
+const TaxScenarioFields = z.object({
+  moveDate: DateInput.nullable(), moveTo: StateCode.nullable(),
+  relocationCents: Money.nullable(), bonusCents: Money.nullable(), k401Cents: Money.nullable(), rothCents: Money.nullable(),
+});
+export const TaxScenario = TaxScenarioFields.extend({ year: z.number().int(), updatedAt: z.string().nullable() });
+export type TaxScenario = z.infer<typeof TaxScenario>;
+/** Replaces the year's scenario: a left-out field is null. */
+export const TaxScenarioBody = TaxScenarioFields.partial().strict();
+export type TaxScenarioBody = z.infer<typeof TaxScenarioBody>;
+
+export const RothContribution = z.object({ id: Id, date: DateStr, amountCents: Money, taxYear: z.number().int(), transactionId: Id.nullable() });
+export type RothContribution = z.infer<typeof RothContribution>;
+export const RothContributionBody = z.object({ date: DateInput, amountCents: Money.min(1), taxYear: z.number().int() }).strict();
+export type RothContributionBody = z.infer<typeof RothContributionBody>;
+export const PatchRothContributionBody = z.object({ taxYear: z.number().int() }).strict();
+export type PatchRothContributionBody = z.infer<typeof PatchRothContributionBody>;
 
 /** A job's W-4: step 1(c) filing status (single covers married filing separately), the step 2(c) box, step 3's total, steps 4(a)–(c)
  *  (the extra withholding is per pay period), and exempt. Only the latest applies, so a job has one. */

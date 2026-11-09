@@ -20,6 +20,8 @@
           "refundCents": 150000,
           "capitalGainsCents": 20000,
           "capitalLossCarryoverCents": 0,
+          "capitalLossCarryoverShortCents": 5000,
+          "capitalLossCarryoverLongCents": 15000,
           "claimedAsDependent": false,
           "createdAt": "seed",
           "updatedAt": "seed"
