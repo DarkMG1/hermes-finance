@@ -151,6 +151,8 @@ struct ProfileDraftForm: View {
     private let step: (Int, Int)?
     /// on to the next of those stubs, with the job picked on this one
     private let next: ((String?) -> Void)?
+    /// shown above the fields, such as stubs skipped as already saved
+    private let note: String?
 
     private struct GrantRow: Identifiable {
         let id = UUID()
@@ -170,11 +172,12 @@ struct ProfileDraftForm: View {
     @State private var savedGrants = 0
     @State private var stub: PayStub?
 
-    init(kind: ProfileKind, draft: ProfileDraft, uncertain: Set<String>, step: (Int, Int)? = nil, jobId: String? = nil,
+    init(kind: ProfileKind, draft: ProfileDraft, uncertain: Set<String>, step: (Int, Int)? = nil, jobId: String? = nil, note: String? = nil,
          next: ((String?) -> Void)? = nil) {
         self.kind = kind
         self.uncertain = uncertain
         self.step = step
+        self.note = note
         self.next = next
         _jobId = State(initialValue: jobId)
         var employer: String?
@@ -209,6 +212,9 @@ struct ProfileDraftForm: View {
         Sheet(title: step.map { "\(kind.title) \($0.0) of \($0.1)" } ?? kind.title, canSave: !busy && built, busy: busy, unresolved: writes.unresolved,
               onCancel: { dismiss() },
               onSave: { Task { await save() } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
+            // at the top, by Save, not below a long form
+            if let error { Section { InlineError(message: error) } }
+            if let note { Section { Text(note).textStyle(.subhead, color: Palette.secondaryText) } }
             switch kind {
             case .taxReturn:
                 Section { DraftFields(fields: Self.returnFields, texts: $texts, uncertain: uncertain) }.disabled(locked)
@@ -245,7 +251,6 @@ struct ProfileDraftForm: View {
                     Button("Add grant") { grants.append(GrantRow(texts: ["kind": "rsu"])) }.disabled(locked)
                 }
             }
-            if let error { Section { InlineError(message: error) } }
             if let next { Section { Button("Skip this pay stub") { next(jobId) }.disabled(locked) } }
         }
         .task { await loadJobs() }

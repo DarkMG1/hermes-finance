@@ -32,6 +32,6 @@ export class FakeProfileReader implements ProfileReader {
 
 /** A pay stub read of these stubs, each unsure of `uncertain`. */
 export const stubRead = (stubs: Record<string, unknown>[], uncertain: string[] = []): Extract<ProfileReadOutput, { kind: 'pay_stub' }> => {
-  const all = stubs.map((s) => ({ draft: ProfileDrafts.pay_stub.parse(s), uncertain }));
-  return { kind: 'pay_stub', ...all[0]!, stubs: all, model: 'fake-model' };
+  const all = stubs.map((s) => ({ draft: ProfileDrafts.pay_stub.parse(s), uncertain, saved: false }));
+  return { kind: 'pay_stub', draft: all[0]!.draft, uncertain, stubs: all, model: 'fake-model' };
 };

@@ -263,14 +263,17 @@ public struct ProfileReadResult: Decodable, Sendable, Equatable {
     public let uncertain: [String]
     /// Each document read, in page order: a PDF can hold a run of pay stubs. Just this one for any other kind, or from a server before 2.2.1.
     private let documents: [ProfileReadResult]
+    /// one of several pay stubs, already saved (same pay date, gross and net)
+    public let saved: Bool
 
-    private enum Keys: String, CodingKey { case kind, draft, uncertain, stubs }
+    private enum Keys: String, CodingKey { case kind, draft, uncertain, stubs, saved }
     private enum DraftKeys: String, CodingKey { case employer, grants }
 
-    private init(kind: ProfileKind, draft: ProfileDraft, uncertain: [String]) {
+    private init(kind: ProfileKind, draft: ProfileDraft, uncertain: [String], saved: Bool) {
         self.kind = kind
         self.draft = draft
         self.uncertain = uncertain
+        self.saved = saved
         documents = []
     }
 
@@ -278,12 +281,14 @@ public struct ProfileReadResult: Decodable, Sendable, Equatable {
         let c = try decoder.container(keyedBy: Keys.self)
         kind = try c.decode(ProfileKind.self, forKey: .kind)
         (draft, uncertain) = try Self.read(c, kind)
+        saved = false
         if kind == .payStub, var stubs = try? c.nestedUnkeyedContainer(forKey: .stubs) {
             var all: [ProfileReadResult] = []
             while !stubs.isAtEnd {
                 let one = try stubs.nestedContainer(keyedBy: Keys.self)
                 let (draft, uncertain) = try Self.read(one, kind)
-                all.append(ProfileReadResult(kind: kind, draft: draft, uncertain: uncertain))
+                let saved = try one.decodeIfPresent(Bool.self, forKey: .saved) ?? false
+                all.append(ProfileReadResult(kind: kind, draft: draft, uncertain: uncertain, saved: saved))
             }
             documents = all
         } else {

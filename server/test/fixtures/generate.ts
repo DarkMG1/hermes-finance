@@ -188,7 +188,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
     offer: [{ employer: 'SYNTHETIC EMPLOYER', title: 'Synthetic Engineer', baseCents: 12000000, grants: [{ kind: 'rsu', shares: 400, grantDate: '2026-06-01', cliffMonths: 12, vestMonths: 48, vestEveryMonths: 3 }] }, ['baseCents']],
   } as const)) {
     // a PDF of two pay stubs
-    const stubs = kind === 'pay_stub' && { stubs: [{ draft, uncertain }, { draft: { ...draft, payDate: '2026-03-27', grossCents: 410000, netCents: 360000 }, uncertain: [] }] };
+    const stubs = kind === 'pay_stub' && { stubs: [{ draft, uncertain, saved: false }, { draft: { ...draft, payDate: '2026-03-27', grossCents: 410000, netCents: 360000 }, uncertain: [], saved: false }] };
     profileReader.next = ProfileReadResult.parse({ kind, draft, uncertain, ...stubs }) as ProfileReadOutput;
     out[`profile-read-${kind.replace('_', '-')}`] = await post('/v1/profile/read', { kind, pages: [page] });
   }

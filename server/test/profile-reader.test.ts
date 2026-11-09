@@ -190,8 +190,18 @@ test('a pay stub read returns every stub in the pages, each scrubbed with its ow
   const body = (await read({ kind: 'pay_stub', pages: [PAGE, PAGE] })).json();
   assert.deepEqual(body.stubs.map((s: { draft: { payDate: string; employer: string | null }; uncertain: string[] }) => [s.draft.payDate, s.draft.employer, s.uncertain]),
     [['2026-06-12', 'SYNTHETIC EMPLOYER', ['netCents']], ['2026-06-26', null, ['payDate']]]);
-  assert.deepEqual([body.draft.payDate, body.uncertain], ['2026-06-12', ['netCents']], 'the first stub is also where older apps look');
+  assert.deepEqual([body.draft.payDate, body.uncertain, body.saved], ['2026-06-12', ['netCents'], undefined], 'the first stub is also where older apps look');
+  assert.deepEqual(body.stubs.map((s: { saved: boolean }) => s.saved), [false, false]);
   assert.ok(ProfileReadResult.parse(body));
+});
+
+test('a pay stub read marks the stubs already saved, by pay date, gross and net, whatever the job', async () => {
+  const { read, profileReader, deps } = setup();
+  const app = buildApp(deps);
+  await app.inject({ method: 'POST', url: '/v1/pay-stubs', headers: { ...AUTH, 'idempotency-key': 'saved' }, payload: { payDate: '2026-06-26', grossCents: 210000, federalCents: 42000, netCents: 168000 } });
+  profileReader.next = stubRead([{ payDate: '2026-06-12', grossCents: 200000, netCents: 160000 }, { payDate: '2026-06-26', grossCents: 210000, netCents: 168000 },
+    { payDate: '2026-06-26', grossCents: 210000, netCents: 167999 }]);
+  assert.deepEqual((await read({ kind: 'pay_stub', pages: [PAGE] })).json().stubs.map((s: { saved: boolean }) => s.saved), [false, true, false]);
 });
 
 test('the Anthropic reader keeps every pay stub in order, drops a malformed one, and asks for each stub once', async () => {
