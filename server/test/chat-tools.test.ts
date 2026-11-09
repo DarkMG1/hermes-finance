@@ -12,6 +12,8 @@ import { getRecurring } from '../src/recurring.ts';
 import { listAccounts, listTransactions } from '../src/ledger.ts';
 import { getPerson, listPeople } from '../src/people.ts';
 import { getJob, getProfile, listJobs, taxYears } from '../src/profile.ts';
+import { project, whatIf } from '../src/tax/projection.ts';
+import { buildLots } from '../src/tax/lots.ts';
 import { makeTestDeps, seedAccount, seedCategory, seedPerson, seedTxn } from './helpers.ts';
 
 function setup() {
@@ -222,13 +224,14 @@ test('profile tools match the profile functions and never write', () => {
 
 test('profile tools refuse unless the question was asked with the profile unlocked', () => {
   const { deps } = setup();
-  for (const name of ['profile', 'jobs', 'pay_stubs', 'tax_years']) {
+  for (const name of ['profile', 'jobs', 'pay_stubs', 'tax_years', 'tax_projection', 'tax_what_if', 'investment_activity', 'tax_lots']) {
+    const input = name === 'tax_what_if' ? { year: 2026, change: {} } : {};
     for (const ctx of [undefined, {}, { profileUnlocked: false }]) {
-      const r = runTool(deps, name, {}, ctx);
+      const r = runTool(deps, name, input, ctx);
       assert.equal(r.isError, true, name);
       assert.match(r.content, /financial profile is locked/);
     }
-    assert.equal(runTool(deps, name, {}, UNLOCKED).isError, false, name);
+    assert.equal(runTool(deps, name, input, UNLOCKED).isError, false, name);
   }
   assert.equal(runTool(deps, 'categories', {}).isError, false, 'other tools need no unlock');
 });
@@ -252,4 +255,43 @@ test('tax_reference gives a year\'s federal figures in cents, the server file\'s
   assert.equal((JSON.parse(runTool(deps, 'tax_reference', { year: 2026 }).content) as { states?: unknown }).states, undefined, 'a broken file leaves the federal figures');
   assert.deepEqual(JSON.parse(runTool(deps, 'tax_reference', { year: 2031 }).content), { year: 2031, available: [2026, 2027], note: 'no 2031 figures in Hermes yet' });
   assert.equal(toolLabel('tax_reference', { year: 2026 }), 'Tax figures');
+});
+
+test('tax tools match the tax functions; investment_activity gives cash in/out with ticker and account, and sales', () => {
+  const { deps, db, today } = setup();
+  seedAccount(db, { id: 'br', type: 'investment', subtype: 'brokerage' });
+  db.prepare("INSERT INTO securities (id, name, ticker, type, is_cash, updated_at) VALUES ('s1', 'Synthetic Fund', 'SYN', 'etf', 0, 'x')").run();
+  const ins = db.prepare("INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, updated_at) VALUES (?, 'br', 's1', ?, ?, ?, ?, ?, 'x')");
+  ins.run('i1', '2026-01-05', 'buy', 'buy', 10, 100_000);
+  ins.run('i2', '2026-02-05', 'sell', 'sell', -4, -50_000);
+  assert.deepEqual(call(deps, 'tax_projection', { year: 2026 }, UNLOCKED), JSON.parse(JSON.stringify(project(deps, 2026, today))));
+  assert.deepEqual(call(deps, 'tax_what_if', { year: 2026, change: { extraWithholdingCents: 1000 } }, UNLOCKED),
+    JSON.parse(JSON.stringify(whatIf(deps, 2026, today, { extraWithholdingCents: 1000 }))));
+  assert.equal(runTool(deps, 'tax_what_if', { year: 2026, change: { bogus: 1 } }, UNLOCKED).isError, true);
+  assert.deepEqual(call(deps, 'tax_lots', { accountId: 'br' }, UNLOCKED), JSON.parse(JSON.stringify(buildLots(db, today).lots.filter((l) => l.accountId === 'br'))));
+  const all = call(deps, 'investment_activity', {}, UNLOCKED) as { transactions: { id: string; ticker: string; account: string; cashCents: number }[]; sales: unknown[] };
+  assert.deepEqual(all.transactions.map((t) => [t.id, t.ticker, t.cashCents]), [['i2', 'SYN', 50_000], ['i1', 'SYN', -100_000]]);
+  assert.equal(typeof all.transactions[0]!.account, 'string');
+  assert.equal(all.sales.length, 1);
+  const feb = call(deps, 'investment_activity', { from: '2026-02-01', type: 'sell' }, UNLOCKED) as { transactions: unknown[] };
+  assert.equal(feb.transactions.length, 1);
+  assert.equal((call(deps, 'investment_activity', { to: '2026-01-31' }, UNLOCKED) as { sales: unknown[] }).sales.length, 0);
+});
+
+test('a large investment_activity result is trimmed to valid JSON under the cap', () => {
+  const { deps, db } = setup();
+  seedAccount(db, { id: 'br', type: 'investment' });
+  db.prepare("INSERT INTO securities (id, name, ticker, type, is_cash, updated_at) VALUES ('s1', 'Synthetic Fund', 'SYN', 'etf', 0, 'x')").run();
+  const ins = db.prepare("INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, updated_at) VALUES (?, 'br', 's1', '2026-01-05', 'buy', 'buy', 1, 100, 'x')");
+  for (let i = 0; i < 400; i++) ins.run(`b${i}`);
+  const r = runTool(deps, 'investment_activity', {}, UNLOCKED);
+  assert.ok(r.content.length <= RESULT_MAX);
+  assert.equal(JSON.parse(r.content).truncated, true);
+});
+
+test('tax tool labels and descriptions', () => {
+  assert.deepEqual(['tax_projection', 'tax_what_if', 'investment_activity', 'tax_lots'].map((n) => toolLabel(n, {})), ['Tax projection', 'What if', 'Investment activity', 'Tax lots']);
+  const d = TOOLS.find((t) => t.name === 'investments')!.description;
+  assert.doesNotMatch(d, /no trades/);
+  assert.match(d, /investment_activity/);
 });
