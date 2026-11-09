@@ -72,9 +72,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   // lets Settings show its row without loading any profile data before Face ID
   app.get('/v1/profile/exists', async () => ({ ok: true }));
   // no idempotency key: a read stores nothing
-  app.post('/v1/profile/read', { bodyLimit: READ_MAX_BYTES }, async (req, reply) => {
-    // the body streams through nginx, so the time before the handler is mostly the upload
-    const upload = Math.round(reply.elapsedTime);
+  app.post('/v1/profile/read', { bodyLimit: READ_MAX_BYTES }, async (req) => {
     const body = parseBody(ProfileReadBody, req.body);
     const pages = body.pages.map((p) => Buffer.from(p, 'base64'));
     const bad = pages.findIndex((p) => !isJpeg(p));
@@ -84,7 +82,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       return await readProfile(deps, body.kind, pages);
     } finally {
       const kb = Math.round(pages.reduce((n, p) => n + p.length, 0) / 1024);
-      console.log(`[hermes] profile read kind=${body.kind} pages=${pages.length} kb=${kb} upload_ms=${upload} read_ms=${Math.round(performance.now() - start)}`);
+      console.log(`[hermes] profile read kind=${body.kind} pages=${pages.length} kb=${kb} read_ms=${Math.round(performance.now() - start)}`);
     }
   });
 
