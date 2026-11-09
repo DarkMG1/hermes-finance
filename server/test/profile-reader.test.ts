@@ -141,13 +141,14 @@ test('an offer read leaves pay it does not state blank instead of zero, and asks
 });
 
 test('the Anthropic reader sends every page and one tool per kind, without forcing it, and records profile usage', async () => {
-  for (const kind of ['tax_return', 'tax_form', 'pay_stub', 'offer'] as const) {
+  for (const kind of ['tax_return', 'tax_form', 'pay_stub', 'offer', 'w4'] as const) {
     const sent: { model: string; tool_choice?: unknown; tools: { name: string; input_schema: { properties: Record<string, unknown> } }[];
       messages: { content: { type: string; text?: string; source?: { type: string; media_type: string; data: string } }[] }[] }[] = [];
     const input = { offer: { employer: 'SYNTHETIC EMPLOYER', baseCents: 12000000,
       grants: [{ kind: 'rsu', shares: 400, grantDate: '2026-01-15', vestMonths: 48 }, 'junk', ...Array.from({ length: 20 }, (_, i) => ({ shares: i + 1 }))] },
       pay_stub: { employer: 'SYNTHETIC EMPLOYER', payDate: '2026-03-13', grossCents: 420000, netCents: 'lots' },
-      tax_form: { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER' }, tax_return: { year: 2025, jurisdiction: 'federal', refundCents: -5000 } }[kind];
+      tax_form: { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER' }, tax_return: { year: 2025, jurisdiction: 'federal', refundCents: -5000 },
+      w4: { filingStatus: 'single', multipleJobs: true, extraWithholdingCents: 2500, exempt: 'no', grossCents: 1 } }[kind];
     const { deps, reader } = makeReader(async (_url, init) => {
       sent.push(JSON.parse(String(init!.body)));
       const one = { ...input, uncertain: ['grossCents'], extra: 'dropped' };
@@ -176,6 +177,8 @@ test('the Anthropic reader sends every page and one tool per kind, without forci
     // the stub balances only when every other deduction sums into one field
     if (kind === 'pay_stub') assert.match(content[2]!.text!, /otherDeductionsCents: the sum of every deduction and tax without its own field.*Gross minus all deductions plus otherPayCents must equal netCents/s);
     if (r.kind === 'tax_return') assert.deepEqual([r.draft.refundCents, r.draft.agiCents], [-5000, null]);
+    if (r.kind === 'w4') assert.deepEqual([r.draft.filingStatus, r.draft.multipleJobs, r.draft.extraWithholdingCents, r.draft.exempt], ['single', true, 2500, null]);
+    if (kind === 'w4') assert.match(content[2]!.text!, /multipleJobs: true when step 2\(c\) is checked.*extraWithholdingCents: steps 4\(a\), 4\(b\) and 4\(c\)/s);
   }
 });
 

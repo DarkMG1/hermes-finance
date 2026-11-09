@@ -92,5 +92,17 @@
       "medicareWagesCents": 7000000,
       "createdAt": "seed"
     }
-  ]
+  ],
+  "w4": {
+    "jobId": "job-1",
+    "signedOn": "2026-01-05",
+    "filingStatus": "single",
+    "multipleJobs": false,
+    "dependentsCents": 0,
+    "otherIncomeCents": null,
+    "deductionsCents": null,
+    "extraWithholdingCents": 2500,
+    "exempt": false,
+    "updatedAt": "2026-03-15T12:00:00.000Z"
+  }
 }

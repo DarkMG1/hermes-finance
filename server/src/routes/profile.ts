@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { CreateJobBody, GrantBody, LinkPayStubBody, PatchGrantBody, PatchJobBody, PatchPayStubBody, PatchTaxFormBody, PayStubBody, ProfileReadBody, PutProfileBody,
-  TaxFormBody, TaxReturnBody } from '@hermes/shared';
+  TaxFormBody, TaxReturnBody, W4Body } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { readProfile } from '../profile-reader.ts';
-import { getForm, getGrant, getJob, getProfile, getReturn, getStub, linkable, listJobs, putProfile, stubMatches, taxYears, unassignedStubs } from '../profile.ts';
+import { getForm, getGrant, getJob, getProfile, getReturn, getStub, getW4, linkable, listJobs, putProfile, stubMatches, taxYears, unassignedStubs } from '../profile.ts';
 import { assertOwnerDate, parseBody } from '../validate.ts';
 import { isJpeg } from './receipts.ts';
 
@@ -153,6 +153,29 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   app.delete<{ Params: { id: string; grantId: string } }>('/v1/jobs/:id/grants/:grantId', async (req, reply) => {
     const r = idempotentWrite(deps, req, () => {
       if (!db.prepare('DELETE FROM equity_grants WHERE job_id = ? AND id = ?').run(req.params.id, req.params.grantId).changes) throw notFound('grant');
+      return { status: 200, body: { ok: true } };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+
+  // replaces the job's W-4: only the latest one applies
+  app.put<{ Params: { id: string } }>('/v1/jobs/:id/w4', async (req, reply) => {
+    const w = parseBody(W4Body, req.body);
+    assertDates(w, ['signedOn']);
+    const r = idempotentWrite(deps, req, () => {
+      job(req.params.id);
+      const bit = (v: boolean | null | undefined) => (v == null ? null : Number(v));
+      db.prepare(`INSERT OR REPLACE INTO w4s (job_id, signed_on, filing_status, multiple_jobs, dependents_cents, other_income_cents, deductions_cents,
+        extra_withholding_cents, exempt, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(req.params.id, w.signedOn ?? null, w.filingStatus ?? null,
+        bit(w.multipleJobs), w.dependentsCents ?? null, w.otherIncomeCents ?? null, w.deductionsCents ?? null, w.extraWithholdingCents ?? null, bit(w.exempt),
+        deps.now().toISOString());
+      return { status: 200, body: getW4(db, req.params.id) };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+  app.delete<{ Params: { id: string } }>('/v1/jobs/:id/w4', async (req, reply) => {
+    const r = idempotentWrite(deps, req, () => {
+      if (!db.prepare('DELETE FROM w4s WHERE job_id = ?').run(req.params.id).changes) throw notFound('W-4');
       return { status: 200, body: { ok: true } };
     });
     return reply.code(r.status).send(r.body);

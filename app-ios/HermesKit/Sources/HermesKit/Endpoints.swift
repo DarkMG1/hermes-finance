@@ -243,6 +243,15 @@ extension APIClient {
         try await write("PUT", "/v1/pay-stubs/\(id)/link", body: ["transactionIds": transactionIds], key: idempotencyKey)
     }
 
+    /// Replaces the job's W-4: what `body` leaves out is null.
+    public func putW4(jobId: String, body: W4Body, idempotencyKey: String) async throws -> W4Body {
+        try await write("PUT", "/v1/jobs/\(jobId)/w4", body: body, key: idempotencyKey)
+    }
+
+    public func deleteW4(jobId: String, idempotencyKey: String) async throws {
+        try await send("DELETE", "/v1/jobs/\(jobId)/w4", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
+    }
+
     public func createTaxForm(_ body: TaxFormBody, idempotencyKey: String) async throws -> TaxForm {
         try await write("POST", "/v1/tax-forms", body: body, key: idempotencyKey)
     }

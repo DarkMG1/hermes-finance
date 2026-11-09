@@ -61,6 +61,9 @@ const KINDS: Record<ProfileKind, [label: string, hints: string]> = {
     + 'Amounts are for that stub\'s pay period; ytdGrossCents is the year-to-date gross. otherDeductionsCents: the sum of every deduction and tax '
     + 'without its own field (local tax, disability, insurance, HSA and the rest). otherPayCents: after-tax additions such as reimbursements. '
     + 'Gross minus all deductions plus otherPayCents must equal netCents. employer: the employer name.'],
+  w4: ['W-4 form', "signedOn: the date signed. filingStatus: step 1(c), 'single' for single or married filing separately. multipleJobs: true when step 2(c) is checked. "
+    + 'dependentsCents: the step 3 total. otherIncomeCents, deductionsCents, extraWithholdingCents: steps 4(a), 4(b) and 4(c). exempt: true when Exempt is written below step 4(c). '
+    + 'employer: the employer name in the employers only section, if filled in.'],
   offer: ['offer letter', 'baseCents: the annual base salary as stated, null for hourly pay or any letter without a yearly figure (never work one out). hourlyCents: the hourly rate as stated. hoursPerWeek: the weekly hours as stated (20 for 40 hours every 2 weeks). bonusTargetPct: a percent (15 for 15%). grants: each equity grant; vestMonths is the whole vesting length, vestEveryMonths the interval after the cliff.'],
 };
 

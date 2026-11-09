@@ -214,6 +214,7 @@ extension ProfileKind {
         case .taxForm: "W-2 or 1099"
         case .payStub: "Pay stub"
         case .offer: "Offer letter"
+        case .w4: "W-4"
         }
     }
 }
@@ -225,6 +226,7 @@ extension ProfileDraft {
         case .taxForm: .taxForm({ var f = TaxFormBody(); f.kind = "w2"; return f }())
         case .payStub: .payStub(PayStubBody(), employer: nil)
         case .offer: .offer(CreateJobBody(), grants: [])
+        case .w4: .w4(W4Body(), employer: nil)
         }
     }
 }

@@ -178,3 +178,26 @@ import Testing
     #expect(old.reads.count == 1 && old.reads.first?.uncertain == ["grossCents"])
     #expect(try decode(ProfileReadResult.self, "profile-read-offer").reads.count == 1)
 }
+
+@Test func aJobCarriesItsW4AndAnOlderServerHasNone() throws {
+    let w4 = try #require(try decode(JobDetail.self, "job").w4)
+    #expect(w4.filingStatus == "single" && w4.multipleJobs == false && w4.extraWithholdingCents == 2500 && w4.otherIncomeCents == nil)
+    var json = try #require(JSONSerialization.jsonObject(with: fixture("job")) as? [String: Any])
+    json.removeValue(forKey: "w4")
+    #expect(try JSONDecoder().decode(JobDetail.self, from: JSONSerialization.data(withJSONObject: json)).w4 == nil)
+    guard case .w4(let read, let employer) = try decode(ProfileReadResult.self, "profile-read-w4").draft else { Issue.record("not a W-4"); return }
+    #expect(read.multipleJobs == true && read.signedOn == "2026-01-05" && employer == "SYNTHETIC EMPLOYER")
+}
+
+@Test func savingAW4ReplacesTheJobsOne() async throws {
+    let reply = try JSONSerialization.data(withJSONObject: try #require((JSONSerialization.jsonObject(with: fixture("job")) as? [String: Any])?["w4"]))
+    let transport = FakeTransport([.success(HTTPResponse(status: 200, body: reply)), .success(HTTPResponse(status: 200, body: Data(#"{"ok":true}"#.utf8)))])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    var body = W4Body()
+    body.filingStatus = "single"
+    body.multipleJobs = true
+    _ = try await client.putW4(jobId: "job-1", body: body, idempotencyKey: "k-1")
+    try await client.deleteW4(jobId: "job-1", idempotencyKey: "k-2")
+    #expect(transport.requests.map { String(data: $0.body ?? Data(), encoding: .utf8) } == [#"{"filingStatus":"single","multipleJobs":true}"#, ""])
+    #expect(transport.requests.map(\.method) == ["PUT", "DELETE"] && transport.requests.map(\.url.path) == ["/v1/jobs/job-1/w4", "/v1/jobs/job-1/w4"])
+}

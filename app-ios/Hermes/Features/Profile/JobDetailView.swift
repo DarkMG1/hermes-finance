@@ -10,6 +10,7 @@ struct JobDetailView: View {
     @State private var error: String?
     @State private var editing = false
     @State private var addingGrant = false
+    @State private var addingW4 = false
 
     var body: some View {
         List {
@@ -36,6 +37,21 @@ struct JobDetailView: View {
                         ForEach(detail.nextVests, id: \.self) { vest in
                             LabeledContent(DayText.display(vest.date), value: Self.amount(shares: vest.shares, valueCents: vest.valueCents))
                         }
+                    }
+                }
+                Section("W-4") {
+                    if let w4 = detail.w4 {
+                        EditRow(title: "W-4", fields: ProfileDraftForm.w4Fields, original: w4,
+                                row: ListRow(title: Self.w4Title(w4), subtitle: Self.w4Detail(w4))) { body, key in
+                            _ = try await model.client?.putW4(jobId: id, body: body, idempotencyKey: key)
+                            await load()
+                        }
+                        .deleteSwipe("Delete this W-4?") { client, key in
+                            try await client.deleteW4(jobId: id, idempotencyKey: key)
+                            await load()
+                        }
+                    } else {
+                        Button("Add W-4") { addingW4 = true }
                     }
                 }
                 if !detail.stubs.isEmpty {
@@ -70,8 +86,27 @@ struct JobDetailView: View {
                 await load()
             }
         }
+        .sheet(isPresented: $addingW4) {
+            EditForm(title: "W-4", fields: ProfileDraftForm.w4Fields, original: W4Body()) { body, key in
+                _ = try await model.client?.putW4(jobId: id, body: body, idempotencyKey: key)
+                await load()
+            }
+        }
         .task { await load() }
         .refreshable { await load() }
+    }
+
+    private static func w4Title(_ w: W4Body) -> String {
+        w.exempt == true ? "Exempt" : ProfileDraftForm.w4Statuses.first { $0.value == w.filingStatus }?.label ?? "W-4"
+    }
+
+    private static func w4Detail(_ w: W4Body) -> String? {
+        let parts = [
+            w.signedOn.map { "Signed \(DayText.display($0))" },
+            w.multipleJobs == true ? "Multiple jobs" : nil,
+            w.extraWithholdingCents.flatMap { $0 > 0 ? "\(Money.format($0)) extra a paycheck" : nil },
+        ].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     @ViewBuilder private func pay(_ job: CreateJobBody) -> some View {
