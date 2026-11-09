@@ -84,6 +84,24 @@ test("HIFO is inferred when it reproduces the holding's cost basis and FIFO does
   assert.deepEqual(r.lots.map((l) => [l.acquiredOn, l.quantity, l.costCents]), [['2024-03-01', 8, 80000]]);
 });
 
+test('inference adds each holding\'s miss, so misses in opposite directions do not cancel', () => {
+  const { db } = setup();
+  twoLotsOneSale(db, 80000);
+  // a HIFO loss sale in another account washes into this account's SYNY lot: HIFO leaves $1,160 there, FIFO $1,000 (−$160 against
+  // the basis), cancelling FIFO's +$160 on SYNA
+  seedAccount(db, { id: 'brk2', type: 'investment', subtype: 'brokerage' });
+  db.prepare("UPDATE accounts SET lot_method = 'hifo' WHERE id = 'brk2'").run();
+  security(db, 'sy', 'SYNY');
+  buy(db, 'brk2', 'sy', '2025-01-02', 10, 50000);
+  buy(db, 'brk2', 'sy', '2025-05-20', 10, 120000);
+  sell(db, 'brk2', 'sy', '2025-06-01', 10, 104000);
+  buy(db, 'brk', 'sy', '2025-06-10', 10, 100000);
+  holding(db, 'brk', 'sy', 10, 116000);
+  const r = buildLots(db, AS_OF);
+  assert.deepEqual([r.methods.brk, r.inferred.brk], ['hifo', true]);
+  assert.deepEqual(r.lots.filter((l) => l.accountId === 'brk').map((l) => [l.securityId, l.quantity, l.costCents]), [['sx', 8, 80000], ['sy', 10, 116000]]);
+});
+
 test('an owner-set method wins over inference', async () => {
   const { db, get, send } = setup();
   twoLotsOneSale(db, 80000);
@@ -124,6 +142,13 @@ test('an entered lot replaces the unverified remainder', async () => {
   assert.equal((await send('DELETE', `/v1/tax/lots/${whole.json().id}`)).statusCode, 404);
   await send('POST', '/v1/tax/lots', { accountId: 'brk', securityId: 'sx', acquiredOn: '2020-05-01', quantity: 4, costCents: 60000 });
   assert.deepEqual(buildLots(db, AS_OF).lots.map((l) => [l.status, l.quantity, l.costCents]), [['unverified', 6, 90000], ['entered', 4, 60000], ['known', 5, 50000]]);
+  // more shares than the holding leaves without a lot is refused; a lot the holding no longer covers turns unverified and blocks sales
+  const over = await send('POST', '/v1/tax/lots', { accountId: 'brk', securityId: 'sx', acquiredOn: '2020-05-01', quantity: 6.5, costCents: 1 });
+  assert.deepEqual([over.statusCode, over.json().field], [400, 'quantity']);
+  db.prepare("UPDATE holdings SET quantity = 8, cost_basis_cents = 110000 WHERE account_id = 'brk'").run();
+  const shrunk = buildLots(db, AS_OF).lots;
+  assert.deepEqual(shrunk.map((l) => [l.status, l.quantity, l.costCents]), [['unverified', 4, 60000], ['known', 5, 50000]]);
+  assert.notEqual(planSale(shrunk, 'specific', 'brk', 'sx', 1, [shrunk[0]!.id]).blocked, null);
   const bad = async (body: object) => (await send('POST', '/v1/tax/lots', { accountId: 'brk', securityId: 'sx', acquiredOn: '2020-05-01', quantity: 1, costCents: 1, ...body })).json().field;
   assert.equal(await bad({ accountId: 'nope' }), 'accountId');
   assert.equal(await bad({ securityId: 'nope' }), 'securityId');
@@ -149,11 +174,17 @@ test('a loss sale with a buy of the same security within 30 days before or after
   buy(db, 'brk', 'sw', '2025-01-02', 2, 20000);
   sell(db, 'brk', 'sw', '2025-06-01', 2, 14000);
   buy(db, 'brk', 'sw', '2025-06-05', 5, 35000);
+  // the 5 shares of a newer lot the same sale didn't take still replace 5 of the older lot's loss shares
+  security(db, 'sv', 'SYNV');
+  buy(db, 'brk', 'sv', '2025-01-02', 10, 100000);
+  buy(db, 'brk', 'sv', '2025-05-20', 10, 90000);
+  sell(db, 'brk', 'sv', '2025-06-01', 15, 105000);
   const r = buildLots(db, AS_OF);
   assert.deepEqual(r.sales.map((s) => [s.securityId, s.costCents, s.proceedsCents, s.washDisallowedCents]).sort(),
-    [['sw', 20000, 14000, 6000], ['sx', 100000, 70000, 12000], ['sz', 100000, 70000, 9000]]);
+    [['sv', 100000, 70000, 15000], ['sv', 45000, 35000, 0], ['sw', 20000, 14000, 6000], ['sx', 100000, 70000, 12000], ['sz', 100000, 70000, 9000]]);
   // the replacement carries the disallowed loss and the sold shares' 150-day holding period; buys 31+ days away are untouched
   assert.deepEqual(r.lots.map((l) => [l.securityId, l.acquiredOn, l.quantity, l.costCents]), [
+    ['sv', '2024-12-21', 5, 60000],
     ['sw', '2025-01-06', 2, 20000],
     ['sw', '2025-06-05', 3, 21000],
     ['sx', '2025-01-21', 4, 40000],

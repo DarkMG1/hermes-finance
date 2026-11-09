@@ -408,6 +408,9 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
     }
     if (!db.prepare('SELECT 1 FROM securities WHERE id = ?').get(b.securityId)) throw new ApiError(400, 'INVALID_REQUEST', 'securityId: unknown security', 'securityId');
     const r = idempotentWrite(deps, req, () => {
+      // a lot covers shares held before the history that no lot accounts for yet, never more
+      const left = buildLots(db, today()).lots.find((l) => l.id === `unverified:${b.accountId}:${b.securityId}`)?.quantity ?? 0;
+      if (b.quantity - left > 1e-6) throw new ApiError(400, 'INVALID_REQUEST', `quantity: only ${left} shares here have no lot`, 'quantity');
       const id = randomUUID();
       db.prepare('INSERT INTO lot_entries (id, account_id, security_id, acquired_on, quantity, cost_cents) VALUES (?, ?, ?, ?, ?, ?)')
         .run(id, b.accountId, b.securityId, b.acquiredOn, b.quantity, b.costCents);

@@ -88,7 +88,13 @@ export function buildLots(db: Db, asOf: string): {
   // shares held before the history = holding − the history's net (buys add, sells and transfers out remove)
   const before = new Map<string, number>(holdings.map((h) => [pair(h.accountId, h.securityId), h.quantity]));
   for (const r of rows) before.set(pair(r.accountId, r.securityId), (before.get(pair(r.accountId, r.securityId)) ?? 0) - r.quantity);
-  for (const e of entered) before.set(pair(e.accountId, e.securityId), (before.get(pair(e.accountId, e.securityId)) ?? 0) - e.quantity);
+  // entered lots fill those shares oldest first; one that no longer fits (the holding shrank) stays unverified so no sale plans on it
+  const fits = new Set<string>();
+  for (const e of entered) {
+    const left = before.get(pair(e.accountId, e.securityId)) ?? 0;
+    if (e.quantity - left < DUST) fits.add(e.id);
+    before.set(pair(e.accountId, e.securityId), left - e.quantity);
+  }
 
   const run = (methodOf: (accountId: string) => LotMethod) => {
     const work = (l: Omit<Lot, 'ticker'>, order: string, since: string): Work =>
@@ -98,7 +104,7 @@ export function buildLots(db: Db, asOf: string): {
         const [accountId, securityId] = p.split('\u0000') as [string, string];
         return work({ id: `unverified:${accountId}:${securityId}`, accountId, securityId, acquiredOn: null, quantity, costCents: 0, status: 'unverified' }, '', '');
       }),
-      ...entered.map((e) => work({ ...e, status: 'entered' }, e.acquiredOn, '')),
+      ...entered.map((e) => work({ ...e, status: fits.has(e.id) ? 'entered' : 'unverified' }, e.acquiredOn, '')),
       ...rows.filter((r) => r.type === 'buy').map((r) =>
         work({ id: r.id, accountId: r.accountId, securityId: r.securityId, acquiredOn: r.date, quantity: r.quantity, costCents: r.amountCents, status: 'known' }, r.date, r.date)),
     ];
@@ -122,7 +128,6 @@ export function buildLots(db: Db, asOf: string): {
 
       const taxable = !sheltered.get(r.accountId);
       const sold = parts.reduce((a, p) => a + p.quantity, 0);
-      const consumed = new Set(parts.map((p) => p.lot));
       let proceedsLeft = -r.amountCents;
       parts.forEach((p, i) => {
         const proceedsCents = i === parts.length - 1 ? proceedsLeft : Math.round(-r.amountCents * p.quantity / sold);
@@ -134,8 +139,9 @@ export function buildLots(db: Db, asOf: string): {
         const loss = costCents - proceedsCents;
         let washDisallowedCents = 0;
         if (taxable && loss > 0) {
-          // a buy of the same security in any account within 30 days either side, other than the shares this sale sold, replaces them
-          const replacements = lots.filter((l) => l.key === p.lot!.key && l.status === 'known' && !l.replaced && !consumed.has(l) && l.quantity >= DUST
+          // shares of the same security bought in any account within 30 days either side and still held replace them; the rest of the
+          // sold lot itself never does (Rev. Rul. 56-602)
+          const replacements = lots.filter((l) => l.key === p.lot!.key && l.status === 'known' && !l.replaced && l !== p.lot && l.quantity >= DUST
             && Math.abs(days(r.date, l.since)) <= 30).sort((a, b) => a.since.localeCompare(b.since));
           let washed = 0;
           for (const rep of replacements) {
@@ -163,7 +169,7 @@ export function buildLots(db: Db, asOf: string): {
       });
     }
     // what's left unverified costs the holding's basis less every other lot still held (0 when the broker reports no basis)
-    for (const u of lots.filter((l) => l.status === 'unverified' && l.quantity >= DUST)) {
+    for (const u of lots.filter((l) => l.id.startsWith('unverified:') && l.quantity >= DUST)) {
       const others = lots.filter((l) => l !== u && l.accountId === u.accountId && l.securityId === u.securityId && l.quantity >= DUST)
         .reduce((a, l) => a + l.costCents, 0);
       u.costCents = Math.max(0, (holdingOf.get(pair(u.accountId, u.securityId))?.basisCents ?? 0) - others);
@@ -177,9 +183,9 @@ export function buildLots(db: Db, asOf: string): {
     for (const h of holdings.filter((x) => x.accountId === accountId && x.basisCents !== null)) {
       const own = lots.filter((l) => l.accountId === accountId && l.securityId === h.securityId);
       if (own.some((l) => l.status === 'unverified')) continue;
-      diff += own.reduce((a, l) => a + l.costCents, 0) - h.basisCents!;
+      diff += Math.abs(own.reduce((a, l) => a + l.costCents, 0) - h.basisCents!);
     }
-    return Math.abs(diff) <= 100;
+    return diff <= 100;
   };
   const fifo = run(() => 'fifo');
   const hifo = run(() => 'hifo');
