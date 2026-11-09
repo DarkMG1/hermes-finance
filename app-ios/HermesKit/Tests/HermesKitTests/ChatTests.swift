@@ -176,6 +176,14 @@ private let points: JSONValue = .array([.object(["label": .string("2026-09"), "v
     #expect(stop.method == "POST" && stop.url.path() == "/v1/chats/c2/stop" && stop.body == nil && stop.headers["Idempotency-Key"] == nil)
 }
 
+@Test func renameSendsTheTitle() async throws {
+    let transport = FakeTransport([.success(HTTPResponse(status: 204, body: Data()))])
+    try await APIClient(baseURL: testBase, token: "t", transport: transport).renameChat(id: "c2", title: "Taxes 2026")
+    let rename = try #require(transport.requests.first)
+    #expect(rename.method == "PATCH" && rename.url.path() == "/v1/chats/c2" && rename.headers["Idempotency-Key"] == nil)
+    #expect(rename.body.flatMap { String(data: $0, encoding: .utf8) } == #"{"title":"Taxes 2026"}"#)
+}
+
 @Test func streamRequestCarriesTokenAndAcceptsEventStream() {
     let (url, headers) = APIClient(baseURL: testBase, token: "t", transport: FakeTransport([])).streamRequest(path: "/v1/chats/c1/messages")
     #expect(url.path() == "/v1/chats/c1/messages" && headers["Authorization"] == "Bearer t" && headers["Accept"] == "text/event-stream")

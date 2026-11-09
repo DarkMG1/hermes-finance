@@ -446,6 +446,8 @@ export const ChatDetail = ChatSummary.extend({ messages: z.array(ChatMessage) })
 export type ChatDetail = z.infer<typeof ChatDetail>;
 /** profileUnlocked: the owner passed Face ID for the financial profile this Ask visit; without it the profile tools refuse, and a chat that
  *  already holds profile data is 403 PROFILE_LOCKED. */
+/** The owner's own title: shown even while the profile is locked, and the automatic title never replaces it. */
+export const RenameChatBody = z.object({ title: z.string().trim().min(1).max(60) }).strict();
 export const SendChatBody = z.object({ clientId: z.string().min(1).max(200), text: z.string().trim().min(1).max(CHAT_TEXT_MAX), profileUnlocked: z.boolean().optional() }).strict();
 export type SendChatBody = z.infer<typeof SendChatBody>;
 export const AiUsage = z.object({ month: z.string(), costCents: Cents, backupActive: z.boolean() });

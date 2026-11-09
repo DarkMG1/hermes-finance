@@ -245,6 +245,11 @@ extension APIClient {
         try decode(try await getData("/v1/chats/\(id)", query: profileUnlocked ? [URLQueryItem(name: "profileUnlocked", value: "1")] : []))
     }
 
+    /// The owner's title (1 to 60 characters once trimmed); the automatic title never replaces it.
+    public func renameChat(id: String, title: String) async throws {
+        try await send("PATCH", "/v1/chats/\(id)", body: JSONEncoder().encode(["title": title]), idempotencyKey: nil, timeout: 20)
+    }
+
     public func deleteChat(id: String) async throws {
         try await send("DELETE", "/v1/chats/\(id)", body: nil, idempotencyKey: nil, timeout: 20)
     }

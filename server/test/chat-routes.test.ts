@@ -51,6 +51,21 @@ test('create, list newest first, get, delete (usage rows kept)', async () => {
   assert.equal(s.db.prepare('SELECT COUNT(*) FROM ai_usage').pluck().get(), 1);
 });
 
+test("rename: the owner's title, trimmed, at most 60 characters, shown even while the profile is locked", async () => {
+  const s = setup();
+  const id = await s.create();
+  const rename = (chatId: string, payload: object) => s.app.inject({ method: 'PATCH', url: `/v1/chats/${chatId}`, headers: AUTH, payload });
+  const listed = async () => (await s.app.inject({ method: 'GET', url: '/v1/chats', headers: AUTH })).json().chats[0].title;
+  s.db.prepare("UPDATE chat_conversations SET title = 'Written from the profile', profile_title = 1 WHERE id = ?").run(id);
+  assert.notEqual(await listed(), 'Written from the profile', 'a profile title is hidden while locked');
+  assert.equal((await rename(id, { title: '  Taxes 2026  ' })).statusCode, 204);
+  assert.equal(await listed(), 'Taxes 2026');
+  for (const payload of [{ title: '   ' }, { title: 'x'.repeat(61) }, { title: 'Ok', extra: 1 }, {}]) {
+    assert.equal((await rename(id, payload)).statusCode, 400, JSON.stringify(payload));
+  }
+  assert.equal((await rename('missing', { title: 'Ok' })).statusCode, 404);
+});
+
 test('chat routes need the token', async () => {
   const s = setup([answerRound('x')]);
   const id = await s.create();

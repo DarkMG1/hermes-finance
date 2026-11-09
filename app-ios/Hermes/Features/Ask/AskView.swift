@@ -9,6 +9,8 @@ struct AskView: View {
     @State private var error: String?
     @State private var outdated = false
     @State private var composing = false
+    @State private var renaming: ChatSummary?
+    @State private var newTitle = ""
 
     var body: some View {
         List {
@@ -20,7 +22,13 @@ struct AskView: View {
                     NavigationLink { ConversationView(chatId: chat.id) } label: {
                         ListRow(title: chat.title.isEmpty ? "New chat" : chat.title, subtitle: relative(chat.updatedAt))
                     }
-                    .swipeActions { Button("Delete", role: .destructive) { Task { await delete(chat) } } }
+                    .swipeActions {
+                        Button("Delete", role: .destructive) { Task { await delete(chat) } }
+                        Button("Rename") {
+                            newTitle = chat.title
+                            renaming = chat
+                        }
+                    }
                 }
                 if chats?.isEmpty == true {
                     Text("Ask about your spending, bills, IOUs or investments").textStyle(.subhead, color: Palette.secondaryText)
@@ -36,6 +44,12 @@ struct AskView: View {
             }
         }
         .navigationDestination(isPresented: $composing) { ConversationView(chatId: nil) }
+        .alert("Rename chat", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField("Title", text: $newTitle)
+            Button("Save") { if let chat = renaming { Task { await rename(chat) } } }
+                .disabled(newTitle.trimmingCharacters(in: .whitespaces).isEmpty)
+            Button("Cancel", role: .cancel) {}
+        }
         .refreshable { await load() }
         .task { await load() }
         // titles written after a chat got profile data show only while it's unlocked
@@ -56,6 +70,15 @@ struct AskView: View {
             outdated = true
         } catch {
             guard !Task.isCancelled else { return }
+            self.error = errorMessage(error)
+        }
+    }
+
+    private func rename(_ chat: ChatSummary) async {
+        do {
+            try await model.client?.renameChat(id: chat.id, title: String(newTitle.trimmingCharacters(in: .whitespaces).prefix(60)))
+            await load()
+        } catch {
             self.error = errorMessage(error)
         }
     }
