@@ -32,7 +32,7 @@ const NIIT_FLOOR = 20_000_000;
 // AOTC: 100% of the first $2,000 of expenses plus 25% of the next $2,000 (not indexed).
 const AOTC_TIER = 200_000;
 
-const bracketTax = (cents: number, brackets: FederalFigures['brackets']['single']) => {
+export const bracketTax = (cents: number, brackets: FederalFigures['brackets']['single']) => {
   let tax = 0, floor = 0;
   for (const [ceiling, rate] of brackets) {
     const top = ceiling ?? Infinity;
