@@ -251,11 +251,11 @@ struct HomeView: View {
         await tax
     }
 
-    /// Count only: item text waits for the profile's Face ID. Failure keeps the last count.
+    /// Count only: item text waits for the profile's Face ID. A failure shows nothing.
     private func loadTaxItems(generation: Int) async {
-        guard let count = try? await model.client?.taxHeadsUp(unlocked: false).count,
-              !Task.isCancelled, loadGeneration.accepts(generation, presented: false) else { return }
-        taxItems = count
+        let count = try? await model.client?.taxHeadsUp(unlocked: false).count
+        guard !Task.isCancelled, loadGeneration.accepts(generation, presented: false) else { return }
+        taxItems = count ?? 0
     }
 
     private func loadInvestments(reader: Reader, generation: Int) async {
