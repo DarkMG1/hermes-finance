@@ -50,6 +50,8 @@ private struct LotMethodRow: View {
     let inferred: Bool
     let onChange: () async -> Void
     @State private var writes = WriteGuard()
+    /// the method of a write whose outcome is unknown: a retry of it reuses its key
+    @State private var pending: String??
     @State private var error: String?
 
     var body: some View {
@@ -71,6 +73,9 @@ private struct LotMethodRow: View {
     private func set(_ method: String?) async {
         guard let client = model.client else { return }
         error = nil
+        // setting a method is idempotent by value, so a different pick needn't wait on the unknown one
+        if writes.unresolved, pending != .some(method) { writes.didSucceed() }
+        pending = method
         do {
             try await client.setLotMethod(accountId: accountId, method: method, idempotencyKey: writes.key)
             writes.didSucceed()
@@ -78,6 +83,8 @@ private struct LotMethodRow: View {
         } catch {
             writes.didFail(error)
             self.error = writes.unresolved ? "Couldn't confirm the change. Pick it again to retry; it won't be applied twice." : errorMessage(error)
+            // the picker then shows what the server has
+            if writes.unresolved { await onChange() }
         }
     }
 }

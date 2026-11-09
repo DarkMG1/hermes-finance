@@ -20,9 +20,11 @@ struct TaxView: View {
             if let projection {
                 TaxResultSection(projection: projection, year: $year, jurisdiction: $jurisdiction)
                 if !projection.waysToSave.isEmpty { WaysToSaveSection(items: projection.waysToSave) }
-                Section("Assumptions") {
-                    ForEach(projection.assumptions.indices, id: \.self) {
-                        Text(projection.assumptions[$0]).textStyle(.subhead, color: Palette.secondaryText)
+                if !projection.assumptions.isEmpty {
+                    Section("Assumptions") {
+                        ForEach(projection.assumptions.indices, id: \.self) {
+                            Text(projection.assumptions[$0]).textStyle(.subhead, color: Palette.secondaryText)
+                        }
                     }
                 }
                 TaxEntriesSections(year: projection.year, inputs: inputs, scenario: scenario, roth: roth) { await load() }
@@ -68,12 +70,12 @@ private struct TaxResultSection: View {
         Section {
             VStack(alignment: .leading, spacing: Space.xs) {
                 Text("Projected, all returns").textStyle(.caption, color: Palette.secondaryText)
-                Text(balance < 0 ? "You'll owe \(Money.format(-balance))" : "Refund \(Money.format(balance))")
-                    .textStyle(.title, color: balance < 0 ? Palette.loss : Palette.gain)
+                Text(balance == 0 ? "Even" : balance < 0 ? "You'll owe \(Money.format(-balance))" : "Refund \(Money.format(balance))")
+                    .textStyle(.title, color: balance == 0 ? Palette.text : balance < 0 ? Palette.loss : Palette.gain)
                     .monospacedDigit()
             }
             if projection.openYears.count > 1 {
-                Picker("Year", selection: Binding { projection.year } set: { year = $0 }) {
+                Picker("Year", selection: Binding { year ?? projection.year } set: { year = $0 }) {
                     ForEach(projection.openYears, id: \.self) { Text(String($0)).tag($0) }
                 }
                 .pickerStyle(.segmented)
