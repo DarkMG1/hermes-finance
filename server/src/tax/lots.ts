@@ -15,7 +15,7 @@ export type Sale = {
 /** Fewer shares than this are float leftovers of fractional lots, not a holding. */
 const DUST = 1e-6;
 /** Plaid's tax-advantaged investment subtypes: sales there aren't taxable, but their buys still wash a taxable loss. */
-const SHELTERED = new Set(['401a', '401k', '403b', '457b', '529', 'education savings account', 'health reimbursement arrangement', 'hsa', 'ira', 'keogh',
+export const SHELTERED = new Set(['401a', '401k', '403b', '457b', '529', 'education savings account', 'health reimbursement arrangement', 'hsa', 'ira', 'keogh',
   'lif', 'lira', 'lrif', 'lrsp', 'non-taxable brokerage account', 'pension', 'prif', 'profit sharing plan', 'qshr', 'rdsp', 'resp', 'retirement', 'rlif',
   'roth', 'roth 401k', 'rrif', 'rrsp', 'sarsep', 'sep ira', 'simple ira', 'sipp', 'tfsa', 'thrift savings plan']);
 
@@ -25,7 +25,7 @@ type Work = Lot & { order: string; since: string; key: string; sheltered: boolea
 type Row = { id: string; accountId: string; securityId: string; date: string; type: string; subtype: string | null; quantity: number; amountCents: number };
 
 /** Held more than one year: bought on D, long-term from D + 1 year + 1 day. */
-const termOf = (acquiredOn: string | null, sold: string): Sale['term'] =>
+export const termOf = (acquiredOn: string | null, sold: string): Sale['term'] =>
   acquiredOn === null ? 'unknown' : sold > `${Number(acquiredOn.slice(0, 4)) + 1}${acquiredOn.slice(4)}` ? 'long' : 'short';
 const days = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
 

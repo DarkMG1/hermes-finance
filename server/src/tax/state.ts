@@ -58,7 +58,7 @@ export function computeState(input: StateInput, model: StateModel | null): Retur
 
   if (doubled > 0 && input.otherStateTaxCents > 0) {
     const credit = Math.min(input.otherStateTaxCents, Math.round(tax * doubled / taxed));
-    add('otherStateCredit', 'Credit for tax paid to another state', credit, 'owner input: other state tax',
+    add('otherStateCredit', 'Credit for tax paid to another state', credit, 'calculated from the other state\'s return',
       'Capped at this state\'s tax on the resident income earned in the other state');
     tax = Math.max(0, tax - credit);
   }
