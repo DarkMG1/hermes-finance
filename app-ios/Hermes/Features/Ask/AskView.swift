@@ -19,7 +19,7 @@ struct AskView: View {
             } else {
                 InlineError(message: error)
                 ForEach(chats ?? []) { chat in
-                    NavigationLink { ConversationView(chatId: chat.id) } label: {
+                    NavigationLink { ConversationView(chatId: chat.id, title: chat.title) } label: {
                         ListRow(title: chat.title.isEmpty ? "New chat" : chat.title, subtitle: relative(chat.updatedAt))
                     }
                     .swipeActions {
