@@ -12,6 +12,8 @@ struct ConversationView: View {
     @State private var thread: ChatThread?
     @State private var loadError: String?
     @State private var draft = ""
+    /// bumped by each send: a vertical TextField cleared as it loses focus keeps its old height, so a new one replaces it
+    @State private var sends = 0
     @State private var stream: Task<Void, Never>?
     @State private var backupActive = false
     /// When the answer now streaming was sent; Stop ignores the send tap's double (see `acceptsStop`).
@@ -159,7 +161,7 @@ struct ConversationView: View {
         let streaming = thread?.isStreaming == true
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         return HStack(alignment: .bottom, spacing: Space.s) {
-            TextField("Ask about your money", text: $draft, axis: .vertical).lineLimit(1...5).textStyle(.body)
+            TextField("Ask about your money", text: $draft, axis: .vertical).lineLimit(1...5).textStyle(.body).id(sends)
             Button(streaming ? "Stop" : "Send", systemImage: streaming ? "stop.circle.fill" : "arrow.up.circle.fill") {
                 if !streaming {
                     send(text)
@@ -236,6 +238,7 @@ struct ConversationView: View {
             return
         }
         draft = ""
+        sends += 1
         // setting a FocusState left the keyboard up in the simulator; this is what AskLock does too
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         if title.isEmpty { title = String(text.prefix(60)) }
