@@ -43,6 +43,7 @@ struct ProfileGate: View {
             if waiting, !unlocked { Task { await unlock() } }
         }
         .onChange(of: unlocked) { _, open in lock.profileOpen = open }
+        .onChange(of: model.askDraft != nil) { _, asking in if asking { dismiss() } }
         .onAppear { model.profileGateOpen = true }
         .onDisappear {
             lock.profileOpen = false
@@ -132,6 +133,7 @@ struct ProfileView: View {
                     }
                 }
                 Section {
+                    NavigationLink { TaxView() } label: { Text("Taxes") }
                     NavigationLink { TaxYearsView() } label: { Text("Tax years") }
                 }
             }

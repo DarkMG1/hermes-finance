@@ -9,6 +9,8 @@ struct AskView: View {
     @State private var error: String?
     @State private var outdated = false
     @State private var composing = false
+    /// a question handed over from elsewhere (Tax's ways to save) for the new chat
+    @State private var composeDraft = ""
     @State private var renaming: ChatSummary?
     @State private var newTitle = ""
 
@@ -40,10 +42,20 @@ struct AskView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("New chat", systemImage: "square.and.pencil") { composing = true }.disabled(outdated)
+                Button("New chat", systemImage: "square.and.pencil") {
+                    composeDraft = ""
+                    composing = true
+                }.disabled(outdated)
             }
         }
-        .navigationDestination(isPresented: $composing) { ConversationView(chatId: nil) }
+        // keyed by the draft: a new one replaces a new chat already open
+        .navigationDestination(isPresented: $composing) { ConversationView(chatId: nil, draft: composeDraft).id(composeDraft) }
+        .onChange(of: model.askDraft, initial: true) { _, draft in
+            guard let draft else { return }
+            composeDraft = draft
+            composing = true
+            model.askDraft = nil
+        }
         .alert("Rename chat", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Title", text: $newTitle)
             Button("Save") { if let chat = renaming { Task { await rename(chat) } } }

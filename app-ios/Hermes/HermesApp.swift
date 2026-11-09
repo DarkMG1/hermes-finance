@@ -137,6 +137,7 @@ struct MainTabs: View {
         }
         .environment(\.selectedTab, tab)
         .onChange(of: QuickActions.shared.snapRequests) { tab = 0 }
+        .onChange(of: model.askDraft != nil) { _, asking in if asking { tab = 4 } }
         .onChange(of: pdfWaiting, initial: true) { _, waiting in
             guard waiting else { return }
             let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive }

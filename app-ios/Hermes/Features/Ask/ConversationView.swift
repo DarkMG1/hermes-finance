@@ -12,7 +12,7 @@ struct ConversationView: View {
     @State var title = ""
     @State private var thread: ChatThread?
     @State private var loadError: String?
-    @State private var draft = ""
+    @State var draft = ""
     /// bumped by each send: a vertical TextField cleared as it loses focus keeps its old height, so a new one replaces it
     @State private var sends = 0
     @State private var stream: Task<Void, Never>?

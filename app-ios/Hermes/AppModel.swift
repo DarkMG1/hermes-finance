@@ -24,6 +24,8 @@ final class AppModel {
     var importNote: String?
     var openedPDF: OpenedPDF?
     var profileGateOpen = false
+    /// A question to start a new Ask chat with, unsent: the open sheet closes, Ask opens and takes it once.
+    var askDraft: String?
     private var importWrites = WriteGuard()
 
     private let keychain = KeychainStore(service: "dev.darkmg1.hermesfinance")

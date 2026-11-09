@@ -211,8 +211,9 @@ public struct TaxHeadsUp: Decodable, Sendable, Equatable {
 }
 
 extension APIClient {
-    public func taxProjection(year: Int) async throws -> TaxProjection {
-        try decode(try await getData("/v1/tax/projection", query: [URLQueryItem(name: "year", value: String(year))]))
+    /// No year: the server's first open year.
+    public func taxProjection(year: Int?) async throws -> TaxProjection {
+        try decode(try await getData("/v1/tax/projection", query: year.map { [URLQueryItem(name: "year", value: String($0))] } ?? []))
     }
 
     public func taxWhatIf(year: Int, change: TaxWhatIfChange) async throws -> TaxWhatIf {
