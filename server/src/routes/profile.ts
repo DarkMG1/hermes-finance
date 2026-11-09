@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { CreateJobBody, GrantBody, LinkPayStubBody, PatchGrantBody, PatchJobBody, PatchPayStubBody, PatchRothContributionBody, PatchTaxFormBody, PayStubBody, ProfileReadBody, PutProfileBody,
+import { CreateJobBody, GrantBody, LinkPayStubBody, LotEntryBody, LotMethodBody, PatchGrantBody, PatchJobBody, PatchPayStubBody, PatchRothContributionBody, PatchTaxFormBody, PayStubBody, ProfileReadBody, PutProfileBody,
   RothContributionBody, StateW4Body, TaxFormBody, TaxInputsBody, TaxReturnBody, TaxScenarioBody, W4Body } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { localDay } from '../days.ts';
@@ -9,6 +9,7 @@ import { idempotentWrite } from '../idempotency.ts';
 import { readProfile } from '../profile-reader.ts';
 import { getForm, getGrant, getJob, getProfile, getReturn, getStateW4, getStub, getW4, linkable, listJobs, putProfile, stubMatches, taxYears, unassignedStubs } from '../profile.ts';
 import { getScenario, getTaxInputs, listRothContributions } from '../tax/inputs.ts';
+import { buildLots } from '../tax/lots.ts';
 import { assertOwnerDate, parseBody } from '../validate.ts';
 import { isJpeg } from './receipts.ts';
 
@@ -394,6 +395,32 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
         || db.prepare('DELETE FROM roth_contributions WHERE id = ? AND transaction_id IS NULL').run(req.params.id).changes;
       if (!changes) throw notFound('Roth contribution');
       return { status: 200, body: { ok: true } };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+
+  app.get('/v1/tax/lots', async () => buildLots(db, today()));
+  app.post('/v1/tax/lots', async (req, reply) => {
+    const b = parseBody(LotEntryBody, req.body);
+    assertDates(b, ['acquiredOn']);
+    if (!db.prepare("SELECT 1 FROM accounts WHERE id = ? AND type = 'investment'").get(b.accountId)) {
+      throw new ApiError(400, 'INVALID_REQUEST', 'accountId: unknown investment account', 'accountId');
+    }
+    if (!db.prepare('SELECT 1 FROM securities WHERE id = ?').get(b.securityId)) throw new ApiError(400, 'INVALID_REQUEST', 'securityId: unknown security', 'securityId');
+    const r = idempotentWrite(deps, req, () => {
+      const id = randomUUID();
+      db.prepare('INSERT INTO lot_entries (id, account_id, security_id, acquired_on, quantity, cost_cents) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(id, b.accountId, b.securityId, b.acquiredOn, b.quantity, b.costCents);
+      return { status: 201, body: { id, ...b } };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+  app.delete('/v1/tax/lots/:id', del('lot_entries', 'lot'));
+  app.patch<{ Params: { id: string } }>('/v1/accounts/:id/lot-method', async (req, reply) => {
+    const { method } = parseBody(LotMethodBody, req.body);
+    const r = idempotentWrite(deps, req, () => {
+      if (!db.prepare("UPDATE accounts SET lot_method = ? WHERE id = ? AND type = 'investment'").run(method, req.params.id).changes) throw notFound('investment account');
+      return { status: 200, body: { accountId: req.params.id, method } };
     });
     return reply.code(r.status).send(r.body);
   });

@@ -606,6 +606,12 @@ export const RothContributionBody = z.object({ date: DateInput, amountCents: Mon
 export type RothContributionBody = z.infer<typeof RothContributionBody>;
 export const PatchRothContributionBody = z.object({ taxYear: z.number().int() }).strict();
 export type PatchRothContributionBody = z.infer<typeof PatchRothContributionBody>;
+/** A lot the owner enters for shares held before the investment history. */
+export const LotEntryBody = z.object({ accountId: Id, securityId: Id, acquiredOn: DateInput, quantity: z.number().positive().max(1e12), costCents: Money }).strict();
+export type LotEntryBody = z.infer<typeof LotEntryBody>;
+/** null goes back to the method inferred from the holding's cost basis. */
+export const LotMethodBody = z.object({ method: z.enum(['fifo', 'hifo', 'specific']).nullable() }).strict();
+export type LotMethodBody = z.infer<typeof LotMethodBody>;
 
 /** A job's W-4: step 1(c) filing status (single covers married filing separately), the step 2(c) box, step 3's total, steps 4(a)–(c)
  *  (the extra withholding is per pay period), and exempt. Only the latest applies, so a job has one. */
