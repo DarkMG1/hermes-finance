@@ -19,7 +19,7 @@ public final class APIClient: Sendable {
         do { return try JSONDecoder().decode(T.self, from: data) } catch { throw ClientError.decoding(String(describing: error)) }
     }
 
-    func write<B: Encodable, T: Decodable>(_ method: String, _ path: String, body: B, key: String, timeout: TimeInterval = 30) async throws -> T {
+    func write<B: Encodable, T: Decodable>(_ method: String, _ path: String, body: B, key: String?, timeout: TimeInterval = 30) async throws -> T {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .sortedKeys
         let data = try encoder.encode(body)
