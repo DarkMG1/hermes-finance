@@ -14,6 +14,9 @@ public struct PutProfileBody: Codable, Sendable, Equatable {
     /// has a health savings account
     public var hsa: Bool?
     public var note: String?
+    /// this year: a full-time student, and someone else can claim the owner as a dependent (both decide education credits)
+    public var fullTimeStudent: Bool?
+    public var claimedAsDependent: Bool?
     public init() {}
 }
 
@@ -70,6 +73,8 @@ public struct PayStubBody: Codable, Sendable, Equatable {
     public var otherPayCents: Int?
     public var netCents: Int?
     public var ytdGrossCents: Int?
+    /// the state its income tax went to
+    public var state: String?
     public init() {}
 
     /// What net would need to change by for the stub to balance (the server allows a cent either way); nil until gross and net are set.
@@ -157,6 +162,8 @@ public struct TaxReturnBody: Codable, Sendable, Equatable {
     public var refundCents: Int?
     public var capitalGainsCents: Int?
     public var capitalLossCarryoverCents: Int?
+    /// the "someone can claim you as a dependent" box, or a state return's dependent exemption
+    public var claimedAsDependent: Bool?
     public init() {}
 }
 

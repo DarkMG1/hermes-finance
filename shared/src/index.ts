@@ -462,6 +462,8 @@ const AboutMe = z.object({
   retirementPct: z.number().min(0).max(100).nullable(), retirementKind: z.enum(['pre_tax', 'roth', 'mixed']).nullable(),
   /** has a health savings account */
   hsa: z.boolean().nullable(), note: z.string().max(2000).nullable(),
+  /** for this year: a full-time student; someone else can claim the owner as a dependent (both decide education credits) */
+  fullTimeStudent: z.boolean().nullable(), claimedAsDependent: z.boolean().nullable(),
 });
 export const Profile = AboutMe.extend({ updatedAt: z.string().nullable() });
 export type Profile = z.infer<typeof Profile>;
@@ -514,6 +516,8 @@ const PayStubFields = z.object({
   otherDeductionsCents: Money,
   /** after-tax additions (reimbursements, stipends) */
   otherPayCents: Money, netCents: Money, ytdGrossCents: Money.nullable(),
+  /** the state its income tax went to */
+  state: StateCode.nullable(),
 });
 /** transactionIds: the linked deposits Plaid still has, oldest first (a paycheck split across accounts has several). */
 export const PayStub = PayStubFields.extend({ id: Id, transactionIds: z.array(Id), createdAt: z.string() });
@@ -563,6 +567,8 @@ const TaxReturnFields = z.object({
   totalTaxCents: Money.nullable(), creditsCents: Money.nullable(), withholdingCents: Money.nullable(),
   /** positive refund, negative owed */
   refundCents: LedgerCents.nullable(), capitalGainsCents: LedgerCents.nullable(), capitalLossCarryoverCents: Money.nullable(),
+  /** the "someone can claim you as a dependent" box, or a state return's dependent exemption */
+  claimedAsDependent: z.boolean().nullable(),
 });
 export const TaxReturn = TaxReturnFields.extend({ id: Id, createdAt: z.string(), updatedAt: z.string() });
 export type TaxReturn = z.infer<typeof TaxReturn>;

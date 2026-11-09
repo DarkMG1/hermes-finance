@@ -132,7 +132,7 @@ import Testing
     _ = try await client.putTaxReturn(read, from: nil, idempotencyKey: "k-1")
     let body = try JSONDecoder().decode([String: JSONValue].self, from: try #require(transport.requests.first?.body))
     #expect(body["totalTaxCents"] == .number(650000) && body["year"] == .number(2025))
-    #expect(body["capitalGainsCents"] == .null && body["creditsCents"] == .null && body.count == 15, "every field of the return is sent")
+    #expect(body["capitalGainsCents"] == .null && body["creditsCents"] == .null && body.count == 16, "every field of the return is sent")
 }
 
 @Test func aStubBalancesWithinACentCountingOtherPay() {
@@ -233,4 +233,16 @@ import Testing
     _ = try await APIClient(baseURL: testBase, token: "t", transport: transport).putStateW4(jobId: "job-1", body: body, idempotencyKey: "k")
     #expect(transport.requests.first?.url.path == "/v1/jobs/job-1/state-w4/CA")
     #expect(transport.requests.first.flatMap { String(data: $0.body ?? Data(), encoding: .utf8) } == #"{"allowances":2}"#, "the state goes in the path")
+}
+
+@Test func taxFactsDecodeAndAnOlderServerLeavesThemNil() throws {
+    let job = try decode(JobDetail.self, "job")
+    #expect(job.stubs.first?.state == "CA")
+    let years = try decode(TaxYears.self, "tax-years")
+    #expect(years.years.first?.returns.first?.claimedAsDependent == false)
+    var json = try #require(JSONSerialization.jsonObject(with: fixture("profile")) as? [String: Any])
+    json.removeValue(forKey: "fullTimeStudent")
+    json.removeValue(forKey: "claimedAsDependent")
+    let old = try JSONDecoder().decode(Profile.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(old.fullTimeStudent == nil && old.claimedAsDependent == nil)
 }

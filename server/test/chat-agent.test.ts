@@ -459,3 +459,46 @@ test('a title call that keeps failing is tried for the first 3 done answers only
   assert.equal(s.fake.messageRequests.length, 3);
   assert.equal(getChat(s.db, s.chatId)!.title, 'How much did I spend?');
 });
+
+const search = (i: number, id: string, query: string): Ev[] => [
+  { type: 'content_block_start', index: i, content_block: { type: 'server_tool_use', id, name: 'web_search', input: {} } },
+  { type: 'content_block_delta', index: i, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ query }) } },
+  { type: 'content_block_stop', index: i },
+  { type: 'content_block_start', index: i + 1, content_block: { type: 'web_search_tool_result', tool_use_id: id,
+    content: [{ type: 'web_search_result', url: 'https://example.com/limits', title: 'Limits', encrypted_content: 'enc' }] } },
+  { type: 'content_block_stop', index: i + 1 },
+];
+const searched = (searches: number): Ev[] => [{ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 50, server_tool_use: { web_search_requests: searches } } },
+  { type: 'message_stop' }];
+
+test('a web search runs on the server: its line shows, its blocks and the cited text are kept for replay, and it costs a cent', async () => {
+  const cited = { type: 'web_search_result_location', url: 'https://example.com/limits', cited_text: 'The limit is $7,500.' };
+  const s = setup([[start(), ...search(0, 'srv1', '2026 IRA limit'),
+    { type: 'content_block_start', index: 2, content_block: { type: 'text', text: '' } },
+    { type: 'content_block_delta', index: 2, delta: { type: 'text_delta', text: 'It is $7,500.' } },
+    { type: 'content_block_delta', index: 2, delta: { type: 'citations_delta', citation: cited } },
+    { type: 'content_block_stop', index: 2 }, ...searched(1)]], 'What is the 2026 IRA limit?');
+  await s.run();
+  const tools = s.fake.requests[0]!.tools as { name: string; type?: string; max_uses?: number }[];
+  assert.deepEqual(tools[0], { type: 'web_search_20260209', name: 'web_search', max_uses: 5 });
+  assert.match(JSON.stringify(s.fake.requests[0]!.system), /never put the owner's names, employers, amounts/);
+  assert.deepEqual(s.events.filter((e) => e.type === 'tool'), [{ type: 'tool', name: 'web_search', label: 'Web search · 2026 IRA limit', input: { query: '2026 IRA limit' } }]);
+  const done = s.events.at(-1) as { costCents: number };
+  assert.equal(done.costCents, toCents(costMicros('fake-chat-model', { input_tokens: 1000, output_tokens: 50 }) + 10_000));
+  assert.deepEqual(getChat(s.db, s.chatId)!.messages[1]!.tools, [{ name: 'web_search', input: { query: '2026 IRA limit' }, label: 'Web search · 2026 IRA limit' }]);
+  const replayed = replay(s.db, s.chatId).at(-1)!.content as { type: string; citations?: unknown[] }[];
+  assert.deepEqual(replayed.map((b) => b.type), ['server_tool_use', 'web_search_tool_result', 'text']);
+  assert.deepEqual(replayed[2]!.citations, [cited]);
+});
+
+test('a paused search resumes with the answer so far as the last message, and both parts save as one answer', async () => {
+  const s = setup([[start(), ...search(0, 'srv1', 'California 2026 brackets'), ...end('pause_turn')],
+    [start(), ...text(0, 'Here they are.'), ...end('end_turn')]]);
+  await s.run();
+  assert.equal(s.fake.requests.length, 2);
+  const resumed = lastMessage(s.fake.requests[1]!) as { role: string; content: { type: string }[] };
+  assert.deepEqual([resumed.role, resumed.content.map((b) => b.type)], ['assistant', ['server_tool_use', 'web_search_tool_result']]);
+  const turn = JSON.parse(s.db.prepare('SELECT content_json FROM chat_messages WHERE id = ?').pluck().get(s.assistantId) as string) as { role: string; content: { type: string }[] }[];
+  assert.deepEqual(turn.map((m) => [m.role, m.content.map((b) => b.type)]), [['assistant', ['server_tool_use', 'web_search_tool_result', 'text']]]);
+  assert.equal(getChat(s.db, s.chatId)!.messages[1]!.text, 'Here they are.');
+});

@@ -236,3 +236,11 @@ test('profile tool labels', () => {
   assert.equal(toolLabel('pay_stubs', { from: '2026-01-01' }), 'Pay stubs · Since 2026-01-01');
   assert.equal(toolLabel('tax_years', {}), 'Tax years');
 });
+
+test('tax_reference gives a year\'s published figures in cents, and says which years it has for one it lacks', () => {
+  const { deps } = makeTestDeps();
+  const fig = JSON.parse(runTool(deps, 'tax_reference', { year: 2026 }).content) as { figures: { federal: { standardDeduction: { single: number }; iraLimit: number } } };
+  assert.deepEqual([fig.figures.federal.standardDeduction.single, fig.figures.federal.iraLimit], [1_610_000, 750_000]);
+  assert.deepEqual(JSON.parse(runTool(deps, 'tax_reference', { year: 2031 }).content), { year: 2031, available: [2026], note: 'no 2031 figures in Hermes yet' });
+  assert.equal(toolLabel('tax_reference', { year: 2026 }), 'Tax figures');
+});

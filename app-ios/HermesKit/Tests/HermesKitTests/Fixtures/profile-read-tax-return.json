@@ -15,7 +15,8 @@
     "withholdingCents": null,
     "refundCents": 150000,
     "capitalGainsCents": null,
-    "capitalLossCarryoverCents": null
+    "capitalLossCarryoverCents": null,
+    "claimedAsDependent": null
   },
   "uncertain": [
     "agiCents"

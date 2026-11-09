@@ -195,6 +195,7 @@ struct ProfileView: View {
             p.state,
             p.birthYear.map { "born \($0)" },
             p.dependents.map { $0 == 1 ? "1 dependent" : "\($0) dependents" },
+            p.fullTimeStudent == true ? "student" : nil,
         ].compactMap { $0 }
         return parts.isEmpty ? "Not filled in" : parts.joined(separator: " · ")
     }
