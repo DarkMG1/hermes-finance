@@ -26,13 +26,15 @@ const count = (db: ReturnType<typeof setup>['db'], table: string) => db.prepare(
 test('About me starts empty, saves the fields given, keeps the rest, and replays one Idempotency-Key', async () => {
   const { get, send } = setup();
   assert.deepEqual((await get('/v1/profile')).json(), {
-    state: null, filingStatus: null, birthYear: null, dependents: null, retirementPct: null, retirementKind: null, hsa: null, note: null, updatedAt: null,
+    state: null, filingStatus: null, birthYear: null, dependents: null, retirementPct: null, retirementKind: null, hsa: null, note: null,
+    fullTimeStudent: null, claimedAsDependent: null, updatedAt: null,
   });
   const put = await send('PUT', '/v1/profile', { state: 'CA', filingStatus: 'single', birthYear: 1980, dependents: 0, retirementPct: 6, retirementKind: 'roth', hsa: true }, 'same');
   assert.equal(put.statusCode, 200);
   assert.deepEqual(put.json(), (await send('PUT', '/v1/profile', { state: 'CA', filingStatus: 'single', birthYear: 1980, dependents: 0, retirementPct: 6, retirementKind: 'roth', hsa: true }, 'same')).json());
-  const p = (await send('PUT', '/v1/profile', { note: 'Synthetic note', hsa: null })).json();
-  assert.deepEqual([p.state, p.retirementPct, p.hsa, p.note, p.updatedAt], ['CA', 6, null, 'Synthetic note', '2026-03-15T12:00:00.000Z']);
+  const p = (await send('PUT', '/v1/profile', { note: 'Synthetic note', hsa: null, fullTimeStudent: true, claimedAsDependent: false })).json();
+  assert.deepEqual([p.state, p.retirementPct, p.hsa, p.note, p.fullTimeStudent, p.claimedAsDependent, p.updatedAt],
+    ['CA', 6, null, 'Synthetic note', true, false, '2026-03-15T12:00:00.000Z']);
   assert.deepEqual((await get('/v1/profile')).json(), p);
 });
 
@@ -202,7 +204,7 @@ test('028 keeps AI usage rows, lets the profile reader record, and allows one pr
   const ins = db.prepare("INSERT INTO ai_usage (at, month, key, feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_microdollars) VALUES ('x', '2026-03', 'main', ?, 'm', 1, 1, 0, 0, 7)");
   ins.run('receipt');
   ins.run('chat');
-  assert.equal(migrate(db), 32);
+  assert.equal(migrate(db), 33);
   assert.deepEqual(db.prepare('SELECT id, feature, cost_microdollars AS c FROM ai_usage ORDER BY id').all(), [{ id: 1, feature: 'receipt', c: 7 }, { id: 2, feature: 'chat', c: 7 }]);
   ins.run('profile');
   assert.throws(() => ins.run('other'), /CHECK/);
@@ -272,7 +274,11 @@ test('pay stubs: create, validate the parts against net, patch, delete; the job 
   const made = await send('POST', '/v1/pay-stubs', { ...stub, jobId: job.id }, 'stub');
   assert.equal(made.statusCode, 201);
   const s = made.json();
-  assert.deepEqual(s, { ...stub, id: s.id, jobId: job.id, otherPayCents: 0, ytdGrossCents: null, transactionIds: [], createdAt: '2026-03-15T12:00:00.000Z' });
+  assert.deepEqual(s, { ...stub, id: s.id, jobId: job.id, otherPayCents: 0, ytdGrossCents: null, state: null, transactionIds: [], createdAt: '2026-03-15T12:00:00.000Z' });
+  const withState = await send('POST', '/v1/pay-stubs', { ...stub, payDate: '2026-02-27', state: 'CA' });
+  assert.equal(withState.json().state, 'CA', 'the state its income tax went to');
+  assert.equal((await send('PATCH', `/v1/pay-stubs/${withState.json().id}`, { state: 'ca' })).json().field, 'state');
+  await send('DELETE', `/v1/pay-stubs/${withState.json().id}`);
   assert.deepEqual((await send('POST', '/v1/pay-stubs', { ...stub, jobId: job.id }, 'stub')).json(), s, 'one row per Idempotency-Key');
   assert.equal((await send('POST', '/v1/pay-stubs', { ...stub, netCents: 279999 })).statusCode, 201, 'within a cent');
   const again = await send('POST', '/v1/pay-stubs', { ...stub, jobId: job.id, periodStart: null }, 'stub-again');
@@ -448,6 +454,8 @@ test('tax forms and returns: CRUD, upsert by year and jurisdiction, tax years ne
   assert.deepEqual((await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal', filingStatus: 'single', totalIncomeCents: 9_000_000, totalTaxCents: 1_000_000, refundCents: -5000 }, 'ret')).json(), fed.json());
   const again = (await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal', agiCents: 8_800_000 })).json();
   assert.deepEqual([again.id, again.totalTaxCents, again.agiCents, again.refundCents], [fed.json().id, 1_000_000, 8_800_000, -5000], 'upsert keeps left-out fields');
+  assert.equal((await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal', claimedAsDependent: true })).json().claimedAsDependent, true);
+  assert.equal((await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal', agiCents: 8_800_000 })).json().claimedAsDependent, true, 'kept when left out');
   await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'CA', totalTaxCents: 380_000 });
   await send('PUT', '/v1/tax-returns', { year: 2024, jurisdiction: 'federal', totalIncomeCents: 0, totalTaxCents: 0 });
   for (const [body, field] of [[{ year: 2025, jurisdiction: 'zz' }, 'jurisdiction'], [{ year: 2025, jurisdiction: 'state' }, 'jurisdiction'],

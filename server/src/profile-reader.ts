@@ -57,12 +57,13 @@ export async function readProfile(deps: Deps, kind: ProfileKind, pages: Buffer[]
 }
 
 const KINDS: Record<ProfileKind, [label: string, hints: string]> = {
-  tax_return: ['tax return', "jurisdiction: 'federal' for a federal return, else the 2-letter state code. refundCents: positive for a refund, negative when tax is owed."],
+  tax_return: ['tax return', "jurisdiction: 'federal' for a federal return, else the 2-letter state code. refundCents: positive for a refund, negative when tax is owed. "
+    + "claimedAsDependent: true when the 'someone can claim you as a dependent' box is checked (on a state return, when the dependent exemption is claimed), false when it isn't."],
   tax_form: ['W-2 or 1099 form', 'kind: w2 for a W-2, else the 1099 type. payer: the employer or payer name. amountCents: W-2 box 1 wages, else box 1 or the total.'],
   pay_stub: ['pay stub', 'The pages may hold several pay stubs: put each in stubs, in page order, once each (a stub over two pages is one entry). '
     + 'Amounts are for that stub\'s pay period; ytdGrossCents is the year-to-date gross. otherDeductionsCents: the sum of every deduction and tax '
     + 'without its own field (local tax, disability, insurance, HSA and the rest). otherPayCents: after-tax additions such as reimbursements. '
-    + 'Gross minus all deductions plus otherPayCents must equal netCents. employer: the employer name.'],
+    + 'Gross minus all deductions plus otherPayCents must equal netCents. state: the 2-letter code of the state whose income tax was withheld. employer: the employer name.'],
   w4: ['W-4 form', "signedOn: the date signed. filingStatus: step 1(c), 'single' for single or married filing separately. multipleJobs: true when step 2(c) is checked. "
     + 'dependentsCents: the step 3 total. otherIncomeCents, deductionsCents, extraWithholdingCents: steps 4(a), 4(b) and 4(c). exempt: true when Exempt is written below step 4(c). '
     + 'employer: the employer name in the employers only section, if filled in.'],

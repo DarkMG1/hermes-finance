@@ -12,6 +12,7 @@ import { localDay } from '../days.ts';
 import { getHoldingHistory, getInvestments } from '../investments.ts';
 import { getJob, getProfile, listJobs, payStubs, taxYears } from '../profile.ts';
 import { PROFILE_TOOLS } from './labels.ts';
+import { taxReference } from './tax-reference.ts';
 import { chatUsesProfile, getChat, searchChats } from './store.ts';
 
 export type ToolDef = { name: string; description: string; input_schema: Record<string, unknown> };
@@ -65,7 +66,7 @@ const MONEY: [string, Entry][] = [
   entry('net_worth', 'Daily net worth history over a range with the current value and the change, hidden accounts left out; give accountIds (from accounts) and/or type for those accounts\' daily balance alone, e.g. to find which account moved.',
     NetWorthQuery.extend({ accountIds: z.array(z.string().min(1)).min(1).max(50).optional(), type: z.enum(['depository', 'credit', 'loan', 'investment', 'other']).optional() }).strict(),
     (d, { range, ...filter }, today) => getNetWorth(d.db, range, today, filter)),
-  entry('investments', 'Investment holdings with value, cost basis and gain; give holding (a holding key) for that holding\'s value history over range (default 1y).',
+  entry('investments', 'Investment holdings with value, cost basis and gain; give holding (a holding key) for that holding\'s value history over range (default 1y). Hermes has no trades, sales, dividends or contributions: don\'t search transactions for them; a bank transfer to a brokerage and an account\'s balance jumps (net_worth) are the only traces.',
     z.object({ holding: z.string().min(1).optional(), range: Range.optional() }).strict(),
     (d, q, today) => (q.holding ? getHoldingHistory(d.db, q.holding, q.range ?? '1y', today) : getInvestments(d.db))),
   entry('accounts', 'Bank, card and investment accounts with current balances.', Empty, (d) => listAccounts(d.db)),
@@ -80,12 +81,12 @@ const clip = (text: string): string => {
 };
 
 const PROFILE: [string, Entry][] = [
-  entry('profile', "The owner's own details: state, filing status, birth year, dependents, retirement saving and HSA; fields are null until set.", Empty, (d) => getProfile(d.db)),
+  entry('profile', "The owner's own details: state, filing status, birth year, dependents, retirement saving, HSA, whether a full-time student and whether someone else can claim them as a dependent this year, and a note; fields are null until set.", Empty, (d) => getProfile(d.db)),
   entry('jobs', 'Jobs (current, past or offer) with yearly or monthly salary or hourly rate and weekly hours, bonus and equity; give id for one job in full with its equity grants, next vest dates, pay stubs, tax forms, W-4 and state withholding forms.',
     z.object({ id: z.string().min(1).optional() }).strict(), (d, q, today) => (q.id ? getJob(d.db, q.id, today) : listJobs(d.db))),
-  entry('pay_stubs', 'Pay stubs newest first, optionally for one job (jobId) and pay dates from/to, with ytd: year-to-date totals per job and calendar year (all stubs of that job from Jan 1 through the latest returned pay date that year, even when from is later).',
+  entry('pay_stubs', 'Pay stubs newest first, optionally for one job (jobId) and pay dates from/to, with ytd: year-to-date totals per job and calendar year (all stubs of that job from Jan 1 through the latest returned pay date that year, even when from is later). Each stub has the state its income tax went to. For a question about withholding, also open the job (jobs with id): its W-4 and state withholding forms explain what was withheld.',
     z.object({ from: Day, to: Day, jobId: z.string().min(1).optional() }).strict(), (d, q) => payStubs(d.db, q)),
-  entry('tax_years', 'Tax returns and W-2/1099 forms by year, with the federal effective tax rate.', Empty, (d) => taxYears(d.db)),
+  entry('tax_years', 'Tax returns and W-2/1099 forms by year, with the federal effective tax rate. claimedAsDependent on a return: someone could claim the owner as a dependent that year (it also shows as a dependent-sized standard deduction or exemption).', Empty, (d) => taxYears(d.db)),
 ];
 
 const ENTRIES = new Map<string, Entry>([
@@ -100,6 +101,8 @@ const ENTRIES = new Map<string, Entry>([
       return chat && { id: chat.id, title: chat.title, createdAt: chat.createdAt,
         messages: chat.messages.map((m) => ({ role: m.role, date: localDay(new Date(m.createdAt)), text: clip(m.text) })) };
     }),
+  entry('tax_reference', 'Published tax figures for a year (federal brackets, standard deductions, IRA, Social Security, education credits and student loan interest limits; California and Michigan rates). Use these instead of figures from memory; a year not listed has none yet. All amounts are integer cents.',
+    z.object({ year: z.number().int().min(2000).max(2100) }).strict(), (_d, q) => taxReference(q.year)),
   entry('show_chart', 'Shows the owner a bar or line chart above your answer, at most 2 per answer. Every value must come from a tool result in this conversation. For unit usd_cents values are integer cents; for unit percent values are percentage points (12.5 = 12.5%).',
     z.object({ kind: z.enum(['bar', 'line']), title: z.string().min(1).max(60), unit: z.enum(['usd_cents', 'count', 'percent']),
       points: z.array(z.object({ label: z.string().min(1).max(24), value: z.number() }).strict()).min(2).max(31) }).strict()
@@ -108,7 +111,7 @@ const ENTRIES = new Map<string, Entry>([
 ]);
 
 export const TOOLS: ToolDef[] = [...ENTRIES.values()].map((e) => e.def);
-const LOCKED = 'the financial profile is locked; ask the owner to unlock it with the lock button in Ask, then ask again';
+const LOCKED = 'the financial profile is locked; ask the owner to unlock it, then ask again';
 
 const ARRAY_KEYS = ['transactions', 'rows', 'items', 'points', 'holdings', 'history', 'messages', 'results', 'stubs'];
 const TEXT_KEYS = new Set(['notes', 'name', 'payee', 'bankDescription', 'merchantName', 'matchText']);

@@ -20,6 +20,7 @@
           "refundCents": 150000,
           "capitalGainsCents": 20000,
           "capitalLossCarryoverCents": 0,
+          "claimedAsDependent": false,
           "createdAt": "seed",
           "updatedAt": "seed"
         }

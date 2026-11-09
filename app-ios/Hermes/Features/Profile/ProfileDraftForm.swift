@@ -396,6 +396,7 @@ struct ProfileDraftForm: View {
         .init(key: "refundCents", label: "Refund (negative when owed)", kind: .money(\.refundCents, signed: true)),
         .init(key: "capitalGainsCents", label: "Capital gains (negative for a loss)", kind: .money(\.capitalGainsCents, signed: true)),
         .init(key: "capitalLossCarryoverCents", label: "Capital loss carryover", kind: .money(\.capitalLossCarryoverCents)),
+        .init(key: "claimedAsDependent", label: "Someone could claim me as a dependent", kind: .flag(\.claimedAsDependent)),
     ]
 
     static let w4Statuses: [(value: String, label: String)] = [
@@ -456,6 +457,7 @@ struct ProfileDraftForm: View {
         .init(key: "otherPayCents", label: "Other pay after tax", kind: .money(\.otherPayCents)),
         .init(key: "netCents", label: "Net pay", kind: .money(\.netCents)),
         .init(key: "ytdGrossCents", label: "Gross year to date", kind: .money(\.ytdGrossCents)),
+        .init(key: "state", label: "State tax went to (state code)", kind: .code(\.state)),
     ]
 
     /// a saved stub's job, to give one to a stub saved without

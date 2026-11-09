@@ -14,6 +14,7 @@
     "otherPayCents": null,
     "netCents": 370000,
     "ytdGrossCents": null,
+    "state": null,
     "employer": "SYNTHETIC EMPLOYER"
   },
   "uncertain": [
@@ -35,6 +36,7 @@
         "otherPayCents": null,
         "netCents": 370000,
         "ytdGrossCents": null,
+        "state": null,
         "employer": "SYNTHETIC EMPLOYER"
       },
       "uncertain": [
@@ -57,6 +59,7 @@
         "otherPayCents": null,
         "netCents": 360000,
         "ytdGrossCents": null,
+        "state": null,
         "employer": "SYNTHETIC EMPLOYER"
       },
       "uncertain": [],

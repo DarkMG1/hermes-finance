@@ -98,6 +98,8 @@ struct AboutMeForm: View {
         .init(key: "retirementPct", label: "Retirement contribution %", kind: .number(\.retirementPct)),
         .init(key: "retirementKind", label: "Retirement contributions", kind: .choice(\.retirementKind, retirementKinds)),
         .init(key: "hsa", label: "Health savings account", kind: .flag(\.hsa)),
+        .init(key: "fullTimeStudent", label: "Full-time student this year", kind: .flag(\.fullTimeStudent)),
+        .init(key: "claimedAsDependent", label: "Someone can claim me as a dependent this year", kind: .flag(\.claimedAsDependent)),
         .init(key: "note", label: "Note", kind: .text(\.note)),
     ]
 }

@@ -162,13 +162,13 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   db.prepare(`INSERT INTO jobs (id, employer, title, status, start_date, base_cents, bonus_target_pct, created_at, updated_at)
     VALUES ('job-1', 'SYNTHETIC EMPLOYER', 'Synthetic Engineer', 'current', '2025-06-01', 12000000, 10, 'seed', 'seed')`).run();
   db.prepare("INSERT INTO equity_grants VALUES ('grant-1', 'job-1', 'rsu', 400, NULL, NULL, '2025-06-01', 12, 48, 3)").run();
-  const stubRow = db.prepare('INSERT INTO pay_stubs VALUES (?, ?, ?, ?, ?, 420000, 50000, 15000, 26040, 6090, 21000, 1870, ?, ?, 2520000, \'seed\')');
+  const stubRow = db.prepare('INSERT INTO pay_stubs VALUES (?, ?, ?, ?, ?, 420000, 50000, 15000, 26040, 6090, 21000, 1870, ?, ?, 2520000, \'seed\', \'CA\')');
   stubRow.run('stub-1', 'job-1', '2026-03-13', '2026-02-28', '2026-03-13', 0, 300000);
   stubRow.run('stub-2', null, '2026-02-27', null, null, 2500, 302500);
   db.prepare("INSERT INTO pay_stub_deposits VALUES ('stub-1', 'txn-2')").run();
   db.prepare("INSERT INTO tax_forms VALUES ('form-1', 'job-1', 2025, 'w2', 'SYNTHETIC EMPLOYER', 6500000, 800000, 'CA', 270000, 7000000, 7000000, 'seed')").run();
   db.prepare(`INSERT INTO tax_returns VALUES ('return-1', 2025, 'federal', 'single', 6500000, 6520000, 6520000, 'standard', 1500000, 5020000, 650000, 0,
-    800000, 150000, 20000, 0, 'seed', 'seed')`).run();
+    800000, 150000, 20000, 0, 'seed', 'seed', 0)`).run();
   await app.inject({ method: 'PUT', url: '/v1/profile', headers: { ...AUTH, 'idempotency-key': 'fixture-profile' },
     payload: { state: 'CA', filingStatus: 'single', birthYear: 2000, dependents: 0, retirementPct: 6, retirementKind: 'pre_tax', hsa: true } });
   out.profile = await get('/v1/profile');

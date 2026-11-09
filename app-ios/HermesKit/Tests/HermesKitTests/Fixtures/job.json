@@ -72,6 +72,7 @@
       "otherPayCents": 0,
       "netCents": 300000,
       "ytdGrossCents": 2520000,
+      "state": "CA",
       "transactionIds": [
         "txn-2"
       ],

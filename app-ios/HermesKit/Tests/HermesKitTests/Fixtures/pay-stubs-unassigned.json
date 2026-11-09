@@ -15,6 +15,7 @@
     "otherPayCents": 2500,
     "netCents": 302500,
     "ytdGrossCents": 2520000,
+    "state": "CA",
     "transactionIds": [],
     "createdAt": "seed"
   }

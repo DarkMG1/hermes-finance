@@ -4,7 +4,8 @@ import { lookups, rowToTransaction, TXN_COLS, type TxnRow } from './ledger.ts';
 import { addInterval, memberships } from './recurring.ts';
 
 const PROFILE = `SELECT state, filing_status AS filingStatus, birth_year AS birthYear, dependents, retirement_pct AS retirementPct,
-  retirement_kind AS retirementKind, hsa, note, updated_at AS updatedAt FROM profile WHERE id = 1`;
+  retirement_kind AS retirementKind, hsa, note, full_time_student AS fullTimeStudent, claimed_as_dependent AS claimedAsDependent,
+  updated_at AS updatedAt FROM profile WHERE id = 1`;
 const JOB = `SELECT id, employer, title, status, start_date AS startDate, end_date AS endDate, base_cents AS baseCents, monthly_cents AS monthlyCents, hourly_cents AS hourlyCents, hours_per_week AS hoursPerWeek,
   bonus_target_pct AS bonusTargetPct, signing_bonus_cents AS signingBonusCents, relocation_cents AS relocationCents, note,
   created_at AS createdAt, updated_at AS updatedAt FROM jobs`;
@@ -15,7 +16,7 @@ const GRANT = `SELECT id, job_id AS jobId, kind, shares, value_cents AS valueCen
 const STUB = `SELECT id, job_id AS jobId, pay_date AS payDate, period_start AS periodStart, period_end AS periodEnd, gross_cents AS grossCents,
   federal_cents AS federalCents, state_cents AS stateCents, social_security_cents AS socialSecurityCents, medicare_cents AS medicareCents,
   retirement_cents AS retirementCents, other_deductions_cents AS otherDeductionsCents, other_pay_cents AS otherPayCents, net_cents AS netCents,
-  ytd_gross_cents AS ytdGrossCents, (SELECT json_group_array(t.id ORDER BY t.date, t.id) FROM pay_stub_deposits d JOIN transactions t ON t.id = d.transaction_id
+  ytd_gross_cents AS ytdGrossCents, state, (SELECT json_group_array(t.id ORDER BY t.date, t.id) FROM pay_stub_deposits d JOIN transactions t ON t.id = d.transaction_id
     AND t.removed_at IS NULL WHERE d.stub_id = pay_stubs.id) AS transactionIds, created_at AS createdAt FROM pay_stubs`;
 const stubRows = (rows: unknown[]): PayStub[] =>
   (rows as (Omit<PayStub, 'transactionIds'> & { transactionIds: string })[]).map((r) => ({ ...r, transactionIds: JSON.parse(r.transactionIds) as string[] }));
@@ -25,6 +26,7 @@ const W4_SELECT = `SELECT job_id AS jobId, signed_on AS signedOn, filing_status 
   other_income_cents AS otherIncomeCents, deductions_cents AS deductionsCents, extra_withholding_cents AS extraWithholdingCents, exempt, updated_at AS updatedAt
   FROM w4s WHERE job_id = ?`;
 const flag = (v: unknown) => (v === null ? null : v === 1);
+const bit = (v: boolean | null) => (v === null ? null : Number(v));
 export function getW4(db: Db, jobId: string): W4 | null {
   const w = db.prepare(W4_SELECT).get(jobId) as (W4 & { multipleJobs: unknown; exempt: unknown }) | undefined;
   return w ? { ...w, multipleJobs: flag(w.multipleJobs), exempt: flag(w.exempt) } : null;
@@ -37,14 +39,15 @@ export const getStateW4 = (db: Db, jobId: string, state: string): StateW4 | unde
 const RETURN = `SELECT id, year, jurisdiction, filing_status AS filingStatus, wages_cents AS wagesCents, total_income_cents AS totalIncomeCents,
   agi_cents AS agiCents, deduction_kind AS deductionKind, deduction_cents AS deductionCents, taxable_income_cents AS taxableIncomeCents,
   total_tax_cents AS totalTaxCents, credits_cents AS creditsCents, withholding_cents AS withholdingCents, refund_cents AS refundCents,
-  capital_gains_cents AS capitalGainsCents, capital_loss_carryover_cents AS capitalLossCarryoverCents, created_at AS createdAt, updated_at AS updatedAt
-  FROM tax_returns`;
+  capital_gains_cents AS capitalGainsCents, capital_loss_carryover_cents AS capitalLossCarryoverCents, claimed_as_dependent AS claimedAsDependent,
+  created_at AS createdAt, updated_at AS updatedAt FROM tax_returns`;
+const returnRows = (rows: unknown[]): TaxReturn[] => (rows as (TaxReturn & { claimedAsDependent: unknown })[]).map((r) => ({ ...r, claimedAsDependent: flag(r.claimedAsDependent) }));
 
 export const getStub = (db: Db, id: string): PayStub | undefined => stubRows(db.prepare(`${STUB} WHERE id = ?`).all(id))[0];
 export const unassignedStubs = (db: Db): PayStub[] => stubRows(db.prepare(`${STUB} WHERE job_id IS NULL ORDER BY pay_date DESC, created_at DESC, id`).all());
 export const getForm = (db: Db, id: string) => db.prepare(`${FORM} WHERE id = ?`).get(id) as TaxForm | undefined;
 export const getReturn = (db: Db, year: number, jurisdiction: string) =>
-  db.prepare(`${RETURN} WHERE year = ? AND jurisdiction = ?`).get(year, jurisdiction) as TaxReturn | undefined;
+  returnRows(db.prepare(`${RETURN} WHERE year = ? AND jurisdiction = ?`).all(year, jurisdiction))[0];
 
 const candidates = (db: Db, stub: PayStub) => db.prepare(`SELECT ${TXN_COLS} FROM transactions WHERE removed_at IS NULL AND amount_cents > 0
     AND amount_cents <= @net AND account_id IN (SELECT id FROM accounts WHERE type = 'depository') AND abs(julianday(date) - julianday(@day)) <= 3
@@ -70,7 +73,7 @@ export function linkable(db: Db, stub: PayStub, ids: string[]): boolean {
 }
 
 export function taxYears(db: Db): TaxYears {
-  const returns = db.prepare(`${RETURN} ORDER BY year DESC, jurisdiction <> 'federal', jurisdiction`).all() as TaxReturn[];
+  const returns = returnRows(db.prepare(`${RETURN} ORDER BY year DESC, jurisdiction <> 'federal', jurisdiction`).all());
   const forms = db.prepare(`${FORM} ORDER BY year DESC, payer, id`).all() as TaxForm[];
   return { years: [...new Set([...returns, ...forms].map((x) => x.year))].sort((a, b) => b - a).map((year) => {
     const fed = returns.find((r) => r.year === year && r.jurisdiction === 'federal');
@@ -103,15 +106,15 @@ export function payStubs(db: Db, q: { from?: string; to?: string; jobId?: string
 }
 
 export function getProfile(db: Db): Profile {
-  const p = db.prepare(PROFILE).get() as Omit<Profile, 'hsa'> & { hsa: number | null };
-  return { ...p, hsa: p.hsa === null ? null : p.hsa === 1 };
+  const p = db.prepare(PROFILE).get() as Profile & Record<'hsa' | 'fullTimeStudent' | 'claimedAsDependent', unknown>;
+  return { ...p, hsa: flag(p.hsa), fullTimeStudent: flag(p.fullTimeStudent), claimedAsDependent: flag(p.claimedAsDependent) };
 }
 
 export function putProfile(db: Db, body: PutProfileBody, nowIso: string): Profile {
   const p = { ...getProfile(db), ...body };
   db.prepare(`UPDATE profile SET state = ?, filing_status = ?, birth_year = ?, dependents = ?, retirement_pct = ?, retirement_kind = ?,
-      hsa = ?, note = ?, updated_at = ? WHERE id = 1`)
-    .run(p.state, p.filingStatus, p.birthYear, p.dependents, p.retirementPct, p.retirementKind, p.hsa === null ? null : Number(p.hsa), p.note, nowIso);
+      hsa = ?, note = ?, full_time_student = ?, claimed_as_dependent = ?, updated_at = ? WHERE id = 1`)
+    .run(p.state, p.filingStatus, p.birthYear, p.dependents, p.retirementPct, p.retirementKind, bit(p.hsa), p.note, bit(p.fullTimeStudent), bit(p.claimedAsDependent), nowIso);
   return getProfile(db);
 }
 

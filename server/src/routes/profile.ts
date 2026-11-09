@@ -23,18 +23,21 @@ const assign = (cols: string[]) => cols.map((c) => `${c} = ?`).join(', ');
 const pick = (o: object, keys: string[]) => Object.fromEntries(keys.map((k) => [k, (o as Record<string, unknown>)[k]]));
 const notFound = (what: string) => new ApiError(404, 'NOT_FOUND', `${what} not found`);
 const STUB_COLS = ['job_id', 'pay_date', 'period_start', 'period_end', 'gross_cents', 'federal_cents', 'state_cents', 'social_security_cents', 'medicare_cents',
-  'retirement_cents', 'other_deductions_cents', 'other_pay_cents', 'net_cents', 'ytd_gross_cents'];
+  'retirement_cents', 'other_deductions_cents', 'other_pay_cents', 'net_cents', 'ytd_gross_cents', 'state'];
 const FORM_COLS = ['job_id', 'year', 'kind', 'payer', 'amount_cents', 'federal_withheld_cents', 'state', 'state_withheld_cents', 'ss_wages_cents', 'medicare_wages_cents'];
 const RETURN_COLS = ['year', 'jurisdiction', 'filing_status', 'wages_cents', 'total_income_cents', 'agi_cents', 'deduction_kind', 'deduction_cents',
-  'taxable_income_cents', 'total_tax_cents', 'credits_cents', 'withholding_cents', 'refund_cents', 'capital_gains_cents', 'capital_loss_carryover_cents'];
+  'taxable_income_cents', 'total_tax_cents', 'credits_cents', 'withholding_cents', 'refund_cents', 'capital_gains_cents', 'capital_loss_carryover_cents',
+  'claimed_as_dependent'];
 // left-out deduction lines and other pay are 0
 const stubValues = (s: PayStubBody) => [s.jobId ?? null, s.payDate, s.periodStart ?? null, s.periodEnd ?? null, s.grossCents, s.federalCents ?? 0, s.stateCents ?? 0,
-  s.socialSecurityCents ?? 0, s.medicareCents ?? 0, s.retirementCents ?? 0, s.otherDeductionsCents ?? 0, s.otherPayCents ?? 0, s.netCents, s.ytdGrossCents ?? null];
+  s.socialSecurityCents ?? 0, s.medicareCents ?? 0, s.retirementCents ?? 0, s.otherDeductionsCents ?? 0, s.otherPayCents ?? 0, s.netCents, s.ytdGrossCents ?? null,
+  s.state ?? null];
 const formValues = (f: TaxFormBody) => [f.jobId ?? null, f.year, f.kind, f.payer, f.amountCents, f.federalWithheldCents ?? null, f.state ?? null,
   f.stateWithheldCents ?? null, f.ssWagesCents ?? null, f.medicareWagesCents ?? null];
 const returnValues = (t: TaxReturnBody) => [t.year, t.jurisdiction, t.filingStatus ?? null, t.wagesCents ?? null, t.totalIncomeCents ?? null, t.agiCents ?? null,
   t.deductionKind ?? null, t.deductionCents ?? null, t.taxableIncomeCents ?? null, t.totalTaxCents ?? null, t.creditsCents ?? null, t.withholdingCents ?? null,
-  t.refundCents ?? null, t.capitalGainsCents ?? null, t.capitalLossCarryoverCents ?? null];
+  t.refundCents ?? null, t.capitalGainsCents ?? null, t.capitalLossCarryoverCents ?? null,
+  t.claimedAsDependent == null ? null : Number(t.claimedAsDependent)];
 const marks = (cols: string[]) => cols.map(() => '?').join(', ');
 
 export function profileRoutes(app: FastifyInstance, deps: Deps): void {
