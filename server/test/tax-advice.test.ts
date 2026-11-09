@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { buildApp } from '../src/app.ts';
 import type { Db } from '../src/db.ts';
+import { advise, type AdviceCtx } from '../src/tax/advice.ts';
+import type { Lot } from '../src/tax/lots.ts';
 import { federalFigures } from '../src/tax/figures.ts';
 import { project, whatIf } from '../src/tax/projection.ts';
 import { AUTH, makeTestDeps, seedAccount, seedCategory, seedTxn } from './helpers.ts';
@@ -82,17 +84,45 @@ test('harvest_loss: an unrealized loss saves what the calculator says; a buy in 
   assert.ok(!kinds(project(deps, 2026, TODAY).waysToSave).includes('harvest_loss'));
 });
 
-test('harvest_loss: never for unverified lots or a gain', async () => {
+test('harvest_loss: a buy already fully sold inside the last 30 days still blocks it', async () => {
   const { deps, db, send } = await setup();
   await job(send, 200);
   seedAccount(db, { id: 'brk', type: 'investment', subtype: 'brokerage' });
+  seedAccount(db, { id: 'other', type: 'investment', subtype: 'brokerage' });
   security(db, 'sx', 'SYNA');
-  security(db, 'sy', 'SYNB');
   buy(db, 'brk', 'sx', '2025-06-01', 10, $(1_500));
-  holding(db, 'brk', 'sx', 20, $(100), $(2_500)); // 10 shares came from before the history
-  buy(db, 'brk', 'sy', '2025-06-01', 10, $(500));
-  holding(db, 'brk', 'sy', 10, $(100), $(500));
+  holding(db, 'brk', 'sx', 10, $(100), $(1_500));
+  buy(db, 'other', 'sx', '2026-03-05', 3, $(300));
+  db.prepare("INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, updated_at) VALUES ('s1', 'other', 'sx', '2026-03-10', 'sell', 'sell', -3, ?, 'x')").run(-$(300));
   assert.ok(!kinds(project(deps, 2026, TODAY).waysToSave).includes('harvest_loss'));
+});
+
+test('harvest_loss guards: unverified lots, gains and recent buys never reach the what-if', () => {
+  const { deps } = makeTestDeps();
+  const db = deps.db;
+  seedAccount(db, { id: 'brk', type: 'investment', subtype: 'brokerage' });
+  security(db, 'sx', 'SYNA');
+  holding(db, 'brk', 'sx', 10, $(100), $(1_500));
+  let calls = 0;
+  const run = (lots: Partial<Lot>[]) => {
+    calls = 0;
+    const l = lots.map((x) => ({ id: 'l', accountId: 'brk', securityId: 'sx', ticker: 'SYNA', acquiredOn: '2025-06-01', quantity: 10, costCents: $(1_500), status: 'known', ...x }) as Lot);
+    const ctx = {
+      db, year: 2026, projection: { combinedBalanceCents: 0, returns: [{ balanceCents: 0, withheldCents: 0 }] }, fed: LIMIT, safeHarborCents: 0, claimable: false,
+      inputs: { tuitionCents: 0, studentLoanInterestCents: 0, k401Cents: null }, scenario: null, lots: l, remainingPaychecks: 0, stateModel: () => null,
+      delta: () => { calls += 1; return $(100); },
+    } as unknown as AdviceCtx;
+    return kinds(advise(ctx, TODAY).waysToSave).includes('harvest_loss');
+  };
+  assert.equal(run([{}]), true); // control: a known lot at a loss reaches the what-if
+  assert.equal(calls, 1);
+  assert.equal(run([{ status: 'unverified' }]), false);
+  assert.equal(calls, 0);
+  assert.equal(run([{ costCents: $(900) }]), false); // price 100 x 10 = 1,000 > cost 900
+  assert.equal(calls, 0);
+  buy(db, 'brk', 'sx', '2026-03-01', 1, $(100));
+  assert.equal(run([{}]), false);
+  assert.equal(calls, 0);
 });
 
 test('roth_room and over_limit for the open tax years', async () => {
@@ -173,6 +203,28 @@ test('estimated_payment and withholding_short when a lot is owed', async () => {
   assert.ok(w.detail.includes(`$${Math.ceil(-p.combinedBalanceCents / Number(w.detail.match(/of the (\d+) remaining/)![1]) / 100)} more`), w.detail);
   // not within 30 days of a due date: no estimated payment item
   assert.ok(!kinds(project(deps, 2026, '2026-05-10').headsUp).includes('estimated_payment'));
+});
+
+test('estimated_payment needs a lot owed AND withholding under the safe harbor; a refund never triggers it', async () => {
+  const { deps, send } = await setup();
+  await job(send, 200);
+  // projected refund (withholding 10% is well above the tax) with a 2025 safe harbor above the 2026 withholding
+  await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal', totalTaxCents: $(50_000), agiCents: $(20_000) });
+  const refund = project(deps, 2026, '2026-04-01');
+  assert.ok(refund.combinedBalanceCents > 0);
+  assert.ok(!kinds(refund.headsUp).includes('estimated_payment'));
+});
+
+test('estimated_payment: owed over $1,000 with withholding under the safe harbor and a due date within 30 days', async () => {
+  const { deps, send } = await setup();
+  await job(send, 80, '2026-06-30', 4_000);
+  await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal', totalTaxCents: $(50_000), agiCents: $(20_000) });
+  const p = project(deps, 2026, '2026-04-01');
+  assert.ok(p.returns[0]!.balanceCents < -$(1_000));
+  assert.equal(p.headsUp.find((a) => a.kind === 'estimated_payment')?.dueDate, '2026-04-15');
+  // owed, but withholding already meets the safe harbor (prior tax tiny): no item
+  await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal', totalTaxCents: $(100), agiCents: $(20_000) });
+  assert.ok(!kinds(project(deps, 2026, '2026-04-01').headsUp).includes('estimated_payment'));
 });
 
 test('no advice on a clean year', async () => {

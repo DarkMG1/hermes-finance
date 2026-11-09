@@ -1,4 +1,5 @@
 import type { TaxInputs, TaxScenario } from '@hermes/shared';
+import { holdingKey } from '../backfill.ts';
 import type { Db } from '../db.ts';
 import { addDays } from '../days.ts';
 import type { FederalFigures, StateModel } from './figures.ts';
@@ -25,8 +26,11 @@ export function advise(c: AdviceCtx, today: string): { waysToSave: Advice[]; hea
     ({ savingsCents: null, dueDate: null, ...a });
 
   if (year === thisYear) {
-    const key = (l: Lot) => l.ticker ?? l.securityId;
-    const bought = new Set(c.lots.filter((l) => l.acquiredOn !== null && l.acquiredOn >= addDays(today, -30)).map(key));
+    const key = (l: Lot) => holdingKey({ securityId: l.securityId, ticker: l.ticker, type: null, isCash: 0 });
+    // from the stored buys, not the lots: a lot bought and already sold is gone from the lots but still washes a loss
+    const bought = new Set((db.prepare(`SELECT s.id AS securityId, s.ticker FROM investment_transactions t JOIN securities s ON s.id = t.security_id
+      WHERE t.type = 'buy' AND t.quantity > 0 AND t.date BETWEEN ? AND ?`).all(addDays(today, -30), today) as { securityId: string; ticker: string | null }[])
+      .map((r) => holdingKey({ ...r, type: null, isCash: 0 })));
     const positions = new Map<string, Lot[]>();
     for (const l of c.lots) positions.set(`${l.accountId}\0${l.securityId}`, [...(positions.get(`${l.accountId}\0${l.securityId}`) ?? []), l]);
     const harvest: Advice[] = [];
@@ -110,7 +114,8 @@ export function advise(c: AdviceCtx, today: string): { waysToSave: Advice[]; hea
   }
 
   const fedReturn = p.returns[0]!;
-  const owedBig = p.returns.some((r) => r.balanceCents < -ESTIMATED_THRESHOLD) || fedReturn.withheldCents < c.safeHarborCents;
+  // the underpayment-penalty test: a lot owed AND withholding short of the safe harbor; a refund never triggers it
+  const owedBig = p.returns.some((r) => r.balanceCents <= -ESTIMATED_THRESHOLD) && fedReturn.withheldCents < c.safeHarborCents;
   const due = [`${year}-04-15`, `${year}-06-15`, `${year}-09-15`, `${year + 1}-01-15`].find((d) => d >= today && d <= addDays(today, 30));
   if (owedBig && due) alerts.push(item({
     kind: 'estimated_payment', title: 'Estimated tax payment due soon', dueDate: due,
