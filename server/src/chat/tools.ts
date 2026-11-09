@@ -11,7 +11,7 @@ import { getNetWorth } from '../networth.ts';
 import { localDay } from '../days.ts';
 import { getHoldingHistory, getInvestments } from '../investments.ts';
 import { getJob, getProfile, listJobs, payStubs, taxYears } from '../profile.ts';
-import { project, whatIf } from '../tax/projection.ts';
+import { openYears, project, whatIf } from '../tax/projection.ts';
 import { buildLots } from '../tax/lots.ts';
 import { PROFILE_TOOLS } from './labels.ts';
 import { taxReference } from './tax-reference.ts';
@@ -93,9 +93,9 @@ const PROFILE: [string, Entry][] = [
 
 const ENTRIES = new Map<string, Entry>([
   ...[...MONEY, ...PROFILE].map(([name, e]): [string, Entry] => [name, { ...e, def: { ...e.def, description: `${e.def.description} ${CENTS}` } }]),
-  entry('tax_projection', 'The owner\'s projected tax for a year (default: the current open year): withholding, balance due or refund, ways to save and heads-up items, with the assumptions behind it. Use it for any tax amount. ' + CENTS,
+  entry('tax_projection', 'The owner\'s projected tax for a year (default: the first open year, the prior year until Apr 15): withholding, balance due or refund, ways to save and heads-up items, with the assumptions behind it. Use it for any tax amount. ' + CENTS,
     z.object({ year: z.number().int().min(2000).max(2100).optional() }).strict(),
-    (d, q, today) => project(d, q.year ?? Number(today.slice(0, 4)), today)),
+    (d, q, today) => project(d, q.year ?? openYears(today)[0]!, today)),
   entry('tax_what_if', 'The tax projection for a year before and after a change (sell shares by account and security, extra withholding, scenario edits), with the change in the combined balance (deltaCents, positive is better). A sale it marks blocked changes nothing: say what is missing. ' + CENTS,
     z.object({ year: z.number().int().min(2000).max(2100), change: TaxWhatIfChange }).strict(),
     (d, q, today) => whatIf(d, q.year, today, q.change)),
@@ -108,11 +108,13 @@ const ENTRIES = new Map<string, Entry>([
         WHERE (? IS NULL OR t.date >= ?) AND (? IS NULL OR t.date <= ?) AND (? IS NULL OR t.account_id = ?) AND (? IS NULL OR t.type = ?)
         ORDER BY t.date DESC, t.id DESC`).all(...[q.from, q.to, q.accountId, q.type].flatMap((v) => [v ?? null, v ?? null]));
       const sales = buildLots(d.db, today).sales.filter((x) => (!q.from || x.date >= q.from) && (!q.to || x.date <= q.to) && (!q.accountId || x.accountId === q.accountId));
-      return { transactions: rows, sales };
+      const names = new Map(d.db.prepare('SELECT s.id, s.ticker, a.id AS accountId, a.name AS account FROM securities s CROSS JOIN accounts a').all()
+        .map((r) => { const x = r as { id: string; ticker: string | null; accountId: string; account: string }; return [`${x.accountId}|${x.id}`, x] as const; }));
+      return { transactions: rows, sales: sales.map((x) => ({ ...x, ticker: names.get(`${x.accountId}|${x.securityId}`)?.ticker ?? null, account: names.get(`${x.accountId}|${x.securityId}`)?.account ?? null })) };
     }),
-  entry('tax_lots', 'Tax lots (shares with acquired date, quantity, cost and whether the lot is known, entered or unverified), optionally for one account or security. ' + CENTS,
+  entry('tax_lots', 'Tax lots as {lots} (shares with acquired date, quantity, cost and whether the lot is known, entered or unverified), optionally for one account or security. ' + CENTS,
     z.object({ accountId: z.string().min(1).optional(), securityId: z.string().min(1).optional() }).strict(),
-    (d, q, today) => buildLots(d.db, today).lots.filter((l) => (!q.accountId || l.accountId === q.accountId) && (!q.securityId || l.securityId === q.securityId))),
+    (d, q, today) => ({ lots: buildLots(d.db, today).lots.filter((l) => (!q.accountId || l.accountId === q.accountId) && (!q.securityId || l.securityId === q.securityId)) })),
   entry('search_chats', "Searches the owner's own earlier conversations with you (questions and your answers) for messages containing every word of query, optionally between from and to; returns each match's chatId, title, date and a snippet with the words in [brackets]. Without query (e.g. for \"our last chat\"), lists the most recently active chats newest first, each with its first question as the snippet and that question's date (from and to then apply to that date).",
     z.object({ query: z.string().max(200).regex(/[\p{L}\p{N}]/u, 'query has no words to search for').optional(), from: Day, to: Day, limit: z.number().int().min(1).max(20).optional() }).strict(),
     (d, q, _today, ctx) => searchChats(d.db, { ...q, limit: q.limit ?? 10 }, ctx.chatId, !ctx.profileUnlocked)),
@@ -135,7 +137,7 @@ const ENTRIES = new Map<string, Entry>([
 export const TOOLS: ToolDef[] = [...ENTRIES.values()].map((e) => e.def);
 const LOCKED = 'the financial profile is locked; ask the owner to unlock it, then ask again';
 
-const ARRAY_KEYS = ['transactions', 'rows', 'items', 'points', 'holdings', 'history', 'messages', 'results', 'stubs', 'sales'];
+const ARRAY_KEYS = ['transactions', 'rows', 'items', 'points', 'holdings', 'history', 'messages', 'results', 'stubs', 'sales', 'lots'];
 const TEXT_KEYS = new Set(['notes', 'name', 'payee', 'bankDescription', 'merchantName', 'matchText']);
 
 
