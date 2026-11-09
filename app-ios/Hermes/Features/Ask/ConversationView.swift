@@ -8,7 +8,8 @@ struct ConversationView: View {
     @Environment(\.askProfileUnlocked) private var profileUnlocked
     /// nil until the first question creates the chat.
     @State var chatId: String?
-    @State private var title = ""
+    /// the list's title, so an opened chat doesn't read "New chat" until it loads
+    @State var title = ""
     @State private var thread: ChatThread?
     @State private var loadError: String?
     @State private var draft = ""
@@ -40,6 +41,7 @@ struct ConversationView: View {
             ScrollViewReader { proxy in
                 VStack(alignment: .leading, spacing: Space.m) {
                     InlineError(message: loadError)
+                    if chatId != nil, thread == nil, loadError == nil { ProgressView().frame(maxWidth: .infinity).padding(.top, Space.xl) }
                     if thread?.messages.isEmpty == true {
                         Text("Ask about your spending, bills, IOUs or investments").textStyle(.subhead, color: Palette.secondaryText)
                     }
