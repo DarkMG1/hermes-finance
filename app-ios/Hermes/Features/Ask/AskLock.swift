@@ -3,8 +3,8 @@ import SwiftUI
 /// While balances are hidden, Ask (chat titles included) stays covered until Face ID, so hiding still guards a glance at the screen.
 /// Unlocking here shows nothing elsewhere; it lasts until leaving the tab or balances being hidden again. A trip to the background keeps
 /// it, because the app lock then asks for Face ID on return (without Face ID hardware the background relocks it instead).
-/// That Face ID also unlocks the financial profile. With balances shown there is none, so the profile asks for its own when first used
-/// (Face ID even then); either way it's dropped on the same relock: one per Ask visit.
+/// That Face ID also unlocks the financial profile. With balances shown there is none here, but showing them took Face ID, so the
+/// profile opens unlocked then too; either way it's dropped on the same relock: one per Ask visit.
 struct AskLock<Content: View>: View {
     @Environment(AppModel.self) private var model
     @Environment(AppLock.self) private var lock
@@ -49,7 +49,8 @@ struct AskLock<Content: View>: View {
             // initial: the tab's content first appears with this tab already selected
             .onChange(of: selectedTab, initial: true) { _, selected in
                 relock()
-                if selected == tab, hideBalances { Task { await unlock() } }
+                guard selected == tab else { return }
+                if hideBalances { Task { await unlock() } } else { profileUnlocked = true }
             }
             // leaving hides balances; an open Ask stays open behind the app lock instead
             .onChange(of: hideBalances) { _, hidden in
