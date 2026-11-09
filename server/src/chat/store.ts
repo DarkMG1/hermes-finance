@@ -67,7 +67,10 @@ export function getChat(db: Db, id: string, hideProfile = false): ChatDetail | n
     const results = new Map(turn.filter((m) => m.role === 'user').flatMap(blocks).map((b) => [b.tool_use_id, b.is_error === true]));
     const text = answerText(turn);
     // a rejected chart showed nothing
-    const tools = all.filter((b) => b.type === 'tool_use' && results.has(b.id) && !(b.name === 'show_chart' && results.get(b.id))).map((b) => {
+    // a web search runs on Anthropic's side: its result is a block in the answer, not a tool_result
+    const searched = new Set(all.filter((b) => b.type === 'web_search_tool_result').map((b) => b.tool_use_id));
+    const tools = all.filter((b) => (b.type === 'tool_use' && results.has(b.id) && !(b.name === 'show_chart' && results.get(b.id)))
+      || (b.type === 'server_tool_use' && b.name === 'web_search' && searched.has(b.id))).map((b) => {
       const input = b.input as Record<string, unknown>;
       return { name: b.name as string, input, label: toolLabel(b.name as string, input) };
     });
@@ -180,7 +183,9 @@ function trimTurn(turn: ApiMessage[]): ApiMessage[] {
   while (out.length) {
     const last = out.at(-1)!;
     if (last.role === 'assistant') {
-      last.content = blocks(last).filter((b) => b.type !== 'tool_use');
+      // and a web search the answer stopped before the result of
+      const searched = new Set(blocks(last).filter((b) => b.type === 'web_search_tool_result').map((b) => b.tool_use_id));
+      last.content = blocks(last).filter((b) => b.type !== 'tool_use' && !(b.type === 'server_tool_use' && !searched.has(b.id)));
       if (last.content.some((b) => b.type === 'text')) break;
     }
     out.pop();

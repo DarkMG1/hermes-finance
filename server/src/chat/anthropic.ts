@@ -3,7 +3,10 @@ import type { Config } from '../config.ts';
 import { localDay } from '../days.ts';
 
 export type Feature = 'chat' | 'receipt' | 'profile';
-export type Usage = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+export type Usage = { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number;
+  server_tool_use?: { web_search_requests?: number } };
+/** $10 per 1,000 searches */
+const SEARCH_MICROS = 10_000;
 type Key = 'main' | 'backup';
 type Event = { type: string; [k: string]: unknown };
 export class ClaudeError extends Error {
@@ -30,7 +33,8 @@ const PRICES: Record<string, { in: number; out: number; read: number }> = {
 export function costMicros(model: string, u: Usage): number {
   const p = PRICES[model] ?? PRICES['claude-opus-5-5']!;
   const n = (v?: number) => v ?? 0;
-  return Math.round(p.in * (n(u.input_tokens) + p.read * n(u.cache_read_input_tokens) + 1.25 * n(u.cache_creation_input_tokens)) + p.out * n(u.output_tokens));
+  return Math.round(p.in * (n(u.input_tokens) + p.read * n(u.cache_read_input_tokens) + 1.25 * n(u.cache_creation_input_tokens)) + p.out * n(u.output_tokens))
+    + SEARCH_MICROS * n(u.server_tool_use?.web_search_requests);
 }
 export const toCents = (micros: number): number => Math.round(micros / 10_000);
 
