@@ -9,7 +9,7 @@ import { idempotentWrite } from '../idempotency.ts';
 import { readProfile } from '../profile-reader.ts';
 import { getForm, getGrant, getJob, getProfile, getReturn, getStateW4, getStub, getW4, linkable, listJobs, putProfile, stubMatches, taxYears, unassignedStubs } from '../profile.ts';
 import { getScenario, getTaxInputs, listRothContributions } from '../tax/inputs.ts';
-import { buildLots } from '../tax/lots.ts';
+import { buildLots, preHistoryRemainder } from '../tax/lots.ts';
 import { assertOwnerDate, parseBody } from '../validate.ts';
 import { isJpeg } from './receipts.ts';
 
@@ -408,9 +408,9 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
     }
     if (!db.prepare('SELECT 1 FROM securities WHERE id = ?').get(b.securityId)) throw new ApiError(400, 'INVALID_REQUEST', 'securityId: unknown security', 'securityId');
     const r = idempotentWrite(deps, req, () => {
-      // a lot covers shares held before the history that no lot accounts for yet, never more
-      const left = buildLots(db, today()).lots.find((l) => l.id === `unverified:${b.accountId}:${b.securityId}`)?.quantity ?? 0;
-      if (b.quantity - left > 1e-6) throw new ApiError(400, 'INVALID_REQUEST', `quantity: only ${left} shares here have no lot`, 'quantity');
+      // a lot covers shares held before the history that no entered lot covers yet, never more
+      const left = preHistoryRemainder(db, b.accountId, b.securityId, today());
+      if (b.quantity - left > 1e-6) throw new ApiError(400, 'INVALID_REQUEST', `quantity: only ${left} shares held before the history have no lot`, 'quantity');
       const id = randomUUID();
       db.prepare('INSERT INTO lot_entries (id, account_id, security_id, acquired_on, quantity, cost_cents) VALUES (?, ?, ?, ?, ?, ?)')
         .run(id, b.accountId, b.securityId, b.acquiredOn, b.quantity, b.costCents);

@@ -51,25 +51,13 @@ function take(lot: { quantity: number; costCents: number }, q: number): { quanti
   return { quantity: q, costCents };
 }
 
-/**
- * Lots and realized sales from stored Plaid investment transactions up to asOf.
- * Plaid's signs, as stored: a buy has quantity > 0 and amount > 0 (cash leaves the account); a sell has quantity < 0 and amount < 0
- * (backfill.ts replays shares as `before = after - quantity`). Rows with no security, cash securities (sweeps), dividends, fees and
- * deposits make no lots. Shares held before the history (holding minus the history's net) form one unverified lot per account and
- * security, less any lots the owner entered for them.
- */
-export function buildLots(db: Db, asOf: string): {
-  lots: Lot[]; sales: Sale[]; methods: Record<string, LotMethod>; inferred: Record<string, boolean>;
-} {
-  const accounts = db.prepare("SELECT id, subtype, lot_method AS lotMethod FROM accounts WHERE type = 'investment'")
-    .all() as { id: string; subtype: string | null; lotMethod: LotMethod | null }[];
-  const sheltered = new Map(accounts.map((a) => [a.id, SHELTERED.has((a.subtype ?? '').toLowerCase())]));
+const pair = (accountId: string, securityId: string) => `${accountId}\u0000${securityId}`;
+
+function load(db: Db, asOf: string) {
   const secs = new Map((db.prepare('SELECT id, ticker, type, is_cash AS isCash FROM securities').all() as { id: string; ticker: string | null; type: string | null; isCash: number }[])
     .map((s) => [s.id, s]));
   const isCash = (id: string) => secs.get(id)?.isCash === 1 || secs.get(id)?.type === 'cash';
   const tickerOf = (id: string) => secs.get(id)?.ticker ?? null;
-  const keyOf = (id: string) => holdingKey({ securityId: id, ticker: tickerOf(id), type: null, isCash: 0 });
-  const pair = (accountId: string, securityId: string) => `${accountId}\u0000${securityId}`;
 
   // shortcut: split rows are skipped, so a split's new shares land in the unverified lot; handle splits if an account ever has one
   const rows = (db.prepare(`SELECT t.id, t.account_id AS accountId, t.security_id AS securityId, t.date, t.type, t.subtype, t.quantity, t.amount_cents AS amountCents
@@ -83,9 +71,8 @@ export function buildLots(db: Db, asOf: string): {
     .filter((h) => !isCash(h.securityId));
   const entered = db.prepare(`SELECT e.id, e.account_id AS accountId, e.security_id AS securityId, e.acquired_on AS acquiredOn, e.quantity, e.cost_cents AS costCents
     FROM lot_entries e JOIN accounts a ON a.id = e.account_id WHERE a.type = 'investment' ORDER BY e.acquired_on, e.id`).all() as (Omit<Lot, 'ticker' | 'status'> & { acquiredOn: string })[];
-  const holdingOf = new Map(holdings.map((h) => [pair(h.accountId, h.securityId), h]));
 
-  // shares held before the history = holding − the history's net (buys add, sells and transfers out remove)
+  // shares held before the history = holding − the history's net (buys add, sells and transfers out remove); entered lots then come off
   const before = new Map<string, number>(holdings.map((h) => [pair(h.accountId, h.securityId), h.quantity]));
   for (const r of rows) before.set(pair(r.accountId, r.securityId), (before.get(pair(r.accountId, r.securityId)) ?? 0) - r.quantity);
   // entered lots fill those shares oldest first; one that no longer fits (the holding shrank) stays unverified so no sale plans on it
@@ -95,6 +82,30 @@ export function buildLots(db: Db, asOf: string): {
     if (e.quantity - left < DUST) fits.add(e.id);
     before.set(pair(e.accountId, e.securityId), left - e.quantity);
   }
+  return { tickerOf, rows, holdings, entered, before, fits };
+}
+
+/** Shares held before the history that no entered lot covers yet: the most a new entered lot may hold. */
+export function preHistoryRemainder(db: Db, accountId: string, securityId: string, asOf: string): number {
+  return Math.max(0, load(db, asOf).before.get(pair(accountId, securityId)) ?? 0);
+}
+
+/**
+ * Lots and realized sales from stored Plaid investment transactions up to asOf.
+ * Plaid's signs, as stored: a buy has quantity > 0 and amount > 0 (cash leaves the account); a sell has quantity < 0 and amount < 0
+ * (backfill.ts replays shares as `before = after - quantity`). Rows with no security, cash securities (sweeps), dividends, fees and
+ * deposits make no lots. Shares held before the history (holding minus the history's net) form one unverified lot per account and
+ * security, less any lots the owner entered for them.
+ */
+export function buildLots(db: Db, asOf: string): {
+  lots: Lot[]; sales: Sale[]; methods: Record<string, LotMethod>; inferred: Record<string, boolean>;
+} {
+  const accounts = db.prepare("SELECT id, subtype, lot_method AS lotMethod FROM accounts WHERE type = 'investment'")
+    .all() as { id: string; subtype: string | null; lotMethod: LotMethod | null }[];
+  const sheltered = new Map(accounts.map((a) => [a.id, SHELTERED.has((a.subtype ?? '').toLowerCase())]));
+  const { tickerOf, rows, holdings, entered, before, fits } = load(db, asOf);
+  const keyOf = (id: string) => holdingKey({ securityId: id, ticker: tickerOf(id), type: null, isCash: 0 });
+  const holdingOf = new Map(holdings.map((h) => [pair(h.accountId, h.securityId), h]));
 
   const run = (methodOf: (accountId: string) => LotMethod) => {
     const work = (l: Omit<Lot, 'ticker'>, order: string, since: string): Work =>

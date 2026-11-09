@@ -149,6 +149,16 @@ test('an entered lot replaces the unverified remainder', async () => {
   const shrunk = buildLots(db, AS_OF).lots;
   assert.deepEqual(shrunk.map((l) => [l.status, l.quantity, l.costCents]), [['unverified', 4, 60000], ['known', 5, 50000]]);
   assert.notEqual(planSale(shrunk, 'specific', 'brk', 'sx', 1, [shrunk[0]!.id]).blocked, null);
+  // pre-history shares a history sale took still count: 10 before the history, 5 of them sold, 5 held
+  security(db, 'sp', 'SYNP');
+  holding(db, 'brk', 'sp', 5, 50000);
+  sell(db, 'brk', 'sp', '2025-02-01', 5, 60000);
+  const lotOf = (quantity: number) => send('POST', '/v1/tax/lots', { accountId: 'brk', securityId: 'sp', acquiredOn: '2020-05-01', quantity, costCents: quantity * 10000 });
+  const extra = await lotOf(11);
+  assert.deepEqual([extra.statusCode, extra.json().field, extra.json().message], [400, 'quantity', 'quantity: only 10 shares held before the history have no lot']);
+  assert.equal((await lotOf(10)).statusCode, 201);
+  assert.equal((await lotOf(1)).statusCode, 400);
+  assert.deepEqual(buildLots(db, AS_OF).lots.filter((l) => l.securityId === 'sp').map((l) => [l.status, l.quantity, l.costCents]), [['entered', 5, 50000]]);
   const bad = async (body: object) => (await send('POST', '/v1/tax/lots', { accountId: 'brk', securityId: 'sx', acquiredOn: '2020-05-01', quantity: 1, costCents: 1, ...body })).json().field;
   assert.equal(await bad({ accountId: 'nope' }), 'accountId');
   assert.equal(await bad({ securityId: 'nope' }), 'securityId');
