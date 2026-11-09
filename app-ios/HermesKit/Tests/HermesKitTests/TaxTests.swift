@@ -69,9 +69,9 @@ private func json(_ data: Data?) throws -> [String: JSONValue] { try JSONDecoder
     _ = try await c.taxWhatIf(year: 2026, change: TaxWhatIfChange(
         sell: [TaxWhatIfSale(accountId: "a", securityId: "s", quantity: 2)], extraWithholdingCents: 100))
     var inputs = TaxInputsBody(); inputs.k401Cents = 5
-    _ = try await c.putTaxInputs(year: 2026, inputs)
+    _ = try await c.putTaxInputs(year: 2026, inputs, idempotencyKey: "k8")
     var scenario = TaxScenarioBody(); scenario.bonusCents = 7
-    _ = try await c.putTaxScenario(year: 2027, scenario)
+    _ = try await c.putTaxScenario(year: 2027, scenario, idempotencyKey: "k9")
     let added = try await c.addRothContribution(RothContributionBody(date: "2026-02-01", amountCents: 50000, taxYear: 2025), idempotencyKey: "k1")
     #expect(added.id == "r1" && added.transactionId == nil)
     _ = try await c.setRothContributionYear(id: "r1", taxYear: 2026, idempotencyKey: "k2")
@@ -97,5 +97,15 @@ private func json(_ data: Data?) throws -> [String: JSONValue] { try JSONDecoder
     #expect(try json(r[6].body)["quantity"] == .number(1.5))
     #expect(try json(r[8].body) == ["method": .string("hifo")])
     #expect(try json(r[9].body) == ["method": .null])
-    #expect(r.map { $0.headers["Idempotency-Key"] } == [nil, nil, nil, "k1", "k2", "k3", "k4", "k5", "k6", "k7", nil])
+    #expect(r.map { $0.headers["Idempotency-Key"] } == [nil, "k8", "k9", "k1", "k2", "k3", "k4", "k5", "k6", "k7", nil])
+}
+
+@Test func olderServerReturnWithoutSafeHarborOrCarryoverDecodes() throws {
+    var json = try #require(JSONSerialization.jsonObject(with: fixture("tax-projection")) as? [String: Any])
+    var returns = try #require(json["returns"] as? [[String: Any]])
+    returns[0].removeValue(forKey: "safeHarborCents")
+    returns[0].removeValue(forKey: "unusedCarryover")
+    json["returns"] = returns
+    let old = try JSONDecoder().decode(TaxProjection.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(old.returns[0].safeHarborCents == nil && old.returns[0].unusedCarryover == nil)
 }

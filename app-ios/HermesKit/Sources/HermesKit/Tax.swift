@@ -227,15 +227,14 @@ extension APIClient {
 
     public func taxInputs(year: Int) async throws -> TaxInputs { try decode(try await getData("/v1/tax/inputs/\(year)")) }
 
-    /// An upsert, so replaying it changes nothing: no idempotency key.
-    public func putTaxInputs(year: Int, _ body: TaxInputsBody) async throws -> TaxInputs {
-        try await write("PUT", "/v1/tax/inputs/\(year)", body: body, key: nil)
+    public func putTaxInputs(year: Int, _ body: TaxInputsBody, idempotencyKey: String) async throws -> TaxInputs {
+        try await write("PUT", "/v1/tax/inputs/\(year)", body: body, key: idempotencyKey)
     }
 
     public func taxScenario(year: Int) async throws -> TaxScenario { try decode(try await getData("/v1/tax/scenario/\(year)")) }
 
-    public func putTaxScenario(year: Int, _ body: TaxScenarioBody) async throws -> TaxScenario {
-        try await write("PUT", "/v1/tax/scenario/\(year)", body: body, key: nil)
+    public func putTaxScenario(year: Int, _ body: TaxScenarioBody, idempotencyKey: String) async throws -> TaxScenario {
+        try await write("PUT", "/v1/tax/scenario/\(year)", body: body, key: idempotencyKey)
     }
 
     public func rothContributions(taxYear: Int) async throws -> [RothContribution] {
