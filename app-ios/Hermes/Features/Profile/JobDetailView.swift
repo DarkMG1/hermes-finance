@@ -132,9 +132,12 @@ struct JobDetailView: View {
     }
 
     private static func stateW4Detail(_ w: StateW4Body) -> String? {
+        // lines 1a and 1b together: the total payroll uses
+        let claimed = [w.allowances, w.additionalAllowances].compactMap { $0 }
+        let allowances = claimed.reduce(0, +)
         let parts = [
             w.exempt == true ? "Exempt" : nil,
-            w.allowances.map { $0 == 1 ? "1 allowance" : "\($0) allowances" },
+            claimed.isEmpty ? nil : allowances == 1 ? "1 allowance" : "\(allowances) allowances",
             w.extraWithholdingCents.flatMap { $0 > 0 ? "\(Money.format($0)) extra a paycheck" : nil },
         ].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")

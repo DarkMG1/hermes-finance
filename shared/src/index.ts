@@ -589,7 +589,8 @@ export type W4Body = z.infer<typeof W4Body>;
 /** A job's state withholding certificate (California's DE-4 and the like), one per state: allowances rather than the W-4's steps. */
 const StateW4Fields = z.object({
   state: StateCode, signedOn: DateInput.nullable(), filingStatus: z.enum(['single', 'married', 'head_of_household']).nullable(),
-  allowances: z.number().int().min(0).max(99).nullable(), additionalAllowances: z.number().int().min(0).max(99).nullable(),
+  // 999 is a common DE-4 entry for no state withholding
+  allowances: z.number().int().min(0).max(999).nullable(), additionalAllowances: z.number().int().min(0).max(999).nullable(),
   extraWithholdingCents: Money.nullable(), exempt: z.boolean().nullable(),
 });
 export const StateW4 = StateW4Fields.extend({ jobId: Id, updatedAt: z.string() });
