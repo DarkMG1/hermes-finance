@@ -239,23 +239,51 @@ public struct ProfileReadResult: Decodable, Sendable, Equatable {
     public let draft: ProfileDraft
     /// field names Claude is unsure of
     public let uncertain: [String]
+    /// Each document read, in page order: a PDF can hold a run of pay stubs. Just this one for any other kind, or from a server before 2.2.1.
+    private let documents: [ProfileReadResult]
 
-    private enum Keys: String, CodingKey { case kind, draft, uncertain }
+    private enum Keys: String, CodingKey { case kind, draft, uncertain, stubs }
     private enum DraftKeys: String, CodingKey { case employer, grants }
+
+    private init(kind: ProfileKind, draft: ProfileDraft, uncertain: [String]) {
+        self.kind = kind
+        self.draft = draft
+        self.uncertain = uncertain
+        documents = []
+    }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
         kind = try c.decode(ProfileKind.self, forKey: .kind)
-        uncertain = try c.decodeIfPresent([String].self, forKey: .uncertain) ?? []
-        let extra = try c.nestedContainer(keyedBy: DraftKeys.self, forKey: .draft)
-        switch kind {
-        case .taxReturn: draft = .taxReturn(try c.decode(TaxReturnBody.self, forKey: .draft))
-        case .taxForm: draft = .taxForm(try c.decode(TaxFormBody.self, forKey: .draft))
-        case .payStub: draft = .payStub(try c.decode(PayStubBody.self, forKey: .draft), employer: try extra.decodeIfPresent(String.self, forKey: .employer))
-        case .offer:
-            draft = .offer(try c.decode(CreateJobBody.self, forKey: .draft), grants: try extra.decodeIfPresent([GrantBody].self, forKey: .grants) ?? [])
+        (draft, uncertain) = try Self.read(c, kind)
+        if kind == .payStub, var stubs = try? c.nestedUnkeyedContainer(forKey: .stubs) {
+            var all: [ProfileReadResult] = []
+            while !stubs.isAtEnd {
+                let one = try stubs.nestedContainer(keyedBy: Keys.self)
+                let (draft, uncertain) = try Self.read(one, kind)
+                all.append(ProfileReadResult(kind: kind, draft: draft, uncertain: uncertain))
+            }
+            documents = all
+        } else {
+            documents = []
         }
     }
+
+    /// The draft and uncertain fields in `c`.
+    private static func read(_ c: KeyedDecodingContainer<Keys>, _ kind: ProfileKind) throws -> (ProfileDraft, [String]) {
+        let uncertain = try c.decodeIfPresent([String].self, forKey: .uncertain) ?? []
+        let extra = try c.nestedContainer(keyedBy: DraftKeys.self, forKey: .draft)
+        let draft: ProfileDraft = switch kind {
+        case .taxReturn: .taxReturn(try c.decode(TaxReturnBody.self, forKey: .draft))
+        case .taxForm: .taxForm(try c.decode(TaxFormBody.self, forKey: .draft))
+        case .payStub: .payStub(try c.decode(PayStubBody.self, forKey: .draft), employer: try extra.decodeIfPresent(String.self, forKey: .employer))
+        case .offer: .offer(try c.decode(CreateJobBody.self, forKey: .draft), grants: try extra.decodeIfPresent([GrantBody].self, forKey: .grants) ?? [])
+        }
+        return (draft, uncertain)
+    }
+
+    /// Every document to review: the stubs when there are several, else this one.
+    public var reads: [ProfileReadResult] { documents.isEmpty ? [self] : documents }
 }
 
 /// An edit as JSON: fields the owner cleared go out as null; `keepUnchanged: false` leaves out what still matches `original`.

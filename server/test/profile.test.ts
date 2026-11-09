@@ -206,6 +206,8 @@ test('vesting: each event vests what accrued so far, so monthly 1000 shares afte
 
 const stub = { payDate: '2026-03-13', periodStart: '2026-02-28', periodEnd: '2026-03-13', grossCents: 400000, federalCents: 50000, stateCents: 15000,
   socialSecurityCents: 24800, medicareCents: 5800, retirementCents: 24000, otherDeductionsCents: 400, netCents: 280000 };
+/** another stub with the same pay date and net, so not a duplicate */
+const twinStub = { ...stub, grossCents: 400001, federalCents: 50001 };
 
 test('pay stubs: create, validate the parts against net, patch, delete; the job detail lists them newest first', async () => {
   const { get, send } = setup();
@@ -216,6 +218,12 @@ test('pay stubs: create, validate the parts against net, patch, delete; the job 
   assert.deepEqual(s, { ...stub, id: s.id, jobId: job.id, otherPayCents: 0, ytdGrossCents: null, transactionIds: [], createdAt: '2026-03-15T12:00:00.000Z' });
   assert.deepEqual((await send('POST', '/v1/pay-stubs', { ...stub, jobId: job.id }, 'stub')).json(), s, 'one row per Idempotency-Key');
   assert.equal((await send('POST', '/v1/pay-stubs', { ...stub, netCents: 279999 })).statusCode, 201, 'within a cent');
+  const again = await send('POST', '/v1/pay-stubs', { ...stub, jobId: job.id, periodStart: null }, 'stub-again');
+  assert.deepEqual([again.statusCode, again.json().code], [409, 'DUPLICATE_STUB'], 'the same job, pay date, gross and net is saved once');
+  assert.equal((await send('POST', '/v1/pay-stubs', { ...stub, netCents: 279999 }, 'jobless-again')).statusCode, 409, 'a stub without a job too');
+  const next = await send('POST', '/v1/pay-stubs', { ...stub, jobId: job.id, payDate: '2026-03-27' });
+  assert.equal(next.statusCode, 201, 'the next pay date is a new stub');
+  await send('DELETE', `/v1/pay-stubs/${next.json().id}`);
   for (const [body, field] of [
     [{ ...stub, netCents: 279998 }, 'netCents'], [{ ...stub, netCents: 400001, grossCents: 400000 }, 'netCents'], [{ ...stub, grossCents: -1 }, 'grossCents'],
     [{ ...stub, periodEnd: '2026-02-27' }, 'periodEnd'], [{ ...stub, jobId: 'missing' }, 'jobId'],
@@ -276,7 +284,7 @@ test('stub matches: bank deposits within 3 days, at most the net, closest then n
   assert.equal((await get('/v1/pay-stubs/missing')).statusCode, 404);
   assert.equal((await get('/v1/transactions/a')).json().payStub, null);
   assert.deepEqual((await get('/v1/transactions?limit=20')).json().transactions.filter((x: { payStub: unknown }) => x.payStub).map((x: { id: string }) => x.id).sort(), ['half1', 'half2']);
-  const twin = (await send('POST', '/v1/pay-stubs', stub)).json();
+  const twin = (await send('POST', '/v1/pay-stubs', twinStub)).json();
   assert.deepEqual(await matches(twin.id), [['a', 'c', 'b', 'early'], [['a'], ['c'], ['b'], ['early']]], 'deposits linked to another stub are never offered');
   const taken = await link(twin.id, ['half1', 'half2']);
   assert.deepEqual([taken.statusCode, taken.json().code], [409, 'ALREADY_LINKED']);
@@ -296,7 +304,7 @@ test('stub matches: bank deposits within 3 days, at most the net, closest then n
   await link(third.id, ['b']);
   db.prepare("UPDATE transactions SET removed_at = '2026-03-15T00:00:00Z' WHERE id = 'b'").run();
   assert.deepEqual((await get(`/v1/pay-stubs/${third.id}`)).json().transactionIds, [], 'a deposit Plaid removed is not linked');
-  const gone = await link((await send('POST', '/v1/pay-stubs', stub)).json().id, ['b']);
+  const gone = await link((await send('POST', '/v1/pay-stubs', { ...stub, grossCents: 400002, federalCents: 50002 })).json().id, ['b']);
   assert.deepEqual([gone.statusCode, gone.json().field], [400, 'transactionIds'], 'a removed deposit is not a match, even while another stub holds it');
   assert.equal((await send('PUT', `/v1/pay-stubs/${s.id}/link`, { transactionIds: ['a'], extra: 1 })).statusCode, 400);
   assert.equal((await send('PUT', `/v1/pay-stubs/${s.id}/link`, { transactionId: 'a' })).statusCode, 400);
@@ -346,7 +354,7 @@ test('a posted row that learns its pending row in a later modification takes the
 test('a posted row another stub already holds keeps that stub, the pending side is unlinked, and sync goes on', async () => {
   const { db, get, send, s, sync, posted } = await plaidSetup();
   sync({ added: [postedTxn(null)] });
-  const other = (await send('POST', '/v1/pay-stubs', stub)).json();
+  const other = (await send('POST', '/v1/pay-stubs', twinStub)).json();
   db.prepare('INSERT INTO pay_stub_deposits (stub_id, transaction_id) VALUES (?, ?)').run(other.id, posted());
   assert.doesNotThrow(() => sync({ modified: [postedTxn('p-pend')] }));
   assert.deepEqual((await get(`/v1/pay-stubs/${other.id}`)).json().transactionIds, [posted()]);

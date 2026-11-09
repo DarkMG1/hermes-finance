@@ -590,15 +590,17 @@ export const ProfileDrafts = {
 };
 export const ProfileKind = z.enum(['tax_return', 'tax_form', 'pay_stub', 'offer']);
 export type ProfileKind = z.infer<typeof ProfileKind>;
-/** pages are base64 JPEGs; the whole body is at most 3 MB */
-export const ProfileReadBody = z.object({ kind: ProfileKind, pages: z.array(z.string().min(1)).min(1).max(8) }).strict();
+/** pages are base64 JPEGs; the whole body is at most 8 MB */
+export const ProfileReadBody = z.object({ kind: ProfileKind, pages: z.array(z.string().min(1)).min(1).max(24) }).strict();
 export type ProfileReadBody = z.infer<typeof ProfileReadBody>;
 /** field names Claude is unsure of */
 export const ProfileUncertain = z.array(z.string().max(100)).max(100).default([]).catch([]);
 export const ProfileReadResult = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('tax_return'), draft: ProfileDrafts.tax_return, uncertain: ProfileUncertain }),
   z.object({ kind: z.literal('tax_form'), draft: ProfileDrafts.tax_form, uncertain: ProfileUncertain }),
-  z.object({ kind: z.literal('pay_stub'), draft: ProfileDrafts.pay_stub, uncertain: ProfileUncertain }),
+  /** stubs: every pay stub in the pages, in order; draft and uncertain are the first one's (what servers before 2.2.1 sent alone) */
+  z.object({ kind: z.literal('pay_stub'), draft: ProfileDrafts.pay_stub, uncertain: ProfileUncertain,
+    stubs: z.array(z.object({ draft: ProfileDrafts.pay_stub, uncertain: ProfileUncertain })).min(1) }),
   z.object({ kind: z.literal('offer'), draft: ProfileDrafts.offer, uncertain: ProfileUncertain }),
 ]);
 export type ProfileReadResult = z.infer<typeof ProfileReadResult>;

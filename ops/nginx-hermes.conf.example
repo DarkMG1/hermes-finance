@@ -16,9 +16,10 @@ server {
     proxy_read_timeout 150s;
   }
 
-  # Document reads carry page images: keep the body in memory and stream it on, never to a client_body_temp file.
+  # Document reads carry up to 24 page images: keep the body in memory and stream it on, never to a client_body_temp file.
   location = /v1/profile/read {
-    client_body_buffer_size 3m;
+    client_max_body_size 8m;
+    client_body_buffer_size 8m;
     proxy_request_buffering off;
     proxy_pass http://127.0.0.1:5010;
     proxy_set_header Host $host;

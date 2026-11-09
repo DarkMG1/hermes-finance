@@ -147,6 +147,10 @@ struct ProfileDraftForm: View {
     let uncertain: Set<String>
     /// the employer printed on a pay stub
     private let employer: String?
+    /// which of several pay stubs read off one file this is, and how many
+    private let step: (Int, Int)?
+    /// on to the next of those stubs, with the job picked on this one
+    private let next: ((String?) -> Void)?
 
     private struct GrantRow: Identifiable {
         let id = UUID()
@@ -166,9 +170,13 @@ struct ProfileDraftForm: View {
     @State private var savedGrants = 0
     @State private var stub: PayStub?
 
-    init(kind: ProfileKind, draft: ProfileDraft, uncertain: Set<String>) {
+    init(kind: ProfileKind, draft: ProfileDraft, uncertain: Set<String>, step: (Int, Int)? = nil, jobId: String? = nil,
+         next: ((String?) -> Void)? = nil) {
         self.kind = kind
         self.uncertain = uncertain
+        self.step = step
+        self.next = next
+        _jobId = State(initialValue: jobId)
         var employer: String?
         var grants: [GrantRow] = []
         let texts: [String: String] = switch draft {
@@ -185,13 +193,19 @@ struct ProfileDraftForm: View {
     }
 
     var body: some View {
-        if let stub { PayStubLinkSheet(stub: stub, header: "Saved. Which deposits are this paycheck? Close to link it later.") } else { form }
+        if let stub {
+            PayStubLinkSheet(stub: stub, header: "Saved. Which deposits are this paycheck? Close to link it later.",
+                             onClose: next.map { next in { next(jobId) } })
+        } else {
+            form
+        }
     }
 
     private var locked: Bool { writes.unresolved || busy }
 
     private var form: some View {
-        Sheet(title: kind.title, canSave: !busy && built, busy: busy, unresolved: writes.unresolved, onCancel: { dismiss() },
+        Sheet(title: step.map { "\(kind.title) \($0.0) of \($0.1)" } ?? kind.title, canSave: !busy && built, busy: busy, unresolved: writes.unresolved,
+              onCancel: { dismiss() },
               onSave: { Task { await save() } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             switch kind {
             case .taxReturn:
@@ -224,6 +238,7 @@ struct ProfileDraftForm: View {
                 }
             }
             if let error { Section { InlineError(message: error) } }
+            if let next { Section { Button("Skip this pay stub") { next(jobId) }.disabled(locked) } }
         }
         .task { await loadJobs() }
     }
@@ -415,6 +430,8 @@ struct PayStubLinkSheet: View {
     @Environment(\.dismiss) private var dismiss
     let stub: PayStub
     var header = "Which deposits are this paycheck?"
+    /// instead of closing the sheet, as when more stubs read off the same file come next
+    var onClose: (() -> Void)?
     @State private var matches: PayStubMatches?
     @State private var matchesError: String?
     @State private var selected: Set<String> = []
@@ -426,7 +443,7 @@ struct PayStubLinkSheet: View {
         let net = stub.netCents ?? 0
         let total = matches?.deposits.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.amountCents } ?? 0
         Sheet(title: "Link deposit", saveTitle: "Link", canSave: !busy && !selected.isEmpty && total == net, busy: busy, unresolved: writes.unresolved,
-              dirty: false, onCancel: { dismiss() }, onSave: { Task { await link() } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
+              dirty: false, onCancel: { close() }, onSave: { Task { await link() } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
                 if let matches {
                     if matches.deposits.isEmpty {
@@ -463,6 +480,8 @@ struct PayStubLinkSheet: View {
         .task { await loadMatches() }
     }
 
+    private func close() { if let onClose { onClose() } else { dismiss() } }
+
     private func loadMatches() async {
         guard matches == nil, let client = model.client else { return }
         matchesError = nil
@@ -484,7 +503,7 @@ struct PayStubLinkSheet: View {
             let ids = matches?.deposits.map(\.id).filter(selected.contains) ?? []
             _ = try await client.linkPayStub(id: stub.id, transactionIds: ids, idempotencyKey: writes.key)
             writes.didSucceed()
-            dismiss()
+            close()
         } catch {
             writes.didFail(error)
             self.error = writes.unresolved ? "Couldn't confirm the link. Tap Link to retry; it won't be applied twice." : errorMessage(error)

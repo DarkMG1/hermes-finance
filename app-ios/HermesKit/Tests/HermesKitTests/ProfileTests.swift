@@ -167,3 +167,14 @@ import Testing
     #expect(try await client.unassignedPayStubs().map(\.id) == ["stub-2"])
     #expect(transport.requests.first?.url.path == "/v1/pay-stubs/unassigned")
 }
+
+@Test func aPayStubReadListsEveryStubInThePdfAndAnOlderServerGivesOne() throws {
+    let read = try decode(ProfileReadResult.self, "profile-read-pay-stub")
+    let dates = read.reads.map { r -> String? in if case .payStub(let s, _) = r.draft { s.payDate } else { nil } }
+    #expect(dates == ["2026-03-13", "2026-03-27"] && read.reads.map(\.uncertain) == [["grossCents"], []])
+    var json = try #require(JSONSerialization.jsonObject(with: fixture("profile-read-pay-stub")) as? [String: Any])
+    json.removeValue(forKey: "stubs")
+    let old = try JSONDecoder().decode(ProfileReadResult.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(old.reads.count == 1 && old.reads.first?.uncertain == ["grossCents"])
+    #expect(try decode(ProfileReadResult.self, "profile-read-offer").reads.count == 1)
+}

@@ -4,17 +4,17 @@ import Testing
 
 @Test func pageBudgetStepsDownUntilTheTotalFits() {
     var tried: [String] = []
-    let pages = PageBudget.fit(pages: 3) { page, side, quality in
+    let pages = PageBudget.fit(pages: 8) { page, side, quality in
         tried.append("\(page)@\(Int(side))/\(quality)")
         // 1,000,000 bytes per page at 2000 px and 0.7, shrinking with side and quality
         return Data(count: Int(1_000_000 * side / 2000 * quality / 0.7))
     }
-    #expect(pages?.count == 3 && (pages?.reduce(0) { $0 + $1.count } ?? .max) <= PageBudget.maxBytes)
-    // quality steps before size: 2000 px at 0.55 is 2,357,142 in all, too big; at 0.4 it is 1,714,285
-    #expect(tried.last == "2@2000/0.4" && tried.first == "0@2000/0.7")
-    #expect(PageBudget.fit(pages: 1) { _, _, _ in Data(count: 2_100_001) } == nil)
+    #expect(pages?.count == 8 && (pages?.reduce(0) { $0 + $1.count } ?? .max) <= PageBudget.maxBytes)
+    // quality steps before size: 2000 px at 0.55 is 6,285,714 in all, too big; at 0.4 it is 4,571,428
+    #expect(tried.last == "7@2000/0.4" && tried.first == "0@2000/0.7")
+    #expect(PageBudget.fit(pages: 1) { _, _, _ in Data(count: 5_900_001) } == nil)
     #expect(PageBudget.fit(pages: 2) { page, _, _ in page == 1 ? nil : Data(count: 10) } == nil)
-    #expect(PageBudget.fit(pages: 2) { _, _, _ in Data(count: 1_050_000) }?.count == 2)
+    #expect(PageBudget.fit(pages: 2) { _, _, _ in Data(count: 2_950_000) }?.count == 2)
 }
 
 @Test func fieldTextRoundTrips() {

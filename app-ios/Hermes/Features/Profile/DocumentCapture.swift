@@ -60,8 +60,9 @@ enum PDFFile {
         }
     }
 
-    /// The first pages at about 200 dpi, the long side at most 2000 px. The importer opens the file in place (a security-scoped URL to
-    /// the original); a provider or another app that hands over a copy puts it in this app's container, and that copy is deleted once read.
+    /// The first pages at about 200 dpi, the long side at most 2000 px (1400 px in a long file, so every page fits in memory). The importer
+    /// opens the file in place (a security-scoped URL to the original); a provider or another app that hands over a copy puts it in this
+    /// app's container, and that copy is deleted once read.
     nonisolated static func pages(_ url: URL) -> Read {
         let scoped = url.startAccessingSecurityScopedResource()
         defer {
@@ -71,10 +72,11 @@ enum PDFFile {
         }
         guard let doc = PDFDocument(url: url) else { return .unreadable }
         guard !doc.isLocked else { return .locked }
+        let longest: CGFloat = doc.pageCount > PageBudget.fullSizePages ? 1400 : 2000
         let pages = (0..<min(doc.pageCount, PageBudget.maxPages)).compactMap { i -> UIImage? in
             guard let page = doc.page(at: i) else { return nil }
             let bounds = page.bounds(for: .cropBox)
-            let side = min(max(bounds.width, bounds.height) * 200 / 72, 2000)
+            let side = min(max(bounds.width, bounds.height) * 200 / 72, longest)
             // fits the square, applying the page's rotation and box origin; the image is scale 1 (checked on the simulator)
             return page.thumbnail(of: CGSize(width: side, height: side), for: .cropBox)
         }
@@ -176,22 +178,28 @@ extension View {
     }
 }
 
-/// Preview and read, then the review form; by hand goes straight to an empty form.
+/// Preview and read, then the review form, once per pay stub when the pages hold several; by hand goes straight to an empty form.
 private struct ProfileCaptureFlow: View {
     @Environment(\.profileDrafting) private var drafting
     let capture: Capture
-    @State private var read: ProfileReadResult?
+    @State private var reads: [ProfileReadResult] = []
+    @State private var at = 0
+    /// the job picked on the stub before, offered on the next
+    @State private var jobId: String?
     @State private var byHand = false
 
     var body: some View {
         Group {
-            if let read {
-                ProfileDraftForm(kind: capture.kind, draft: read.draft, uncertain: Set(read.uncertain))
+            if at < reads.count {
+                let read = reads[at]
+                ProfileDraftForm(kind: capture.kind, draft: read.draft, uncertain: Set(read.uncertain), step: reads.count > 1 ? (at + 1, reads.count) : nil,
+                                 jobId: jobId, next: at + 1 < reads.count ? { jobId = $0; at += 1 } : nil)
+                    .id(at)
             } else if byHand || capture.pages.isEmpty {
                 ProfileDraftForm(kind: capture.kind, draft: .empty(capture.kind), uncertain: [])
             } else {
                 RedactionPreview(kind: capture.kind, originals: capture.pages, dropped: capture.dropped,
-                                 onRead: { read = $0 }, onByHand: { byHand = true })
+                                 onRead: { reads = $0.reads }, onByHand: { byHand = true })
             }
         }
         .onAppear { drafting.wrappedValue = true }

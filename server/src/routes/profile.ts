@@ -9,7 +9,10 @@ import { idempotentWrite } from '../idempotency.ts';
 import { readProfile } from '../profile-reader.ts';
 import { getForm, getGrant, getJob, getProfile, getReturn, getStub, linkable, listJobs, putProfile, stubMatches, taxYears, unassignedStubs } from '../profile.ts';
 import { assertOwnerDate, parseBody } from '../validate.ts';
-import { isJpeg, MAX_BYTES } from './receipts.ts';
+import { isJpeg } from './receipts.ts';
+
+/** up to 24 pages; the app shrinks them to fit */
+const READ_MAX_BYTES = 8 * 1024 * 1024;
 
 const JOB_COLS = ['employer', 'title', 'status', 'start_date', 'end_date', 'base_cents', 'hourly_cents', 'hours_per_week', 'bonus_target_pct', 'signing_bonus_cents', 'relocation_cents', 'note'];
 const GRANT_COLS = ['kind', 'shares', 'value_cents', 'strike_cents', 'grant_date', 'cliff_months', 'vest_months', 'vest_every_months'];
@@ -69,7 +72,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   // lets Settings show its row without loading any profile data before Face ID
   app.get('/v1/profile/exists', async () => ({ ok: true }));
   // no idempotency key: a read stores nothing
-  app.post('/v1/profile/read', { bodyLimit: MAX_BYTES }, async (req) => {
+  app.post('/v1/profile/read', { bodyLimit: READ_MAX_BYTES }, async (req) => {
     const body = parseBody(ProfileReadBody, req.body);
     const pages = body.pages.map((p) => Buffer.from(p, 'base64'));
     const bad = pages.findIndex((p) => !isJpeg(p));
@@ -160,6 +163,9 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
     assertDates(body, STUB_DATES);
     const r = idempotentWrite(deps, req, () => {
       assertJob(body.jobId);
+      // reading the same pay stubs twice (one PDF holds a whole run of them) shouldn't save them twice
+      if (db.prepare('SELECT 1 FROM pay_stubs WHERE job_id IS ? AND pay_date = ? AND gross_cents = ? AND net_cents = ?')
+        .get(body.jobId ?? null, body.payDate, body.grossCents, body.netCents)) throw new ApiError(409, 'DUPLICATE_STUB', 'this pay stub is already saved');
       const id = randomUUID();
       db.prepare(`INSERT INTO pay_stubs (id, ${STUB_COLS.join(', ')}, created_at) VALUES (?, ${marks(STUB_COLS)}, ?)`).run(id, ...stubValues(body), deps.now().toISOString());
       return { status: 201, body: stub(id) };

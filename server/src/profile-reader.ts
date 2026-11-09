@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 import { ProfileDrafts, ProfileUncertain, type ProfileKind, type ProfileReadResult } from '@hermes/shared';
 import type { Deps } from './deps.ts';
 import { ApiError } from './errors.ts';
@@ -39,7 +39,10 @@ export async function readProfile(deps: Deps, kind: ProfileKind, pages: Buffer[]
   active.add(deps.db);
   try {
     const r = await deps.profileReader.read(kind, pages);
-    return { kind: r.kind, draft: scrubIdentifiers(r.draft), uncertain: r.uncertain.filter((k) => Object.hasOwn(r.draft, k)) } as ProfileReadResult;
+    const clean = (x: { draft: object; uncertain: string[] }) => ({ draft: scrubIdentifiers(x.draft), uncertain: x.uncertain.filter((k) => Object.hasOwn(x.draft, k)) });
+    if (r.kind !== 'pay_stub') return { kind: r.kind, ...clean(r) } as ProfileReadResult;
+    const stubs = r.stubs.map(clean);
+    return { kind: r.kind, ...stubs[0]!, stubs } as ProfileReadResult;
   } catch (e) {
     const code = e instanceof ReaderError ? e.code : 'UNKNOWN';
     if (code === 'AI_CREDITS_EXHAUSTED') throw new ApiError(402, 'AI_CREDITS_EXHAUSTED', 'the Anthropic API keys are out of credit');
@@ -54,7 +57,8 @@ export async function readProfile(deps: Deps, kind: ProfileKind, pages: Buffer[]
 const KINDS: Record<ProfileKind, [label: string, hints: string]> = {
   tax_return: ['tax return', "jurisdiction: 'federal' for a federal return, else the 2-letter state code. refundCents: positive for a refund, negative when tax is owed."],
   tax_form: ['W-2 or 1099 form', 'kind: w2 for a W-2, else the 1099 type. payer: the employer or payer name. amountCents: W-2 box 1 wages, else box 1 or the total.'],
-  pay_stub: ['pay stub', 'Amounts are for this pay period; ytdGrossCents is the year-to-date gross. otherDeductionsCents: the sum of every deduction and tax '
+  pay_stub: ['pay stub', 'The pages may hold several pay stubs: put each in stubs, in page order, once each (a stub over two pages is one entry). '
+    + 'Amounts are for that stub\'s pay period; ytdGrossCents is the year-to-date gross. otherDeductionsCents: the sum of every deduction and tax '
     + 'without its own field (local tax, disability, insurance, HSA and the rest). otherPayCents: after-tax additions such as reimbursements. '
     + 'Gross minus all deductions plus otherPayCents must equal netCents. employer: the employer name.'],
   offer: ['offer letter', 'baseCents: the annual base salary as stated, null for hourly pay or any letter without a yearly figure (never work one out). hourlyCents: the hourly rate as stated. hoursPerWeek: the weekly hours as stated (20 for 40 hours every 2 weeks). bonusTargetPct: a percent (15 for 15%). grants: each equity grant; vestMonths is the whole vesting length, vestEveryMonths the interval after the cliff.'],
@@ -67,13 +71,16 @@ export function createAnthropicProfileReader(claude: Claude, model: string): Pro
     async read(kind, pages) {
       const name = `record_${kind}`;
       const [label, hints] = KINDS[kind];
-      const schema = (ProfileDrafts[kind] as z.ZodObject).extend({ uncertain: ProfileUncertain });
+      const one = (ProfileDrafts[kind] as z.ZodObject).extend({ uncertain: ProfileUncertain });
+      // a PDF exported from payroll often holds a whole run of pay stubs; a malformed one is dropped, not the rest
+      const schema = kind === 'pay_stub' ? z.object({ stubs: z.array(one.nullable().catch(null)).transform((s) => s.filter((x) => x !== null).slice(0, 30)) }) : one;
       let reply: MessagesReply;
       try {
         reply = (await claude.messages('profile', {
           // Sonnet 5.5 refuses a forced tool_choice ("tool"/"any"), so the instructions ask for the call
-          model, max_tokens: 8192,
-          tools: [{ name, description: `Record the fields read from the ${label}.`, input_schema: jsonSchema(schema) }],
+          model, max_tokens: kind === 'pay_stub' ? 16384 : 8192,
+          tools: [{ name, description: kind === 'pay_stub' ? 'Record every pay stub in the pages, one entry per pay date.' : `Record the fields read from the ${label}.`,
+            input_schema: jsonSchema(schema) }],
           messages: [{ role: 'user', content: [
             ...pages.map((p) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: p.toString('base64') } })),
             { type: 'text', text: `Read this ${label}. Amounts in integer cents. Dates YYYY-MM-DD. Leave a field null when absent. ${hints}
@@ -88,7 +95,12 @@ Never return SSNs, ITINs, EINs or account numbers. List field names you are unsu
       const call = Array.isArray(content) ? content.find((c) => c.type === 'tool_use' && c.name === name) : undefined;
       const parsed = schema.safeParse(call?.input);
       if (!parsed.success) throw new ReaderError('INVALID_OUTPUT');
-      const { uncertain, ...draft } = parsed.data;
+      if (kind === 'pay_stub') {
+        const stubs = (parsed.data as { stubs: ({ uncertain: string[] } & Record<string, unknown>)[] }).stubs.map(({ uncertain, ...draft }) => ({ draft, uncertain }));
+        if (!stubs.length) throw new ReaderError('INVALID_OUTPUT');
+        return { kind, ...stubs[0]!, stubs, model } as ProfileReadOutput;
+      }
+      const { uncertain, ...draft } = parsed.data as { uncertain: string[] } & Record<string, unknown>;
       // a letter that doesn't state one of these comes back as 0 despite the instruction; 0 would read as an offer of nothing
       if (kind === 'offer') for (const k of ['baseCents', 'hourlyCents', 'bonusTargetPct', 'signingBonusCents', 'relocationCents']) if ((draft as Record<string, unknown>)[k] === 0) (draft as Record<string, unknown>)[k] = null;
       return { kind, draft, uncertain, model } as ProfileReadOutput;
