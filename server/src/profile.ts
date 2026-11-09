@@ -5,7 +5,7 @@ import { addInterval, memberships } from './recurring.ts';
 
 const PROFILE = `SELECT state, filing_status AS filingStatus, birth_year AS birthYear, dependents, retirement_pct AS retirementPct,
   retirement_kind AS retirementKind, hsa, note, updated_at AS updatedAt FROM profile WHERE id = 1`;
-const JOB = `SELECT id, employer, title, status, start_date AS startDate, end_date AS endDate, base_cents AS baseCents, hourly_cents AS hourlyCents, hours_per_week AS hoursPerWeek,
+const JOB = `SELECT id, employer, title, status, start_date AS startDate, end_date AS endDate, base_cents AS baseCents, monthly_cents AS monthlyCents, hourly_cents AS hourlyCents, hours_per_week AS hoursPerWeek,
   bonus_target_pct AS bonusTargetPct, signing_bonus_cents AS signingBonusCents, relocation_cents AS relocationCents, note,
   created_at AS createdAt, updated_at AS updatedAt FROM jobs`;
 const GRANT = `SELECT id, job_id AS jobId, kind, shares, value_cents AS valueCents, strike_cents AS strikeCents, grant_date AS grantDate,

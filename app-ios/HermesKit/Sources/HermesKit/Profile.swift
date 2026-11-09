@@ -28,6 +28,8 @@ public struct CreateJobBody: Codable, Sendable, Equatable {
     public var endDate: String?
     /// annual base pay
     public var baseCents: Int?
+    /// the pay as stated when it's monthly (an internship's often is)
+    public var monthlyCents: Int?
     public var hourlyCents: Int?
     public var hoursPerWeek: Double?
     public var bonusTargetPct: Double?

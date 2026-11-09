@@ -6,6 +6,7 @@
     "startDate": null,
     "endDate": null,
     "baseCents": 12000000,
+    "monthlyCents": null,
     "hourlyCents": null,
     "hoursPerWeek": null,
     "bonusTargetPct": null,

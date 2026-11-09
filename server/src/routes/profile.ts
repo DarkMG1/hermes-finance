@@ -14,10 +14,10 @@ import { isJpeg } from './receipts.ts';
 /** up to 24 pages; the app shrinks them to fit */
 const READ_MAX_BYTES = 8 * 1024 * 1024;
 
-const JOB_COLS = ['employer', 'title', 'status', 'start_date', 'end_date', 'base_cents', 'hourly_cents', 'hours_per_week', 'bonus_target_pct', 'signing_bonus_cents', 'relocation_cents', 'note'];
+const JOB_COLS = ['employer', 'title', 'status', 'start_date', 'end_date', 'base_cents', 'monthly_cents', 'hourly_cents', 'hours_per_week', 'bonus_target_pct', 'signing_bonus_cents', 'relocation_cents', 'note'];
 const GRANT_COLS = ['kind', 'shares', 'value_cents', 'strike_cents', 'grant_date', 'cliff_months', 'vest_months', 'vest_every_months'];
 const jobValues = (j: CreateJobBody) => [j.employer, j.title ?? null, j.status, j.startDate ?? null, j.endDate ?? null, j.baseCents ?? null,
-  j.hourlyCents ?? null, j.hoursPerWeek ?? null, j.bonusTargetPct ?? null, j.signingBonusCents ?? null, j.relocationCents ?? null, j.note ?? null];
+  j.monthlyCents ?? null, j.hourlyCents ?? null, j.hoursPerWeek ?? null, j.bonusTargetPct ?? null, j.signingBonusCents ?? null, j.relocationCents ?? null, j.note ?? null];
 const grantValues = (g: GrantBody) => [g.kind, g.shares ?? null, g.valueCents ?? null, g.strikeCents ?? null, g.grantDate, g.cliffMonths ?? 0, g.vestMonths, g.vestEveryMonths];
 const assign = (cols: string[]) => cols.map((c) => `${c} = ?`).join(', ');
 const pick = (o: object, keys: string[]) => Object.fromEntries(keys.map((k) => [k, (o as Record<string, unknown>)[k]]));

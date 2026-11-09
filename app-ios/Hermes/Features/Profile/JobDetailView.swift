@@ -148,8 +148,10 @@ struct JobDetailView: View {
         if let title = job.title { LabeledContent("Title", value: title) }
         if let start = job.startDate { LabeledContent("Start", value: DayText.display(start)) }
         if let end = job.endDate { LabeledContent("End", value: DayText.display(end)) }
-        if let base = job.baseCents { LabeledContent("Base pay a year") { MoneyText(cents: base, colored: false) } }
-        if let hourly = job.hourlyCents { LabeledContent("Hourly rate") { MoneyText(cents: hourly, colored: false) } }
+        let rates = [("Base pay a year", job.baseCents), ("Monthly salary", job.monthlyCents), ("Hourly rate", job.hourlyCents)]
+        ForEach(rates.compactMap { label, cents in cents.map { (label, $0) } }, id: \.0) { label, cents in
+            LabeledContent(label) { MoneyText(cents: cents, colored: false) }
+        }
         if let hours = job.hoursPerWeek { LabeledContent("Hours per week", value: hours.formatted()) }
         if let bonus = job.bonusTargetPct { LabeledContent("Bonus target", value: (bonus / 100).formatted(.percent)) }
         if let signing = job.signingBonusCents { LabeledContent("Signing bonus") { MoneyText(cents: signing, colored: false) } }
