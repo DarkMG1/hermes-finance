@@ -1,0 +1,21 @@
+{
+  "lots": [
+    {
+      "id": "buy-1",
+      "accountId": "acct-tax-brokerage",
+      "securityId": "sec-taxa",
+      "ticker": "SYNT",
+      "acquiredOn": "2025-10-01",
+      "quantity": 10,
+      "costCents": 100000,
+      "status": "known"
+    }
+  ],
+  "sales": [],
+  "methods": {
+    "acct-tax-brokerage": "fifo"
+  },
+  "inferred": {
+    "acct-tax-brokerage": true
+  }
+}

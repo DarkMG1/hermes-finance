@@ -613,6 +613,48 @@ export type LotEntryBody = z.infer<typeof LotEntryBody>;
 export const LotMethodBody = z.object({ method: z.enum(['fifo', 'hifo', 'specific']).nullable() }).strict();
 export type LotMethodBody = z.infer<typeof LotMethodBody>;
 
+export const Lot = z.object({
+  id: z.string(), accountId: Id, securityId: Id, ticker: z.string().nullable(), acquiredOn: DateStr.nullable(), quantity: z.number(), costCents: Cents,
+  status: z.enum(['known', 'entered', 'unverified']),
+});
+export type Lot = z.infer<typeof Lot>;
+export const Sale = z.object({
+  accountId: Id, securityId: Id, date: DateStr, quantity: z.number(), proceedsCents: Cents, costCents: Cents, acquiredOn: DateStr.nullable(),
+  term: z.enum(['short', 'long', 'unknown']), washDisallowedCents: Cents, taxable: z.boolean(),
+});
+export type Sale = z.infer<typeof Sale>;
+const LotMethod = z.enum(['fifo', 'hifo', 'specific']);
+export const TaxLots = z.object({ lots: z.array(Lot), sales: z.array(Sale), methods: z.record(z.string(), LotMethod), inferred: z.record(z.string(), z.boolean()) });
+export type TaxLots = z.infer<typeof TaxLots>;
+export const TaxLine = z.object({ key: z.string(), label: z.string(), cents: Cents, source: z.string(), assumption: z.string().optional() });
+export type TaxLine = z.infer<typeof TaxLine>;
+export const TaxReturnResult = z.object({
+  jurisdiction: z.string(), supported: z.boolean(), lines: z.array(TaxLine), taxCents: Cents, withheldCents: Cents, balanceCents: Cents,
+});
+export type TaxReturnResult = z.infer<typeof TaxReturnResult>;
+export const TaxAdvice = z.object({
+  kind: z.enum(['harvest_loss', 'roth_room', 'k401_room', 'education_credit', 'student_loan_interest', 'moving_expenses', 'estimated_payment', 'withholding_short', 'over_limit']),
+  title: z.string(), detail: z.string(), savingsCents: Cents.nullable(), dueDate: DateStr.nullable(), askPrompt: z.string(),
+});
+export type TaxAdvice = z.infer<typeof TaxAdvice>;
+export const TaxProjection = z.object({
+  year: z.number().int(), openYears: z.array(z.number().int()), asOf: DateStr, combinedBalanceCents: Cents, returns: z.array(TaxReturnResult), assumptions: z.array(z.string()),
+  figures: z.object({ federalYear: z.number().int(), fallback: z.boolean() }), waysToSave: z.array(TaxAdvice), headsUp: z.array(TaxAdvice),
+});
+export type TaxProjection = z.infer<typeof TaxProjection>;
+export const TaxWhatIfChange = z.object({
+  sell: z.array(z.object({ accountId: Id, securityId: Id, quantity: z.number().positive().max(1e12), lotIds: z.array(z.string()).optional() }).strict()).optional(),
+  extraWithholdingCents: Money.optional(), scenario: TaxScenarioFields.partial().strict().optional(),
+}).strict();
+export type TaxWhatIfChange = z.infer<typeof TaxWhatIfChange>;
+export const TaxWhatIfBody = z.object({ year: z.number().int().min(2000).max(2100), change: TaxWhatIfChange }).strict();
+export type TaxWhatIfBody = z.infer<typeof TaxWhatIfBody>;
+export const TaxWhatIf = z.object({ before: TaxProjection, after: TaxProjection, deltaCents: Cents, blocked: z.string().nullable(), sales: z.array(Sale) });
+export type TaxWhatIf = z.infer<typeof TaxWhatIf>;
+/** items only come with ?unlocked=1, so a locked Home shows a count. */
+export const TaxHeadsUp = z.object({ count: z.number().int(), items: z.array(TaxAdvice).optional() });
+export type TaxHeadsUp = z.infer<typeof TaxHeadsUp>;
+
 /** A job's W-4: step 1(c) filing status (single covers married filing separately), the step 2(c) box, step 3's total, steps 4(a)–(c)
  *  (the extra withholding is per pay period), and exempt. Only the latest applies, so a job has one. */
 const W4Fields = z.object({

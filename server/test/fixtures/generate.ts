@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ProfileReadResult } from '@hermes/shared';
 import { buildApp } from '../../src/app.ts';
@@ -202,6 +203,36 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   const lockedDetail = await get(`/v1/chats/${locked}`) as { messages: { id: string }[] };
   out['chat-detail-profile-locked'] = JSON.parse([locked, ...lockedDetail.messages.map((m) => m.id)]
     .reduce((t, id, i) => t.replaceAll(id, i ? `msg-${i}` : 'chat-2'), JSON.stringify(lockedDetail))) as unknown;
+  // tax projection: its own database, a synthetic state-figures file (XA flat, XB progressive), and a loss to harvest
+  const tax = makeTestDeps().deps;
+  const stateFile = join(tmpdir(), `hermes-fixture-state-${process.pid}.json`);
+  writeFileSync(stateFile, JSON.stringify({ 2026: {
+    XA: { model: 'flat', rate: 0.04, exemptionCents: 500000, dependentExemptionCents: 100000, source: 'synthetic XA' },
+    XB: { model: 'progressive_ratio', brackets: [[2000000, 0.02], [null, 0.05]], standardDeductionCents: 500000, exemptionCreditCents: 0, movingExpenses: true, supplementalRate: 0.05, source: 'synthetic XB' },
+  } }));
+  tax.config.stateTaxFile = stateFile;
+  const taxApp = buildApp(tax);
+  const taxSend = (method: 'POST' | 'PUT', url: string, payload: object) => taxApp.inject({ method, url, headers: { ...AUTH, 'idempotency-key': `fixture-tax-${method}-${url}-${JSON.stringify(payload).length}` }, payload });
+  const taxGet = async (url: string) => (await taxApp.inject({ method: 'GET', url, headers: AUTH })).json();
+  await taxSend('PUT', '/v1/profile', { state: 'XA', filingStatus: 'single', claimedAsDependent: false, fullTimeStudent: false });
+  const job = (await taxSend('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'current', startDate: '2025-01-01' })).json().id as string;
+  for (const payDate of ['2026-01-09', '2026-01-23', '2026-02-06', '2026-02-20', '2026-03-06']) {
+    await taxSend('POST', '/v1/pay-stubs', { jobId: job, payDate, grossCents: 200000, federalCents: 20000, stateCents: 8000, netCents: 172000, state: 'XA' });
+  }
+  seedAccount(tax.db, { id: 'acct-tax-brokerage', type: 'investment', subtype: 'brokerage', balanceCents: 80000 });
+  tax.db.prepare("INSERT INTO securities (id, name, ticker, type, is_cash, updated_at) VALUES ('sec-taxa', 'Synthetic Tax Fund', 'SYNT', 'etf', 0, 'x')").run();
+  tax.db.prepare("INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, updated_at) VALUES ('buy-1', 'acct-tax-brokerage', 'sec-taxa', '2025-10-01', 'buy', 'buy', 10, 100000, 'x')").run();
+  tax.db.prepare("INSERT INTO holdings (account_id, security_id, quantity, price_cents, value_cents, cost_basis_cents, updated_at) VALUES ('acct-tax-brokerage', 'sec-taxa', 10, 8000, 80000, 100000, 'x')").run();
+  await taxSend('PUT', '/v1/tax/inputs/2026', { studentLoanInterestCents: 50000, k401Cents: 200000 });
+  await taxSend('PUT', '/v1/tax/scenario/2027', { bonusCents: 1000000, moveTo: 'XB', moveDate: '2027-07-01' });
+  await taxSend('POST', '/v1/tax/roth-contributions', { date: '2026-02-01', amountCents: 100000, taxYear: 2026 });
+  out['tax-projection'] = await taxGet('/v1/tax/projection?year=2027');
+  out['tax-what-if'] = (await taxSend('POST', '/v1/tax/what-if', { year: 2026, change: { sell: [{ accountId: 'acct-tax-brokerage', securityId: 'sec-taxa', quantity: 10 }], extraWithholdingCents: 50000 } })).json();
+  out['tax-heads-up'] = await taxGet('/v1/tax/heads-up?unlocked=1');
+  out['tax-inputs'] = await taxGet('/v1/tax/inputs/2026');
+  out['tax-scenario'] = await taxGet('/v1/tax/scenario/2027');
+  out['tax-lots'] = await taxGet('/v1/tax/lots');
+
   // ids minted at runtime are replaced so the files are stable
   const text = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
   const normalise = (s: string) => s.replace(/"accountId": "[0-9a-f-]{36}"/g, '"accountId": "fixture-applecard"').replace(/"itemId": "[0-9a-f-]{36}"/g, '"itemId": "fixture-item"');

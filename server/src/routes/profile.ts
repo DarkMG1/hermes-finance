@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { CreateJobBody, GrantBody, LinkPayStubBody, LotEntryBody, LotMethodBody, PatchGrantBody, PatchJobBody, PatchPayStubBody, PatchRothContributionBody, PatchTaxFormBody, PayStubBody, ProfileReadBody, PutProfileBody,
-  RothContributionBody, StateW4Body, TaxFormBody, TaxInputsBody, TaxReturnBody, TaxScenarioBody, W4Body } from '@hermes/shared';
+  RothContributionBody, StateW4Body, TaxFormBody, TaxInputsBody, TaxReturnBody, TaxScenarioBody, TaxWhatIfBody, W4Body } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
@@ -10,6 +10,7 @@ import { readProfile } from '../profile-reader.ts';
 import { getForm, getGrant, getJob, getProfile, getReturn, getStateW4, getStub, getW4, linkable, listJobs, putProfile, stubMatches, taxYears, unassignedStubs } from '../profile.ts';
 import { getScenario, getTaxInputs, listRothContributions } from '../tax/inputs.ts';
 import { buildLots, preHistoryRemainder } from '../tax/lots.ts';
+import { openYears, project, whatIf } from '../tax/projection.ts';
 import { assertOwnerDate, parseBody } from '../validate.ts';
 import { isJpeg } from './receipts.ts';
 
@@ -397,6 +398,21 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       return { status: 200, body: { ok: true } };
     });
     return reply.code(r.status).send(r.body);
+  });
+
+  const taxYear = (v: unknown) => {
+    const year = v === undefined ? openYears(today())[0]! : Number(v);
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) throw new ApiError(400, 'INVALID_REQUEST', 'year: expected a year from 2000 to 2100', 'year');
+    return year;
+  };
+  app.get<{ Querystring: { year?: string } }>('/v1/tax/projection', async (req) => project(deps, taxYear(req.query.year), today()));
+  app.post('/v1/tax/what-if', async (req) => {
+    const b = parseBody(TaxWhatIfBody, req.body);
+    return whatIf(deps, taxYear(b.year), today(), b.change);
+  });
+  app.get<{ Querystring: { unlocked?: string } }>('/v1/tax/heads-up', async (req) => {
+    const items = openYears(today()).flatMap((y) => project(deps, y, today()).headsUp);
+    return req.query.unlocked === '1' ? { count: items.length, items } : { count: items.length };
   });
 
   app.get('/v1/tax/lots', async () => buildLots(db, today()));
