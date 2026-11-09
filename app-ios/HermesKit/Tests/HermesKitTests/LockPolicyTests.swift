@@ -13,3 +13,8 @@ import Testing
     #expect(!LockPolicy.shouldLock(enabled: false, awayFor: nil))
     #expect(!LockPolicy.shouldLock(enabled: false, awayFor: 3600))
 }
+
+@Test func anOpenFinancialProfileLocksOnEveryReturnEvenWithTheLockOff() {
+    #expect(LockPolicy.shouldLock(enabled: false, awayFor: 1, profileOpen: true))
+    #expect(LockPolicy.shouldLock(enabled: true, awayFor: 1, profileOpen: true))
+}

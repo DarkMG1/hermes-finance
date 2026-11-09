@@ -1,8 +1,9 @@
 import HermesKit
 import SwiftUI
 
-/// Face ID on every open, even with the app lock off. Nothing under it is built, or loaded, until then; going to the background
-/// tears it down again (its screens and their data) back to the unlock button.
+/// Face ID on every open, even with the app lock off. Nothing under it is built, or loaded, until then. While it's open the app
+/// lock asks for Face ID on any return from the background, so a read or an edit survives a trip to another app; without
+/// biometric hardware to lock with, going to the background tears it down again (its screens and their data).
 struct ProfileGate: View {
     @Environment(AppModel.self) private var model
     @Environment(AppLock.self) private var lock
@@ -33,7 +34,7 @@ struct ProfileGate: View {
         }
         .task { await unlock() }
         .onChange(of: scenePhase) { _, phase in
-            guard phase == .background else { return }
+            guard phase == .background, !(unlocked && AppLock.hasBiometricHardware) else { return }
             // security over the draft: the relock drops it, but the owner hears why it's gone
             error = unlocked && drafting ? "Locked — your unsaved draft was discarded" : nil
             unlocked = false
@@ -41,8 +42,10 @@ struct ProfileGate: View {
         .onChange(of: lock.canImportDocuments && model.openedPDF != nil) { _, waiting in
             if waiting, !unlocked { Task { await unlock() } }
         }
+        .onChange(of: unlocked) { _, open in lock.profileOpen = open }
         .onAppear { model.profileGateOpen = true }
         .onDisappear {
+            lock.profileOpen = false
             model.openedPDF = nil
             model.profileGateOpen = false
         }

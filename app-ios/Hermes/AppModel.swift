@@ -93,7 +93,8 @@ final class AppModel {
         people = []
     }
 
-    /// iOS's copy is gone once read, so nothing unredacted waits on disk behind Face ID; the pages wait in memory until the next background.
+    /// iOS's copy is gone once read, so nothing unredacted waits on disk behind Face ID; the pages wait in memory until the next
+    /// background, or behind the lock while the financial profile is open.
     func openPDF(_ url: URL) {
         Task {
             let read = await Task.detached(priority: .userInitiated) { PDFFile.pages(url) }.value
