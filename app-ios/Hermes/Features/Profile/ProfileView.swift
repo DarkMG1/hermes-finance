@@ -91,46 +91,49 @@ struct ProfileView: View {
                     }
                     Button("Discard", role: .destructive) { model.openedPDF = nil }
                 }
-            }
-            Section("About me") {
-                if let profile {
-                    Button { editingAboutMe = true } label: { ListRow(title: "About me", subtitle: Self.summary(profile)) }
-                        .foregroundStyle(Palette.text)
-                } else if error == nil {
-                    ProgressView().frame(maxWidth: .infinity)
+            } else {
+                Section("About me") {
+                    if let profile {
+                        Button { editingAboutMe = true } label: { ListRow(title: "About me", subtitle: Self.summary(profile)) }
+                            .foregroundStyle(Palette.text)
+                    } else if error == nil {
+                        ProgressView().frame(maxWidth: .infinity)
+                    }
                 }
-            }
-            if let jobs {
-                ForEach(Self.statuses, id: \.value) { status in
-                    let group = jobs.filter { $0.status == status.value }
-                    if !group.isEmpty {
-                        Section(status.label) {
-                            ForEach(group) { job in
-                                NavigationLink { JobDetailView(id: job.id) { await load() } } label: {
-                                    ListRow(title: job.employer ?? "Job", subtitle: job.title)
-                                }
-                                .deleteSwipe("Delete this job and its grants?") { client, key in
-                                    try await client.deleteJob(id: job.id, idempotencyKey: key)
-                                    await load()
+                if let jobs {
+                    ForEach(Self.statuses, id: \.value) { status in
+                        let group = jobs.filter { $0.status == status.value }
+                        if !group.isEmpty {
+                            Section(status.label) {
+                                ForEach(group) { job in
+                                    NavigationLink { JobDetailView(id: job.id) { await load() } } label: {
+                                        ListRow(title: job.employer ?? "Job", subtitle: job.title)
+                                    }
+                                    .deleteSwipe("Delete this job and its grants?") { client, key in
+                                        try await client.deleteJob(id: job.id, idempotencyKey: key)
+                                        await load()
+                                    }
                                 }
                             }
                         }
                     }
-                }
-                if jobs.isEmpty {
-                    Section("Jobs & offers") {
-                        Text("Add an offer letter with +.").textStyle(.subhead, color: Palette.secondaryText)
+                    if jobs.isEmpty {
+                        Section("Jobs & offers") {
+                            Text("Add an offer letter with +.").textStyle(.subhead, color: Palette.secondaryText)
+                        }
+                    }
+                    if !jobless.isEmpty {
+                        // saved before any job matched, or left when their job was deleted
+                        Section("Pay stubs without a job") {
+                            ForEach(jobless) {
+                                PayStubRow(stub: $0, fields: [ProfileDraftForm.stubJobField(jobs)] + ProfileDraftForm.stubFields) { await load() }
+                            }
+                        }
                     }
                 }
-                if !jobless.isEmpty {
-                    // saved before any job matched, or left when their job was deleted
-                    Section("Pay stubs without a job") {
-                        ForEach(jobless) { PayStubRow(stub: $0, fields: [ProfileDraftForm.stubJobField(jobs)] + ProfileDraftForm.stubFields) { await load() } }
-                    }
+                Section {
+                    NavigationLink { TaxYearsView() } label: { Text("Tax years") }
                 }
-            }
-            Section {
-                NavigationLink { TaxYearsView() } label: { Text("Tax years") }
             }
         }
         .themedForm()
