@@ -169,11 +169,13 @@ test('state withholding forms: one per job and state, replaced whole, listed by 
   assert.deepEqual([put.statusCode, put.json()], [200, { ...de4, state: 'CA', jobId: job.id, updatedAt: '2026-03-15T12:00:00.000Z' }]);
   assert.deepEqual((await send('PUT', `/v1/jobs/${job.id}/state-w4/CA`, de4, 'ca')).json(), put.json(), 'one write per Idempotency-Key');
   await send('PUT', `/v1/jobs/${job.id}/state-w4/NY`, { allowances: 2 });
+  assert.equal((await send('PUT', `/v1/jobs/${job.id}/state-w4/OR`, { additionalAllowances: 999 })).json().additionalAllowances, 999, 'a DE-4 often says 999 for no withholding');
+  await send('DELETE', `/v1/jobs/${job.id}/state-w4/OR`);
   const replaced = (await send('PUT', `/v1/jobs/${job.id}/state-w4/CA`, { filingStatus: 'married' })).json();
   assert.deepEqual([replaced.filingStatus, replaced.allowances, replaced.exempt], ['married', null, null], 'a new form replaces that state\'s old one');
   assert.deepEqual((await get(`/v1/jobs/${job.id}`)).json().stateW4s.map((w: { state: string; allowances: number | null }) => [w.state, w.allowances]),
     [['CA', null], ['NY', 2]]);
-  for (const [url, body, field] of [[`/v1/jobs/${job.id}/state-w4/ca`, {}, 'state'], [`/v1/jobs/${job.id}/state-w4/CA`, { allowances: -1 }, 'allowances'],
+  for (const [url, body, field] of [[`/v1/jobs/${job.id}/state-w4/ca`, {}, 'state'], [`/v1/jobs/${job.id}/state-w4/CA`, { allowances: -1 }, 'allowances'], [`/v1/jobs/${job.id}/state-w4/CA`, { additionalAllowances: 1000 }, 'additionalAllowances'],
     [`/v1/jobs/${job.id}/state-w4/CA`, { filingStatus: 'married_joint' }, 'filingStatus'], [`/v1/jobs/${job.id}/state-w4/CA`, { state: 'NY' }, undefined]] as const) {
     const r = await send('PUT', url, body);
     assert.deepEqual([r.statusCode, r.json().field], [400, field], url + JSON.stringify(body));

@@ -149,7 +149,7 @@ test('the Anthropic reader sends every page and one tool per kind, without forci
       pay_stub: { employer: 'SYNTHETIC EMPLOYER', payDate: '2026-03-13', grossCents: 420000, netCents: 'lots' },
       tax_form: { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER' }, tax_return: { year: 2025, jurisdiction: 'federal', refundCents: -5000 },
       w4: { filingStatus: 'single', multipleJobs: true, extraWithholdingCents: 2500, exempt: 'no', grossCents: 1 },
-      state_w4: { state: 'CA', filingStatus: 'married', allowances: 2, additionalAllowances: 'two', extraWithholdingCents: 1000 } }[kind];
+      state_w4: { state: 'CA', filingStatus: 'married', allowances: 'two', additionalAllowances: 999, extraWithholdingCents: 1000 } }[kind];
     const { deps, reader } = makeReader(async (_url, init) => {
       sent.push(JSON.parse(String(init!.body)));
       const one = { ...input, uncertain: ['grossCents'], extra: 'dropped' };
@@ -179,7 +179,7 @@ test('the Anthropic reader sends every page and one tool per kind, without forci
     if (kind === 'pay_stub') assert.match(content[2]!.text!, /otherDeductionsCents: the sum of every deduction and tax without its own field.*Gross minus all deductions plus otherPayCents must equal netCents/s);
     if (r.kind === 'tax_return') assert.deepEqual([r.draft.refundCents, r.draft.agiCents], [-5000, null]);
     if (kind === 'state_w4') assert.match(content[2]!.text!, /not the worksheets.*DE-4 line 1a.*line 1c.*DE-4 line 1b/s);
-    if (r.kind === 'state_w4') assert.deepEqual([r.draft.state, r.draft.filingStatus, r.draft.allowances, r.draft.additionalAllowances], ['CA', 'married', 2, null]);
+    if (r.kind === 'state_w4') assert.deepEqual([r.draft.state, r.draft.filingStatus, r.draft.allowances, r.draft.additionalAllowances], ['CA', 'married', null, 999]);
     if (r.kind === 'w4') assert.deepEqual([r.draft.filingStatus, r.draft.multipleJobs, r.draft.extraWithholdingCents, r.draft.exempt], ['single', true, 2500, null]);
     if (kind === 'w4') assert.match(content[2]!.text!, /multipleJobs: true when step 2\(c\) is checked.*extraWithholdingCents: steps 4\(a\), 4\(b\) and 4\(c\)/s);
   }
