@@ -232,6 +232,7 @@ extension ProfileKind {
         case .payStub: "Pay stub"
         case .offer: "Offer letter"
         case .w4: "W-4"
+        case .stateW4: "State withholding form"
         }
     }
 }
@@ -244,6 +245,7 @@ extension ProfileDraft {
         case .payStub: .payStub(PayStubBody(), employer: nil)
         case .offer: .offer(CreateJobBody(), grants: [])
         case .w4: .w4(W4Body(), employer: nil)
+        case .stateW4: .stateW4(StateW4Body(), employer: nil)
         }
     }
 }

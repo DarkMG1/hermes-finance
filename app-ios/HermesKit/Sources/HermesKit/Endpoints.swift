@@ -252,6 +252,17 @@ extension APIClient {
         try await send("DELETE", "/v1/jobs/\(jobId)/w4", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
     }
 
+    /// Replaces the job's form for `body.state`: what `body` leaves out is null.
+    public func putStateW4(jobId: String, body: StateW4Body, idempotencyKey: String) async throws -> StateW4Body {
+        var fields = try JSONDecoder().decode([String: JSONValue].self, from: JSONEncoder().encode(body))
+        fields.removeValue(forKey: "state")
+        return try await write("PUT", "/v1/jobs/\(jobId)/state-w4/\(body.state ?? "")", body: fields, key: idempotencyKey)
+    }
+
+    public func deleteStateW4(jobId: String, state: String, idempotencyKey: String) async throws {
+        try await send("DELETE", "/v1/jobs/\(jobId)/state-w4/\(state)", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
+    }
+
     public func createTaxForm(_ body: TaxFormBody, idempotencyKey: String) async throws -> TaxForm {
         try await write("POST", "/v1/tax-forms", body: body, key: idempotencyKey)
     }

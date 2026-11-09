@@ -66,6 +66,10 @@ const KINDS: Record<ProfileKind, [label: string, hints: string]> = {
   w4: ['W-4 form', "signedOn: the date signed. filingStatus: step 1(c), 'single' for single or married filing separately. multipleJobs: true when step 2(c) is checked. "
     + 'dependentsCents: the step 3 total. otherIncomeCents, deductionsCents, extraWithholdingCents: steps 4(a), 4(b) and 4(c). exempt: true when Exempt is written below step 4(c). '
     + 'employer: the employer name in the employers only section, if filled in.'],
+  state_w4: ['state withholding certificate (such as California DE-4)', "state: the 2-letter code of the state whose form this is. signedOn: the date signed. "
+    + "filingStatus: 'single', 'married' or 'head_of_household'. allowances: the regular withholding allowances. additionalAllowances: allowances for estimated "
+    + 'deductions, if the form has them. extraWithholdingCents: the additional amount withheld each pay period. exempt: true when exemption is claimed. '
+    + 'employer: the employer name, if filled in.'],
   offer: ['offer letter', 'baseCents: the annual base salary as stated, null for hourly pay or any letter without a yearly figure (never work one out). hourlyCents: the hourly rate as stated. hoursPerWeek: the weekly hours as stated (20 for 40 hours every 2 weeks). bonusTargetPct: a percent (15 for 15%). grants: each equity grant; vestMonths is the whole vesting length, vestEveryMonths the interval after the cliff.'],
 };
 

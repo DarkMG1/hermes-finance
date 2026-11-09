@@ -216,3 +216,21 @@ import Testing
     #expect(ClientError.api(status: 409, body: APIErrorBody(code: "DUPLICATE_STUB", message: "this pay stub is already saved")).message
         == "This pay stub is already saved")
 }
+
+@Test func aJobListsItsStateFormsAndAnOlderServerHasNone() async throws {
+    let de4 = try #require(try decode(JobDetail.self, "job").stateW4s.first)
+    #expect(de4.state == "CA" && de4.allowances == 1 && de4.filingStatus == "single" && de4.exempt == false)
+    var json = try #require(JSONSerialization.jsonObject(with: fixture("job")) as? [String: Any])
+    json.removeValue(forKey: "stateW4s")
+    #expect(try JSONDecoder().decode(JobDetail.self, from: JSONSerialization.data(withJSONObject: json)).stateW4s.isEmpty)
+    guard case .stateW4(let read, _) = try decode(ProfileReadResult.self, "profile-read-state-w4").draft else { Issue.record("not a state form"); return }
+    #expect(read.state == "CA" && read.allowances == 1)
+    let reply = Data(#"{"jobId":"job-1","state":"CA","allowances":2,"updatedAt":"x"}"#.utf8)
+    let transport = FakeTransport([.success(HTTPResponse(status: 200, body: reply))])
+    var body = StateW4Body()
+    body.state = "CA"
+    body.allowances = 2
+    _ = try await APIClient(baseURL: testBase, token: "t", transport: transport).putStateW4(jobId: "job-1", body: body, idempotencyKey: "k")
+    #expect(transport.requests.first?.url.path == "/v1/jobs/job-1/state-w4/CA")
+    #expect(transport.requests.first.flatMap { String(data: $0.body ?? Data(), encoding: .utf8) } == #"{"allowances":2}"#, "the state goes in the path")
+}

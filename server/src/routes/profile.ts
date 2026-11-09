@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { CreateJobBody, GrantBody, LinkPayStubBody, PatchGrantBody, PatchJobBody, PatchPayStubBody, PatchTaxFormBody, PayStubBody, ProfileReadBody, PutProfileBody,
-  TaxFormBody, TaxReturnBody, W4Body } from '@hermes/shared';
+  StateW4Body, TaxFormBody, TaxReturnBody, W4Body } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { readProfile } from '../profile-reader.ts';
-import { getForm, getGrant, getJob, getProfile, getReturn, getStub, getW4, linkable, listJobs, putProfile, stubMatches, taxYears, unassignedStubs } from '../profile.ts';
+import { getForm, getGrant, getJob, getProfile, getReturn, getStateW4, getStub, getW4, linkable, listJobs, putProfile, stubMatches, taxYears, unassignedStubs } from '../profile.ts';
 import { assertOwnerDate, parseBody } from '../validate.ts';
 import { isJpeg } from './receipts.ts';
 
@@ -176,6 +176,29 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   app.delete<{ Params: { id: string } }>('/v1/jobs/:id/w4', async (req, reply) => {
     const r = idempotentWrite(deps, req, () => {
       if (!db.prepare('DELETE FROM w4s WHERE job_id = ?').run(req.params.id).changes) throw notFound('W-4');
+      return { status: 200, body: { ok: true } };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+
+  // replaces the job's form for that state
+  app.put<{ Params: { id: string; state: string } }>('/v1/jobs/:id/state-w4/:state', async (req, reply) => {
+    const { state } = req.params;
+    if (!/^[A-Z]{2}$/.test(state)) throw new ApiError(400, 'INVALID_REQUEST', 'state: expected a 2-letter state code', 'state');
+    const w = parseBody(StateW4Body, req.body);
+    assertDates(w, ['signedOn']);
+    const r = idempotentWrite(deps, req, () => {
+      job(req.params.id);
+      db.prepare(`INSERT OR REPLACE INTO state_w4s (job_id, state, signed_on, filing_status, allowances, additional_allowances, extra_withholding_cents, exempt,
+        updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(req.params.id, state, w.signedOn ?? null, w.filingStatus ?? null, w.allowances ?? null,
+        w.additionalAllowances ?? null, w.extraWithholdingCents ?? null, w.exempt == null ? null : Number(w.exempt), deps.now().toISOString());
+      return { status: 200, body: getStateW4(db, req.params.id, state) };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+  app.delete<{ Params: { id: string; state: string } }>('/v1/jobs/:id/state-w4/:state', async (req, reply) => {
+    const r = idempotentWrite(deps, req, () => {
+      if (!db.prepare('DELETE FROM state_w4s WHERE job_id = ? AND state = ?').run(req.params.id, req.params.state).changes) throw notFound('state form');
       return { status: 200, body: { ok: true } };
     });
     return reply.code(r.status).send(r.body);

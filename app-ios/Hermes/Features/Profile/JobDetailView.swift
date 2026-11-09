@@ -11,6 +11,7 @@ struct JobDetailView: View {
     @State private var editing = false
     @State private var addingGrant = false
     @State private var addingW4 = false
+    @State private var addingStateW4 = false
 
     var body: some View {
         List {
@@ -39,7 +40,7 @@ struct JobDetailView: View {
                         }
                     }
                 }
-                Section("W-4") {
+                Section("Withholding") {
                     if let w4 = detail.w4 {
                         EditRow(title: "W-4", fields: ProfileDraftForm.w4Fields, original: w4,
                                 row: ListRow(title: Self.w4Title(w4), subtitle: Self.w4Detail(w4))) { body, key in
@@ -53,6 +54,21 @@ struct JobDetailView: View {
                     } else {
                         Button("Add W-4") { addingW4 = true }
                     }
+                    ForEach(detail.stateW4s, id: \.state) { form in
+                        EditRow(title: "State form", fields: ProfileDraftForm.stateW4Fields, original: form,
+                                row: ListRow(title: "\(form.state ?? "State") form", subtitle: Self.stateW4Detail(form))) { body, key in
+                            guard let client = model.client else { return }
+                            _ = try await client.putStateW4(jobId: id, body: body, idempotencyKey: key)
+                            // a changed state code is a different form: the old one goes
+                            if let old = form.state, old != body.state { try await client.deleteStateW4(jobId: id, state: old, idempotencyKey: key + "-old") }
+                            await load()
+                        }
+                        .deleteSwipe("Delete this state form?") { client, key in
+                            try await client.deleteStateW4(jobId: id, state: form.state ?? "", idempotencyKey: key)
+                            await load()
+                        }
+                    }
+                    Button("Add state form") { addingStateW4 = true }
                 }
                 if !detail.stubs.isEmpty {
                     Section("Pay stubs") { ForEach(detail.stubs) { PayStubRow(stub: $0) { await load() } } }
@@ -86,6 +102,12 @@ struct JobDetailView: View {
                 await load()
             }
         }
+        .sheet(isPresented: $addingStateW4) {
+            EditForm(title: "State form", fields: ProfileDraftForm.stateW4Fields, original: StateW4Body()) { body, key in
+                _ = try await model.client?.putStateW4(jobId: id, body: body, idempotencyKey: key)
+                await load()
+            }
+        }
         .sheet(isPresented: $addingW4) {
             EditForm(title: "W-4", fields: ProfileDraftForm.w4Fields, original: W4Body()) { body, key in
                 _ = try await model.client?.putW4(jobId: id, body: body, idempotencyKey: key)
@@ -104,6 +126,15 @@ struct JobDetailView: View {
         let parts = [
             w.signedOn.map { "Signed \(DayText.display($0))" },
             w.multipleJobs == true ? "Multiple jobs" : nil,
+            w.extraWithholdingCents.flatMap { $0 > 0 ? "\(Money.format($0)) extra a paycheck" : nil },
+        ].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private static func stateW4Detail(_ w: StateW4Body) -> String? {
+        let parts = [
+            w.exempt == true ? "Exempt" : nil,
+            w.allowances.map { $0 == 1 ? "1 allowance" : "\($0) allowances" },
             w.extraWithholdingCents.flatMap { $0 > 0 ? "\(Money.format($0)) extra a paycheck" : nil },
         ].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")

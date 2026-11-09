@@ -191,6 +191,8 @@ struct ProfileDraftForm: View {
             { grants = g.map { GrantRow(texts: DraftField.texts(Self.grantFields, $0)) }; return DraftField.texts(Self.jobFields, j) }()
         case .w4(let b, let e):
             { employer = e; return DraftField.texts(Self.w4Fields, b) }()
+        case .stateW4(let b, let e):
+            { employer = e; return DraftField.texts(Self.stateW4Fields, b) }()
         }
         self.employer = employer
         _texts = State(initialValue: texts)
@@ -233,6 +235,12 @@ struct ProfileDraftForm: View {
                     DraftFields(fields: Self.w4Fields, texts: $texts, uncertain: uncertain)
                 } footer: { Text("Replaces this job's W-4, if it has one.") }
                     .disabled(locked)
+            case .stateW4:
+                jobSection
+                Section {
+                    DraftFields(fields: Self.stateW4Fields, texts: $texts, uncertain: uncertain)
+                } footer: { Text("Replaces this job's form for that state, if it has one.") }
+                    .disabled(locked)
             case .offer:
                 Section("Offer") { DraftFields(fields: Self.jobFields, texts: $texts, uncertain: uncertain) }
                     .disabled(locked || savedJobId != nil)
@@ -264,8 +272,8 @@ struct ProfileDraftForm: View {
             }
             .listRowBackground(uncertain.contains("employer") ? Palette.loss.opacity(0.15) : nil)
             .accessibilityHint(uncertain.contains("employer") ? "Not sure the employer was read right; check it against the document" : "")
-            if let employer { Text("On the \(kind == .w4 ? "form" : "stub"): \(employer)").textStyle(.caption, color: Palette.secondaryText) }
-            if kind == .w4, jobId == nil { Text("Pick the job this W-4 is for.").textStyle(.caption, color: Palette.secondaryText) }
+            if let employer { Text("On the \(kind == .payStub ? "stub" : "form"): \(employer)").textStyle(.caption, color: Palette.secondaryText) }
+            if [.w4, .stateW4].contains(kind), jobId == nil { Text("Pick the job this form is for.").textStyle(.caption, color: Palette.secondaryText) }
             if let jobsError {
                 InlineError(message: jobsError)
                 Button("Try again") { Task { await loadJobs() } }
@@ -281,6 +289,7 @@ struct ProfileDraftForm: View {
         case .taxForm: DraftField.build(Self.formFields, texts, TaxFormBody()) != nil
         case .payStub: DraftField.build(Self.stubFields, texts, PayStubBody()).map { $0.balanceProblem == nil } ?? false
         case .w4: jobId != nil && DraftField.build(Self.w4Fields, texts, W4Body()) != nil
+        case .stateW4: jobId != nil && DraftField.build(Self.stateW4Fields, texts, StateW4Body()) != nil
         case .offer:
             DraftField.build(Self.jobFields, texts, CreateJobBody()) != nil
                 && grants.allSatisfy { DraftField.build(Self.grantFields, $0.texts, GrantBody()) != nil }
@@ -288,7 +297,7 @@ struct ProfileDraftForm: View {
     }
 
     private func loadJobs() async {
-        guard [.taxForm, .payStub, .w4].contains(kind), jobs.isEmpty, let client = model.client else { return }
+        guard [.taxForm, .payStub, .w4, .stateW4].contains(kind), jobs.isEmpty, let client = model.client else { return }
         jobsError = nil
         do {
             jobs = try await client.jobs()
@@ -330,9 +339,20 @@ struct ProfileDraftForm: View {
             // on to the deposits it matches
             stub = try await client.createPayStub(body, idempotencyKey: writes.key)
         case .offer: return try await writeOffer(client)
-        case .w4:
-            guard let jobId, let body = DraftField.build(Self.w4Fields, texts, W4Body()) else { return false }
+        case .w4, .stateW4: return try await writeWithholding(client)
+        }
+        return true
+    }
+
+    /// A W-4 or state form replaces the job's one (for that state).
+    private func writeWithholding(_ client: APIClient) async throws -> Bool {
+        guard let jobId else { return false }
+        if kind == .w4 {
+            guard let body = DraftField.build(Self.w4Fields, texts, W4Body()) else { return false }
             _ = try await client.putW4(jobId: jobId, body: body, idempotencyKey: writes.key)
+        } else {
+            guard let body = DraftField.build(Self.stateW4Fields, texts, StateW4Body()) else { return false }
+            _ = try await client.putStateW4(jobId: jobId, body: body, idempotencyKey: writes.key)
         }
         return true
     }
@@ -390,6 +410,18 @@ struct ProfileDraftForm: View {
         .init(key: "otherIncomeCents", label: "Other income (step 4a)", kind: .money(\.otherIncomeCents)),
         .init(key: "deductionsCents", label: "Deductions (step 4b)", kind: .money(\.deductionsCents)),
         .init(key: "extraWithholdingCents", label: "Extra withholding a paycheck (step 4c)", kind: .money(\.extraWithholdingCents)),
+        .init(key: "exempt", label: "Exempt", kind: .flag(\.exempt)),
+    ]
+
+    static let stateW4Fields: [DraftField<StateW4Body>] = [
+        .init(key: "state", label: "State code", kind: .code(\.state), required: true),
+        .init(key: "signedOn", label: "Date signed", kind: .date(\.signedOn)),
+        .init(key: "filingStatus", label: "Filing status", kind: .choice(\.filingStatus, [
+            ("single", "Single or married filing separately"), ("married", "Married"), ("head_of_household", "Head of household"),
+        ])),
+        .init(key: "allowances", label: "Allowances", kind: .whole(\.allowances)),
+        .init(key: "additionalAllowances", label: "Additional allowances for deductions", kind: .whole(\.additionalAllowances)),
+        .init(key: "extraWithholdingCents", label: "Extra withholding a paycheck", kind: .money(\.extraWithholdingCents)),
         .init(key: "exempt", label: "Exempt", kind: .flag(\.exempt)),
     ]
 
