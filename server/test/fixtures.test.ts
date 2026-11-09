@@ -47,6 +47,8 @@ test('fixtures satisfy the shared contract', async () => {
   const proj = TaxProjection.parse(f['tax-projection.json']);
   assert.deepEqual(proj.returns.map((r) => r.jurisdiction), ['federal', 'XA', 'XB']);
   assert.ok(proj.returns.every((r) => r.supported));
+  assert.ok(proj.returns[0]!.safeHarborCents! > 0 && proj.returns[0]!.unusedCarryover);
+  assert.ok(proj.assumptions.every((a) => !a.includes('25 projected paychecks')));
   assert.ok(TaxWhatIf.parse(f['tax-what-if.json']).sales.length > 0);
   TaxHeadsUp.parse(f['tax-heads-up.json']);
   TaxInputs.parse(f['tax-inputs.json']);

@@ -630,6 +630,7 @@ export const TaxLine = z.object({ key: z.string(), label: z.string(), cents: Cen
 export type TaxLine = z.infer<typeof TaxLine>;
 export const TaxReturnResult = z.object({
   jurisdiction: z.string(), supported: z.boolean(), lines: z.array(TaxLine), taxCents: Cents, withheldCents: Cents, balanceCents: Cents,
+  safeHarborCents: Cents.optional(), unusedCarryover: z.object({ shortCents: Cents, longCents: Cents }).optional(),
 });
 export type TaxReturnResult = z.infer<typeof TaxReturnResult>;
 export const TaxAdvice = z.object({

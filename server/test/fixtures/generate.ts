@@ -212,7 +212,12 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   } }));
   tax.config.stateTaxFile = stateFile;
   const taxApp = buildApp(tax);
-  const taxSend = (method: 'POST' | 'PUT', url: string, payload: object) => taxApp.inject({ method, url, headers: { ...AUTH, 'idempotency-key': `fixture-tax-${method}-${url}-${JSON.stringify(payload).length}` }, payload });
+  let taxN = 0;
+  const taxSend = async (method: 'POST' | 'PUT', url: string, payload: object) => {
+    const r = await taxApp.inject({ method, url, headers: { ...AUTH, 'idempotency-key': `fixture-tax-${(taxN += 1)}` }, payload });
+    if (r.statusCode >= 300) throw new Error(`tax fixture ${method} ${url}: ${r.body}`);
+    return r;
+  };
   const taxGet = async (url: string) => (await taxApp.inject({ method: 'GET', url, headers: AUTH })).json();
   await taxSend('PUT', '/v1/profile', { state: 'XA', filingStatus: 'single', claimedAsDependent: false, fullTimeStudent: false });
   const job = (await taxSend('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'current', startDate: '2025-01-01' })).json().id as string;

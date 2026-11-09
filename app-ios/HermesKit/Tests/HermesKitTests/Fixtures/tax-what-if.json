@@ -18,7 +18,7 @@
             "label": "Wages",
             "cents": 5000000,
             "source": "pay stubs and projected paychecks",
-            "assumption": "Includes pay on 25 projected paychecks (estimated); Pre-tax 401(k) contributions taken off gross pay"
+            "assumption": "Includes pay on 21 projected paychecks (estimated); Pre-tax 401(k) contributions taken off gross pay"
           },
           {
             "key": "studentLoanInterest",
@@ -61,7 +61,7 @@
             "label": "Federal tax withheld",
             "cents": 520000,
             "source": "pay stubs and projected paychecks",
-            "assumption": "Includes withholding on 25 projected paychecks (estimated)"
+            "assumption": "Includes withholding on 21 projected paychecks (estimated)"
           },
           {
             "key": "balance",
@@ -146,7 +146,7 @@
       }
     ],
     "assumptions": [
-      "SYNTHETIC EMPLOYER: future paychecks at the median gross of the last 3 stubs, every 14 days (assumed) through 2026-12-31",
+      "SYNTHETIC EMPLOYER: future paychecks at the median gross of the last 3 stubs, every 14 days through 2026-12-31",
       "No tuition entered: education credit not counted",
       "No scholarships entered",
       "Dividends after 2026-03-15 not projected",
@@ -180,7 +180,7 @@
             "label": "Wages",
             "cents": 5000000,
             "source": "pay stubs and projected paychecks",
-            "assumption": "Includes pay on 25 projected paychecks (estimated); Pre-tax 401(k) contributions taken off gross pay"
+            "assumption": "Includes pay on 21 projected paychecks (estimated); Pre-tax 401(k) contributions taken off gross pay"
           },
           {
             "key": "shortTermNet",
@@ -241,7 +241,7 @@
             "label": "Federal tax withheld",
             "cents": 570000,
             "source": "pay stubs and projected paychecks",
-            "assumption": "Includes withholding on 25 projected paychecks (estimated); Includes $500.00 extra withholding (what-if)"
+            "assumption": "Includes withholding on 21 projected paychecks (estimated); Includes $500.00 extra withholding (what-if)"
           },
           {
             "key": "balance",
@@ -326,7 +326,7 @@
       }
     ],
     "assumptions": [
-      "SYNTHETIC EMPLOYER: future paychecks at the median gross of the last 3 stubs, every 14 days (assumed) through 2026-12-31",
+      "SYNTHETIC EMPLOYER: future paychecks at the median gross of the last 3 stubs, every 14 days through 2026-12-31",
       "No tuition entered: education credit not counted",
       "No scholarships entered",
       "Dividends after 2026-03-15 not projected",

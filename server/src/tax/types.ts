@@ -6,6 +6,8 @@ export type ReturnResult = {
   jurisdiction: 'federal' | string; supported: boolean; lines: Line[]; taxCents: number; withheldCents: number;
   /** + refund, − owed */
   balanceCents: number;
+  /** federal only */
+  safeHarborCents?: number; unusedCarryover?: { shortCents: number; longCents: number };
 };
 
 export type Advice = {

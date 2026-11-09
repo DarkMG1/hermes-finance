@@ -213,7 +213,7 @@
     "Student and dependent status: assumes the same as this year",
     "Scenario: moving to XB on 2027-07-01",
     "2026 XA figures used for 2027 until published",
-    "SYNTHETIC EMPLOYER: future paychecks at the median gross of the last 3 stubs, every 14 days (assumed) through 2027-12-31",
+    "SYNTHETIC EMPLOYER: future paychecks at the median gross of the last 3 stubs, every 14 days through 2027-12-31",
     "SYNTHETIC EMPLOYER: bonus from the scenario paid in December, withheld at the supplemental rate",
     "No 401(k) contributions entered for 2027",
     "No tuition entered: education credit not counted",
