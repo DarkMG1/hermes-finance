@@ -172,6 +172,8 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   await app.inject({ method: 'PUT', url: '/v1/profile', headers: { ...AUTH, 'idempotency-key': 'fixture-profile' },
     payload: { state: 'CA', filingStatus: 'single', birthYear: 2000, dependents: 0, retirementPct: 6, retirementKind: 'pre_tax', hsa: true } });
   out.profile = await get('/v1/profile');
+  await app.inject({ method: 'PUT', url: '/v1/jobs/job-1/w4', headers: { ...AUTH, 'idempotency-key': 'fixture-w4' },
+    payload: { signedOn: '2026-01-05', filingStatus: 'single', multipleJobs: false, dependentsCents: 0, extraWithholdingCents: 2500, exempt: false } });
   out.job = await get('/v1/jobs/job-1');
   out['tax-years'] = await get('/v1/tax-years');
   out['transaction-pay-stub'] = await get('/v1/transactions/txn-2');
@@ -182,9 +184,12 @@ export async function buildFixtures(): Promise<Record<string, string>> {
     tax_return: [{ year: 2025, jurisdiction: 'federal', filingStatus: 'single', totalIncomeCents: 6520000, totalTaxCents: 650000, refundCents: 150000 }, ['agiCents']],
     tax_form: [{ year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 6500000, federalWithheldCents: 800000, state: 'CA' }, ['state']],
     pay_stub: [{ employer: 'SYNTHETIC EMPLOYER', payDate: '2026-03-13', grossCents: 420000, federalCents: 50000, netCents: 370000 }, ['grossCents']],
+    w4: [{ employer: 'SYNTHETIC EMPLOYER', signedOn: '2026-01-05', filingStatus: 'single', multipleJobs: true, extraWithholdingCents: 2500, exempt: false }, ['multipleJobs']],
     offer: [{ employer: 'SYNTHETIC EMPLOYER', title: 'Synthetic Engineer', baseCents: 12000000, grants: [{ kind: 'rsu', shares: 400, grantDate: '2026-06-01', cliffMonths: 12, vestMonths: 48, vestEveryMonths: 3 }] }, ['baseCents']],
   } as const)) {
-    profileReader.next = ProfileReadResult.parse({ kind, draft, uncertain }) as ProfileReadOutput;
+    // a PDF of two pay stubs
+    const stubs = kind === 'pay_stub' && { stubs: [{ draft, uncertain }, { draft: { ...draft, payDate: '2026-03-27', grossCents: 410000, netCents: 360000 }, uncertain: [] }] };
+    profileReader.next = ProfileReadResult.parse({ kind, draft, uncertain, ...stubs }) as ProfileReadOutput;
     out[`profile-read-${kind.replace('_', '-')}`] = await post('/v1/profile/read', { kind, pages: [page] });
   }
   // an answer that read the profile, read back without the profile unlocked

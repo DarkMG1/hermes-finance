@@ -18,5 +18,47 @@
   },
   "uncertain": [
     "grossCents"
+  ],
+  "stubs": [
+    {
+      "draft": {
+        "payDate": "2026-03-13",
+        "periodStart": null,
+        "periodEnd": null,
+        "grossCents": 420000,
+        "federalCents": 50000,
+        "stateCents": null,
+        "socialSecurityCents": null,
+        "medicareCents": null,
+        "retirementCents": null,
+        "otherDeductionsCents": null,
+        "otherPayCents": null,
+        "netCents": 370000,
+        "ytdGrossCents": null,
+        "employer": "SYNTHETIC EMPLOYER"
+      },
+      "uncertain": [
+        "grossCents"
+      ]
+    },
+    {
+      "draft": {
+        "payDate": "2026-03-27",
+        "periodStart": null,
+        "periodEnd": null,
+        "grossCents": 410000,
+        "federalCents": 50000,
+        "stateCents": null,
+        "socialSecurityCents": null,
+        "medicareCents": null,
+        "retirementCents": null,
+        "otherDeductionsCents": null,
+        "otherPayCents": null,
+        "netCents": 360000,
+        "ytdGrossCents": null,
+        "employer": "SYNTHETIC EMPLOYER"
+      },
+      "uncertain": []
+    }
   ]
 }

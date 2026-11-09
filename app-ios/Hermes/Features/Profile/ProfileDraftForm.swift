@@ -145,8 +145,12 @@ struct ProfileDraftForm: View {
     @Environment(\.dismiss) private var dismiss
     let kind: ProfileKind
     let uncertain: Set<String>
-    /// the employer printed on a pay stub
+    /// the employer printed on a pay stub or W-4
     private let employer: String?
+    /// which of several pay stubs read off one file this is, and how many
+    private let step: (Int, Int)?
+    /// on to the next of those stubs, with the job picked on this one
+    private let next: ((String?) -> Void)?
 
     private struct GrantRow: Identifiable {
         let id = UUID()
@@ -166,9 +170,13 @@ struct ProfileDraftForm: View {
     @State private var savedGrants = 0
     @State private var stub: PayStub?
 
-    init(kind: ProfileKind, draft: ProfileDraft, uncertain: Set<String>) {
+    init(kind: ProfileKind, draft: ProfileDraft, uncertain: Set<String>, step: (Int, Int)? = nil, jobId: String? = nil,
+         next: ((String?) -> Void)? = nil) {
         self.kind = kind
         self.uncertain = uncertain
+        self.step = step
+        self.next = next
+        _jobId = State(initialValue: jobId)
         var employer: String?
         var grants: [GrantRow] = []
         let texts: [String: String] = switch draft {
@@ -178,6 +186,8 @@ struct ProfileDraftForm: View {
             { employer = e; return DraftField.texts(Self.stubFields, b) }()
         case .offer(let j, let g):
             { grants = g.map { GrantRow(texts: DraftField.texts(Self.grantFields, $0)) }; return DraftField.texts(Self.jobFields, j) }()
+        case .w4(let b, let e):
+            { employer = e; return DraftField.texts(Self.w4Fields, b) }()
         }
         self.employer = employer
         _texts = State(initialValue: texts)
@@ -185,13 +195,19 @@ struct ProfileDraftForm: View {
     }
 
     var body: some View {
-        if let stub { PayStubLinkSheet(stub: stub, header: "Saved. Which deposits are this paycheck? Close to link it later.") } else { form }
+        if let stub {
+            PayStubLinkSheet(stub: stub, header: "Saved. Which deposits are this paycheck? Close to link it later.",
+                             onClose: next.map { next in { next(jobId) } })
+        } else {
+            form
+        }
     }
 
     private var locked: Bool { writes.unresolved || busy }
 
     private var form: some View {
-        Sheet(title: kind.title, canSave: !busy && built, busy: busy, unresolved: writes.unresolved, onCancel: { dismiss() },
+        Sheet(title: step.map { "\(kind.title) \($0.0) of \($0.1)" } ?? kind.title, canSave: !busy && built, busy: busy, unresolved: writes.unresolved,
+              onCancel: { dismiss() },
               onSave: { Task { await save() } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             switch kind {
             case .taxReturn:
@@ -205,6 +221,12 @@ struct ProfileDraftForm: View {
                 if let problem = DraftField.build(Self.stubFields, texts, PayStubBody())?.balanceProblem {
                     Section { Text(problem).textStyle(.caption, color: Palette.loss) }
                 }
+            case .w4:
+                jobSection
+                Section {
+                    DraftFields(fields: Self.w4Fields, texts: $texts, uncertain: uncertain)
+                } footer: { Text("Replaces this job's W-4, if it has one.") }
+                    .disabled(locked)
             case .offer:
                 Section("Offer") { DraftFields(fields: Self.jobFields, texts: $texts, uncertain: uncertain) }
                     .disabled(locked || savedJobId != nil)
@@ -224,6 +246,7 @@ struct ProfileDraftForm: View {
                 }
             }
             if let error { Section { InlineError(message: error) } }
+            if let next { Section { Button("Skip this pay stub") { next(jobId) }.disabled(locked) } }
         }
         .task { await loadJobs() }
     }
@@ -236,7 +259,8 @@ struct ProfileDraftForm: View {
             }
             .listRowBackground(uncertain.contains("employer") ? Palette.loss.opacity(0.15) : nil)
             .accessibilityHint(uncertain.contains("employer") ? "Not sure the employer was read right; check it against the document" : "")
-            if let employer { Text("On the stub: \(employer)").textStyle(.caption, color: Palette.secondaryText) }
+            if let employer { Text("On the \(kind == .w4 ? "form" : "stub"): \(employer)").textStyle(.caption, color: Palette.secondaryText) }
+            if kind == .w4, jobId == nil { Text("Pick the job this W-4 is for.").textStyle(.caption, color: Palette.secondaryText) }
             if let jobsError {
                 InlineError(message: jobsError)
                 Button("Try again") { Task { await loadJobs() } }
@@ -251,6 +275,7 @@ struct ProfileDraftForm: View {
         case .taxReturn: DraftField.build(Self.returnFields, texts, TaxReturnBody()) != nil
         case .taxForm: DraftField.build(Self.formFields, texts, TaxFormBody()) != nil
         case .payStub: DraftField.build(Self.stubFields, texts, PayStubBody()).map { $0.balanceProblem == nil } ?? false
+        case .w4: jobId != nil && DraftField.build(Self.w4Fields, texts, W4Body()) != nil
         case .offer:
             DraftField.build(Self.jobFields, texts, CreateJobBody()) != nil
                 && grants.allSatisfy { DraftField.build(Self.grantFields, $0.texts, GrantBody()) != nil }
@@ -258,11 +283,11 @@ struct ProfileDraftForm: View {
     }
 
     private func loadJobs() async {
-        guard kind == .taxForm || kind == .payStub, jobs.isEmpty, let client = model.client else { return }
+        guard [.taxForm, .payStub, .w4].contains(kind), jobs.isEmpty, let client = model.client else { return }
         jobsError = nil
         do {
             jobs = try await client.jobs()
-            if jobId == nil { jobId = Job.suggested(for: kind == .payStub ? employer : texts["payer"], in: jobs)?.id }
+            if jobId == nil { jobId = Job.suggested(for: kind == .taxForm ? texts["payer"] : employer, in: jobs)?.id }
         } catch {
             jobsError = "Couldn't load your jobs: \(errorMessage(error))"
         }
@@ -300,6 +325,9 @@ struct ProfileDraftForm: View {
             // on to the deposits it matches
             stub = try await client.createPayStub(body, idempotencyKey: writes.key)
         case .offer: return try await writeOffer(client)
+        case .w4:
+            guard let jobId, let body = DraftField.build(Self.w4Fields, texts, W4Body()) else { return false }
+            _ = try await client.putW4(jobId: jobId, body: body, idempotencyKey: writes.key)
         }
         return true
     }
@@ -343,6 +371,21 @@ struct ProfileDraftForm: View {
         .init(key: "refundCents", label: "Refund (negative when owed)", kind: .money(\.refundCents, signed: true)),
         .init(key: "capitalGainsCents", label: "Capital gains (negative for a loss)", kind: .money(\.capitalGainsCents, signed: true)),
         .init(key: "capitalLossCarryoverCents", label: "Capital loss carryover", kind: .money(\.capitalLossCarryoverCents)),
+    ]
+
+    static let w4Statuses: [(value: String, label: String)] = [
+        ("single", "Single or married filing separately"), ("married_joint", "Married filing jointly"), ("head_of_household", "Head of household"),
+    ]
+
+    static let w4Fields: [DraftField<W4Body>] = [
+        .init(key: "signedOn", label: "Date signed", kind: .date(\.signedOn)),
+        .init(key: "filingStatus", label: "Filing status (step 1c)", kind: .choice(\.filingStatus, w4Statuses)),
+        .init(key: "multipleJobs", label: "Multiple jobs (step 2c)", kind: .flag(\.multipleJobs)),
+        .init(key: "dependentsCents", label: "Dependents (step 3)", kind: .money(\.dependentsCents)),
+        .init(key: "otherIncomeCents", label: "Other income (step 4a)", kind: .money(\.otherIncomeCents)),
+        .init(key: "deductionsCents", label: "Deductions (step 4b)", kind: .money(\.deductionsCents)),
+        .init(key: "extraWithholdingCents", label: "Extra withholding a paycheck (step 4c)", kind: .money(\.extraWithholdingCents)),
+        .init(key: "exempt", label: "Exempt", kind: .flag(\.exempt)),
     ]
 
     static let formKinds: [(value: String, label: String)] = [
@@ -415,6 +458,8 @@ struct PayStubLinkSheet: View {
     @Environment(\.dismiss) private var dismiss
     let stub: PayStub
     var header = "Which deposits are this paycheck?"
+    /// instead of closing the sheet, as when more stubs read off the same file come next
+    var onClose: (() -> Void)?
     @State private var matches: PayStubMatches?
     @State private var matchesError: String?
     @State private var selected: Set<String> = []
@@ -426,7 +471,7 @@ struct PayStubLinkSheet: View {
         let net = stub.netCents ?? 0
         let total = matches?.deposits.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.amountCents } ?? 0
         Sheet(title: "Link deposit", saveTitle: "Link", canSave: !busy && !selected.isEmpty && total == net, busy: busy, unresolved: writes.unresolved,
-              dirty: false, onCancel: { dismiss() }, onSave: { Task { await link() } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
+              dirty: false, onCancel: { close() }, onSave: { Task { await link() } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
             Section {
                 if let matches {
                     if matches.deposits.isEmpty {
@@ -463,6 +508,8 @@ struct PayStubLinkSheet: View {
         .task { await loadMatches() }
     }
 
+    private func close() { if let onClose { onClose() } else { dismiss() } }
+
     private func loadMatches() async {
         guard matches == nil, let client = model.client else { return }
         matchesError = nil
@@ -484,7 +531,7 @@ struct PayStubLinkSheet: View {
             let ids = matches?.deposits.map(\.id).filter(selected.contains) ?? []
             _ = try await client.linkPayStub(id: stub.id, transactionIds: ids, idempotencyKey: writes.key)
             writes.didSucceed()
-            dismiss()
+            close()
         } catch {
             writes.didFail(error)
             self.error = writes.unresolved ? "Couldn't confirm the link. Tap Link to retry; it won't be applied twice." : errorMessage(error)

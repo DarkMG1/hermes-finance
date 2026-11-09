@@ -573,8 +573,21 @@ export const TaxYears = z.object({
 });
 export type TaxYears = z.infer<typeof TaxYears>;
 
+/** A job's W-4: step 1(c) filing status (single covers married filing separately), the step 2(c) box, step 3's total, steps 4(a)–(c)
+ *  (the extra withholding is per pay period), and exempt. Only the latest applies, so a job has one. */
+const W4Fields = z.object({
+  signedOn: DateInput.nullable(), filingStatus: z.enum(['single', 'married_joint', 'head_of_household']).nullable(), multipleJobs: z.boolean().nullable(),
+  dependentsCents: Money.nullable(), otherIncomeCents: Money.nullable(), deductionsCents: Money.nullable(), extraWithholdingCents: Money.nullable(),
+  exempt: z.boolean().nullable(),
+});
+export const W4 = W4Fields.extend({ jobId: Id, updatedAt: z.string() });
+export type W4 = z.infer<typeof W4>;
+/** Replaces the job's W-4: a left-out field is null. */
+export const W4Body = W4Fields.partial().strict();
+export type W4Body = z.infer<typeof W4Body>;
+
 export const JobDetail = Job.extend({
-  grants: z.array(EquityGrant), nextVests: z.array(VestEvent), stubs: z.array(PayStub), forms: z.array(TaxForm),
+  grants: z.array(EquityGrant), nextVests: z.array(VestEvent), stubs: z.array(PayStub), forms: z.array(TaxForm), w4: W4.nullable(),
 });
 export type JobDetail = z.infer<typeof JobDetail>;
 
@@ -585,20 +598,24 @@ export const ProfileDrafts = {
   tax_return: draft(TaxReturnFields),
   tax_form: draft(TaxFormFields.omit({ jobId: true })),
   pay_stub: draft(PayStubFields.omit({ jobId: true }).extend({ employer: JobFields.shape.employer })),
+  w4: draft(W4Fields.extend({ employer: JobFields.shape.employer })),
   offer: draft(JobFields.omit({ status: true })).extend({ grants: z.array(draft(GrantFields).nullable().catch(null)).default([]).catch([])
     .transform((g) => g.filter((x) => x !== null).slice(0, 20)) }),
 };
-export const ProfileKind = z.enum(['tax_return', 'tax_form', 'pay_stub', 'offer']);
+export const ProfileKind = z.enum(['tax_return', 'tax_form', 'pay_stub', 'offer', 'w4']);
 export type ProfileKind = z.infer<typeof ProfileKind>;
-/** pages are base64 JPEGs; the whole body is at most 3 MB */
-export const ProfileReadBody = z.object({ kind: ProfileKind, pages: z.array(z.string().min(1)).min(1).max(8) }).strict();
+/** pages are base64 JPEGs; the whole body is at most 8 MB */
+export const ProfileReadBody = z.object({ kind: ProfileKind, pages: z.array(z.string().min(1)).min(1).max(24) }).strict();
 export type ProfileReadBody = z.infer<typeof ProfileReadBody>;
 /** field names Claude is unsure of */
 export const ProfileUncertain = z.array(z.string().max(100)).max(100).default([]).catch([]);
 export const ProfileReadResult = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('tax_return'), draft: ProfileDrafts.tax_return, uncertain: ProfileUncertain }),
   z.object({ kind: z.literal('tax_form'), draft: ProfileDrafts.tax_form, uncertain: ProfileUncertain }),
-  z.object({ kind: z.literal('pay_stub'), draft: ProfileDrafts.pay_stub, uncertain: ProfileUncertain }),
+  /** stubs: every pay stub in the pages, in order; draft and uncertain are the first one's (what servers before 2.2.1 sent alone) */
+  z.object({ kind: z.literal('pay_stub'), draft: ProfileDrafts.pay_stub, uncertain: ProfileUncertain,
+    stubs: z.array(z.object({ draft: ProfileDrafts.pay_stub, uncertain: ProfileUncertain })).min(1) }),
   z.object({ kind: z.literal('offer'), draft: ProfileDrafts.offer, uncertain: ProfileUncertain }),
+  z.object({ kind: z.literal('w4'), draft: ProfileDrafts.w4, uncertain: ProfileUncertain }),
 ]);
 export type ProfileReadResult = z.infer<typeof ProfileReadResult>;

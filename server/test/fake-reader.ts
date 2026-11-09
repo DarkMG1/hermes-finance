@@ -17,8 +17,7 @@ export class FakeReader implements ReceiptReader {
 }
 
 export class FakeProfileReader implements ProfileReader {
-  next: ProfileReadOutput | Error = { kind: 'pay_stub', uncertain: ['stateCents'], model: 'fake-model',
-    draft: ProfileDrafts.pay_stub.parse({ employer: 'SYNTHETIC EMPLOYER', payDate: '2026-03-13', grossCents: 420000, federalCents: 50000, netCents: 300000 }) };
+  next: ProfileReadOutput | Error = stubRead([{ employer: 'SYNTHETIC EMPLOYER', payDate: '2026-03-13', grossCents: 420000, federalCents: 50000, netCents: 300000 }], ['stateCents']);
   calls: { kind: ProfileKind; pages: Buffer[] }[] = [];
   /** The read waits for this, e.g. to hold the busy guard. */
   hold?: Promise<unknown>;
@@ -30,3 +29,9 @@ export class FakeProfileReader implements ProfileReader {
     return this.next;
   }
 }
+
+/** A pay stub read of these stubs, each unsure of `uncertain`. */
+export const stubRead = (stubs: Record<string, unknown>[], uncertain: string[] = []): Extract<ProfileReadOutput, { kind: 'pay_stub' }> => {
+  const all = stubs.map((s) => ({ draft: ProfileDrafts.pay_stub.parse(s), uncertain }));
+  return { kind: 'pay_stub', ...all[0]!, stubs: all, model: 'fake-model' };
+};

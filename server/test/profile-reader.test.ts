@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ProfileDrafts } from '@hermes/shared';
+import { ProfileDrafts, ProfileReadResult } from '@hermes/shared';
 import { buildApp } from '../src/app.ts';
 import { createClaude } from '../src/chat/anthropic.ts';
 import { createAnthropicProfileReader, scrubIdentifiers } from '../src/profile-reader.ts';
 import { ReaderError } from '../src/receipt-reader.ts';
+import { stubRead } from './fake-reader.ts';
 import { AUTH, makeTestDeps } from './helpers.ts';
 
 const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
@@ -38,12 +39,12 @@ test('a read returns the draft with identifiers blanked and stores nothing', asy
   assert.deepEqual(profileReader.calls[0], { kind: 'tax_form', pages: [JPEG, JPEG] });
 });
 
-test('the body is checked: kind, 1 to 8 JPEG pages, at most 3 MB', async () => {
+test('the body is checked: kind, 1 to 24 JPEG pages, at most 8 MB', async () => {
   const { read, profileReader } = setup();
   for (const [payload, field] of [
     [{ kind: 'passport', pages: [PAGE] }, 'kind'],
     [{ kind: 'offer', pages: [] }, 'pages'],
-    [{ kind: 'offer', pages: Array(9).fill(PAGE) }, 'pages'],
+    [{ kind: 'offer', pages: Array(25).fill(PAGE) }, 'pages'],
     [{ kind: 'offer', pages: [PAGE, Buffer.from('not a jpeg').toString('base64')] }, 'pages.1'],
     [{ kind: 'offer', pages: [PAGE], extra: 1 }, undefined],
   ] as const) {
@@ -51,11 +52,12 @@ test('the body is checked: kind, 1 to 8 JPEG pages, at most 3 MB', async () => {
     assert.equal(res.statusCode, 400, JSON.stringify(payload));
     assert.equal(res.json().field, field);
   }
-  const big = await read({ kind: 'offer', pages: [Buffer.concat([JPEG, Buffer.alloc(2_400_000)]).toString('base64')] });
+  const big = await read({ kind: 'offer', pages: [Buffer.concat([JPEG, Buffer.alloc(6_400_000)]).toString('base64')] });
   assert.equal(big.statusCode, 413);
-  const fits = await read({ kind: 'offer', pages: [Buffer.concat([JPEG, Buffer.alloc(2_100_000)]).toString('base64')] });
+  const fits = await read({ kind: 'offer', pages: [Buffer.concat([JPEG, Buffer.alloc(5_900_000)]).toString('base64')] });
   assert.equal(fits.statusCode, 200);
-  assert.equal(profileReader.calls.length, 1);
+  assert.equal((await read({ kind: 'offer', pages: Array(24).fill(PAGE) })).statusCode, 200);
+  assert.equal(profileReader.calls.length, 2);
 });
 
 test('reader errors map to 503, 402, 422 and 502', async () => {
@@ -139,16 +141,18 @@ test('an offer read leaves pay it does not state blank instead of zero, and asks
 });
 
 test('the Anthropic reader sends every page and one tool per kind, without forcing it, and records profile usage', async () => {
-  for (const kind of ['tax_return', 'tax_form', 'pay_stub', 'offer'] as const) {
+  for (const kind of ['tax_return', 'tax_form', 'pay_stub', 'offer', 'w4'] as const) {
     const sent: { model: string; tool_choice?: unknown; tools: { name: string; input_schema: { properties: Record<string, unknown> } }[];
       messages: { content: { type: string; text?: string; source?: { type: string; media_type: string; data: string } }[] }[] }[] = [];
     const input = { offer: { employer: 'SYNTHETIC EMPLOYER', baseCents: 12000000,
       grants: [{ kind: 'rsu', shares: 400, grantDate: '2026-01-15', vestMonths: 48 }, 'junk', ...Array.from({ length: 20 }, (_, i) => ({ shares: i + 1 }))] },
       pay_stub: { employer: 'SYNTHETIC EMPLOYER', payDate: '2026-03-13', grossCents: 420000, netCents: 'lots' },
-      tax_form: { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER' }, tax_return: { year: 2025, jurisdiction: 'federal', refundCents: -5000 } }[kind];
+      tax_form: { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER' }, tax_return: { year: 2025, jurisdiction: 'federal', refundCents: -5000 },
+      w4: { filingStatus: 'single', multipleJobs: true, extraWithholdingCents: 2500, exempt: 'no', grossCents: 1 } }[kind];
     const { deps, reader } = makeReader(async (_url, init) => {
       sent.push(JSON.parse(String(init!.body)));
-      return reply([{ type: 'text', text: 'Reading.' }, { type: 'tool_use', name: `record_${kind}`, input: { ...input, uncertain: ['grossCents'], extra: 'dropped' } }])();
+      const one = { ...input, uncertain: ['grossCents'], extra: 'dropped' };
+      return reply([{ type: 'text', text: 'Reading.' }, { type: 'tool_use', name: `record_${kind}`, input: kind === 'pay_stub' ? { stubs: [one] } : one }])();
     });
     const r = await reader.read(kind, [JPEG, Buffer.from([0xff, 0xd8, 0xff, 9])]);
     assert.equal(sent.length, 1);
@@ -156,7 +160,7 @@ test('the Anthropic reader sends every page and one tool per kind, without forci
     assert.equal(body.model, 'claude-sonnet-5-5');
     assert.equal(body.tool_choice, undefined);
     assert.deepEqual(body.tools.map((t) => t.name), [`record_${kind}`]);
-    assert.ok('uncertain' in body.tools[0]!.input_schema.properties);
+    assert.ok((kind === 'pay_stub' ? 'stubs' : 'uncertain') in body.tools[0]!.input_schema.properties);
     const content = body.messages[0]!.content;
     assert.deepEqual(content.map((c) => c.type), ['image', 'image', 'text']);
     assert.deepEqual(content[0]!.source, { type: 'base64', media_type: 'image/jpeg', data: JPEG.toString('base64') });
@@ -173,7 +177,37 @@ test('the Anthropic reader sends every page and one tool per kind, without forci
     // the stub balances only when every other deduction sums into one field
     if (kind === 'pay_stub') assert.match(content[2]!.text!, /otherDeductionsCents: the sum of every deduction and tax without its own field.*Gross minus all deductions plus otherPayCents must equal netCents/s);
     if (r.kind === 'tax_return') assert.deepEqual([r.draft.refundCents, r.draft.agiCents], [-5000, null]);
+    if (r.kind === 'w4') assert.deepEqual([r.draft.filingStatus, r.draft.multipleJobs, r.draft.extraWithholdingCents, r.draft.exempt], ['single', true, 2500, null]);
+    if (kind === 'w4') assert.match(content[2]!.text!, /multipleJobs: true when step 2\(c\) is checked.*extraWithholdingCents: steps 4\(a\), 4\(b\) and 4\(c\)/s);
   }
+});
+
+test('a pay stub read returns every stub in the pages, each scrubbed with its own uncertain fields', async () => {
+  const { read, profileReader } = setup();
+  const first = stubRead([{ employer: 'SYNTHETIC EMPLOYER', payDate: '2026-06-12', grossCents: 200000, netCents: 160000 }], ['netCents', 'nope']).stubs[0]!;
+  const second = stubRead([{ employer: 'SYNTHETIC EMPLOYER 00-0000000', payDate: '2026-06-26', grossCents: 210000, netCents: 168000 }], ['payDate']).stubs[0]!;
+  profileReader.next = { kind: 'pay_stub', ...first, stubs: [first, second], model: 'fake-model' };
+  const body = (await read({ kind: 'pay_stub', pages: [PAGE, PAGE] })).json();
+  assert.deepEqual(body.stubs.map((s: { draft: { payDate: string; employer: string | null }; uncertain: string[] }) => [s.draft.payDate, s.draft.employer, s.uncertain]),
+    [['2026-06-12', 'SYNTHETIC EMPLOYER', ['netCents']], ['2026-06-26', null, ['payDate']]]);
+  assert.deepEqual([body.draft.payDate, body.uncertain], ['2026-06-12', ['netCents']], 'the first stub is also where older apps look');
+  assert.ok(ProfileReadResult.parse(body));
+});
+
+test('the Anthropic reader keeps every pay stub in order, drops a malformed one, and asks for each stub once', async () => {
+  let text = '';
+  const stub = (payDate: string) => ({ employer: 'SYNTHETIC EMPLOYER', payDate, grossCents: 200000, netCents: 160000, uncertain: [] });
+  const { reader } = makeReader(async (_url, init) => {
+    text = (JSON.parse(String(init!.body)) as { messages: { content: { text?: string }[] }[] }).messages[0]!.content.at(-1)!.text!;
+    return reply([{ type: 'tool_use', name: 'record_pay_stub', input: { stubs: [stub('2026-06-12'), 'junk', stub('2026-06-26'), stub('2026-07-10')] } }])();
+  });
+  const r = await reader.read('pay_stub', [JPEG, JPEG, JPEG]);
+  assert.ok(r.kind === 'pay_stub');
+  assert.deepEqual(r.stubs.map((s) => s.draft.payDate), ['2026-06-12', '2026-06-26', '2026-07-10']);
+  assert.equal(r.draft.payDate, '2026-06-12');
+  assert.match(text, /several pay stubs: put each in stubs, in page order, once each \(a stub over two pages is one entry\)/);
+  const none = makeReader(reply([{ type: 'tool_use', name: 'record_pay_stub', input: { stubs: ['junk'] } }])).reader;
+  await assert.rejects(none.read('pay_stub', [JPEG]), (e) => (e as ReaderError).code === 'INVALID_OUTPUT');
 });
 
 test('no tool call, the wrong tool or a non-object input is INVALID_OUTPUT; credit errors keep their code', async () => {

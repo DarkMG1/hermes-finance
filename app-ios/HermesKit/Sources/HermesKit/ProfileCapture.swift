@@ -1,9 +1,12 @@
 import Foundation
 
 public enum PageBudget {
-    public static let maxPages = 8
-    /// The read request is at most 3 MB of JSON and base64 adds a third.
-    public static let maxBytes = 2_100_000
+    /// a PDF exported from payroll can hold a run of pay stubs
+    public static let maxPages = 24
+    /// The read request is at most 8 MB of JSON and base64 adds a third.
+    public static let maxBytes = 5_900_000
+    /// Past this many pages each is rendered smaller, to keep them all in memory.
+    public static let fullSizePages = 8
 
     /// Every page at the largest long side, then best quality, whose total fits; nil when even the smallest doesn't or a page won't encode.
     public static func fit(pages: Int, encode: (_ page: Int, _ longSide: Double, _ quality: Double) -> Data?) -> [Data]? {

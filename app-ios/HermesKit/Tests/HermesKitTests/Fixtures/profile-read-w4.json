@@ -1,0 +1,17 @@
+{
+  "kind": "w4",
+  "draft": {
+    "signedOn": "2026-01-05",
+    "filingStatus": "single",
+    "multipleJobs": true,
+    "dependentsCents": null,
+    "otherIncomeCents": null,
+    "deductionsCents": null,
+    "extraWithholdingCents": 2500,
+    "exempt": false,
+    "employer": "SYNTHETIC EMPLOYER"
+  },
+  "uncertain": [
+    "multipleJobs"
+  ]
+}

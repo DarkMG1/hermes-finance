@@ -22,6 +22,9 @@ final class AppLock {
 
     /// The financial profile is unlocked: any return from the background asks for Face ID, so it can keep what's open.
     var profileOpen = false
+    /// Ask is unlocked: the same, so it stays unlocked behind that one Face ID.
+    var askOpen = false
+    private var keepsOpen: Bool { profileOpen || askOpen }
     var canImportDocuments: Bool { isActive && !locked && connectGeneration == nil && !cover.isVisible }
     private var unlockedAt: ContinuousClock.Instant?
     /// Face ID opened the app a moment ago, for something sent to it: what that opens needn't ask again.
@@ -163,7 +166,7 @@ final class AppLock {
             // the Face ID prompt itself makes the app inactive then active again: that return has no backgroundedAt, so it never re-prompts
             let due = !launched || backgroundedAt != nil
             let awayFor = launched ? backgroundedAt.map { Self.seconds(ContinuousClock.now - $0) } : nil
-            let shouldLock = due && Self.hasBiometricHardware && LockPolicy.shouldLock(enabled: enabled, awayFor: awayFor, profileOpen: profileOpen)
+            let shouldLock = due && Self.hasBiometricHardware && LockPolicy.shouldLock(enabled: enabled, awayFor: awayFor, profileOpen: keepsOpen)
             launched = true
             backgroundedAt = nil
             if shouldLock {
@@ -172,7 +175,7 @@ final class AppLock {
                 failure = nil
                 showLocked()
                 authenticate()
-            } else if locked && (enabled || profileOpen) {
+            } else if locked && (enabled || keepsOpen) {
                 showLocked()
             } else {
                 locked = false
