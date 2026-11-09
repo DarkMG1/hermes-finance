@@ -27,21 +27,27 @@ public struct TextLine: Sendable {
 
 public enum Redaction {
     // The server's scrubIdentifiers uses the same rules. A hyphen, en or em dash, dot or run of spaces between groups; an SSN/ITIN has both
-    // separators or neither (so a ZIP+4 is kept), an EIN one. A `$` before or `.digit` after makes it an amount.
+    // separators or neither (so a ZIP+4 is kept), an EIN one; a form's one-digit-per-cell box reads as nine digits split by spaces.
+    // A `$` before or `.digit` after makes it an amount.
     private static let sep = "(?:[-\u{2013}\u{2014}.]| +)"
     // swiftlint:disable force_try
     private static let identifier = try! NSRegularExpression(
-        pattern: "(?<![\\d$])(?:\\d{3}(?:\(sep)\\d{2}\(sep)|\\d{2})\\d{4}|\\d{2}\(sep)\\d{7})(?!\\d|\\.\\d)")
+        pattern: "(?<![\\d$])(?:\\d{3}(?:\(sep)\\d{2}\(sep)|\\d{2})\\d{4}|\\d{2}\(sep)\\d{7}|\\d(?: +\\d){8})(?!\\d|\\.\\d)")
     // with an account word near: 8 to 17 digits in a run, or in groups split by spaces or hyphens (not a date)
     private static let account = try! NSRegularExpression(pattern: "(?<![\\d$]|\\d[.,])\\d{8,17}(?!\\d|[.,]\\d)")
     private static let groups = try! NSRegularExpression(pattern: "(?<![\\d$]|\\d[.,])\\d{3,}(?:[ -]\\d{2,}){1,4}(?!\\d|[.,]\\d)")
     private static let date = try! NSRegularExpression(pattern: "^\\d{4}[- ]\\d{1,2}[- ]\\d{1,2}$")
     private static let keyword = try! NSRegularExpression(pattern: "\\b(?:accounts?|acct|routing|aba|rtn)\\b", options: .caseInsensitive)
+    // under an identifier's label, digits Vision dropped some of (cell borders) still go: any run of 5+ digits, spaces and dashes
+    private static let idKeyword = try! NSRegularExpression(
+        pattern: "\\b(?:social security|ssn|itin|taxpayer identification|identifying number|employer identification|ein)\\b", options: .caseInsensitive)
+    private static let digitRun = try! NSRegularExpression(pattern: "(?<![\\d$]|\\d[.,])\\d[\\d \\-\u{2013}\u{2014}]*\\d(?!\\d|[.,]\\d)")
     // swiftlint:enable force_try
     /// Letters OCR reads for digits on faint prints; identifiers are also matched with them read as digits.
     private static let confusable: [Character: Character] = ["O": "0", "o": "0", "I": "1", "l": "1", "S": "5", "B": "8"]
 
-    /// Boxes to black out: identifier matches on a line, plus long digit runs on or near account/routing words (up to 4 lines away).
+    /// Boxes to black out: identifier matches on a line, long digit runs on or near account/routing words (up to 4 lines away), and
+    /// digit runs of 5+ on or just below an identifier's label (up to 2 lines).
     /// Lines on one row are read together, so an identifier Vision split into pieces is still found. `locate` gives the box of a line's
     /// matched characters (UTF-16 offsets into its text), as Vision measures them; without one the whole line is boxed.
     public static func boxes(_ lines: [TextLine], padding: Double = 0.004, locate: (_ line: Int, _ range: Range<Int>) -> Box? = { _, _ in nil }) -> [Box] {
@@ -54,11 +60,14 @@ public enum Redaction {
             }
         }
         let keywordRows = rows.map { row in row.contains { has(keyword, $0.line.text) } }
+        let labelRows = rows.map { row in row.contains { has(idKeyword, $0.line.text) } }
         var found: [Box] = []
         for row in rows {
             let h = row[0].line.box.h, y = row[0].line.box.midY
             let near = rows.indices.contains { keywordRows[$0] && abs(rows[$0][0].line.box.midY - y) <= 4 * h }
-            found += spans(row.sorted { $0.line.box.x < $1.line.box.x }, accounts: near).map { locate($0.index, $0.range) ?? lines[$0.index].box }
+            let labelled = rows.indices.contains { labelRows[$0] && (0...2 * h).contains(y - rows[$0][0].line.box.midY) }
+            found += spans(row.sorted { $0.line.box.x < $1.line.box.x }, accounts: near, labelled: labelled)
+                .map { locate($0.index, $0.range) ?? lines[$0.index].box }
         }
         return merge(found.map { b in
             let x = max(b.x - padding, 0), y = max(b.y - padding, 0)
@@ -76,7 +85,7 @@ public enum Redaction {
     }
 
     /// The row's text joined by spaces (none next to a separator), each match mapped back to the characters of every line it covers.
-    private static func spans(_ row: [(index: Int, line: TextLine)], accounts: Bool) -> [(index: Int, range: Range<Int>)] {
+    private static func spans(_ row: [(index: Int, line: TextLine)], accounts: Bool, labelled: Bool) -> [(index: Int, range: Range<Int>)] {
         var text = ""
         var starts: [Int] = []
         for (_, line) in row {
@@ -93,6 +102,9 @@ public enum Redaction {
         if accounts {
             matches += account.matches(in: text, range: all).map(\.range)
                 + groups.matches(in: text, range: all).map(\.range).filter { (8...17).contains(digits($0)) && !has(date, ns.substring(with: $0)) }
+        }
+        if labelled {
+            matches += digitRun.matches(in: text, range: all).map(\.range).filter { digits($0) >= 5 && !has(date, ns.substring(with: $0)) }
         }
         // the read-as-digits pass finds most matches again
         var seen = Set<[Int]>()
