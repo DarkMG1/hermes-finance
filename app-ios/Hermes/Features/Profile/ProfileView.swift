@@ -5,6 +5,8 @@ import SwiftUI
 /// lock asks for Face ID on any return from the background, so a read or an edit survives a trip to another app; without
 /// biometric hardware to lock with, going to the background tears it down again (its screens and their data).
 struct ProfileGate: View {
+    /// Home's heads-up card: land on the Tax screen after the first unlock
+    var openTax = false
     @Environment(AppModel.self) private var model
     @Environment(AppLock.self) private var lock
     @Environment(\.scenePhase) private var scenePhase
@@ -14,11 +16,16 @@ struct ProfileGate: View {
     @State private var error: String?
     /// a read or an edit is open: the relock throws it away, and says so
     @State private var drafting = false
+    @State private var path: [TaxRoute] = []
+    @State private var pendingTax = false
+
+    private enum TaxRoute: Hashable { case tax }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             if unlocked {
                 ProfileView().environment(\.profileDrafting, $drafting)
+                    .navigationDestination(for: TaxRoute.self) { _ in TaxView() }
             } else {
                 VStack(spacing: Space.l) {
                     HButton(title: "Unlock with Face ID", busy: unlocking) { Task { await unlock() } }
@@ -42,9 +49,13 @@ struct ProfileGate: View {
         .onChange(of: lock.canImportDocuments && model.openedPDF != nil) { _, waiting in
             if waiting, !unlocked { Task { await unlock() } }
         }
-        .onChange(of: unlocked) { _, open in lock.profileOpen = open }
+        .onChange(of: unlocked) { _, open in
+            lock.profileOpen = open
+            if open, pendingTax { pendingTax = false; path = [.tax] }
+            if !open { path = [] }
+        }
         .onChange(of: model.askDraft != nil) { _, asking in if asking { dismiss() } }
-        .onAppear { model.profileGateOpen = true }
+        .onAppear { model.profileGateOpen = true; pendingTax = openTax }
         .onDisappear {
             lock.profileOpen = false
             model.openedPDF = nil

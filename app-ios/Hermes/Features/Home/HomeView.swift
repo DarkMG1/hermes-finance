@@ -21,6 +21,8 @@ struct HomeView: View {
     @State private var handledSnaps = 0
     @State private var loadGeneration = OpenGeneration()
     @State private var referencesLoaded = false
+    @State private var taxItems = 0
+    @State private var openingTax = false
 
     var body: some View {
         Screen(title: "Home") {
@@ -72,6 +74,16 @@ struct HomeView: View {
                         Card {
                             Text("Reconcile").textStyle(.subhead, color: Palette.secondaryText)
                             ListRow(title: "\(ReconcileMonth.title(due.month)): \(due.open) to reconcile") {
+                                Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText)
+                            }
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+                if taxItems > 0 {
+                    Button { openingTax = true } label: {
+                        Card {
+                            ListRow(title: "\(taxItems) tax \(taxItems == 1 ? "item needs" : "items need") attention") {
                                 Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText)
                             }
                         }
@@ -154,6 +166,7 @@ struct HomeView: View {
         .sheet(item: $selected) { transaction in
             TransactionDetailSheet(transaction: transaction) { await load() }
         }
+        .sheet(isPresented: $openingTax) { ProfileGate(openTax: true) }
         .sheet(item: $renaming) { account in
             AccountSheet(account: account) { await model.refreshReferenceData() }
         }
@@ -222,6 +235,7 @@ struct HomeView: View {
         let gen = loadGeneration.next()
         async let references: Void = model.refreshReferenceData(coalescing: coalescing)
         async let holdings: Void = loadInvestments(reader: reader, generation: gen)
+        async let tax: Void = loadTaxItems(generation: gen)
         do {
             let loaded = try await reader.read("/v1/home", as: Home.self)
             guard !Task.isCancelled, loadGeneration.accepts(gen, presented: false) else { return }
@@ -234,6 +248,14 @@ struct HomeView: View {
         guard !Task.isCancelled, loadGeneration.accepts(gen, presented: false) else { return }
         referencesLoaded = true
         await holdings
+        await tax
+    }
+
+    /// Count only: item text waits for the profile's Face ID. Failure keeps the last count.
+    private func loadTaxItems(generation: Int) async {
+        guard let count = try? await model.client?.taxHeadsUp(unlocked: false).count,
+              !Task.isCancelled, loadGeneration.accepts(generation, presented: false) else { return }
+        taxItems = count
     }
 
     private func loadInvestments(reader: Reader, generation: Int) async {

@@ -18,8 +18,9 @@ struct TaxView: View {
         List {
             InlineError(message: error)
             if let projection {
+                if !projection.headsUp.isEmpty { AdviceSection(title: "Heads up", items: projection.headsUp) }
                 TaxResultSection(projection: projection, year: $year, jurisdiction: $jurisdiction)
-                if !projection.waysToSave.isEmpty { WaysToSaveSection(items: projection.waysToSave) }
+                if !projection.waysToSave.isEmpty { AdviceSection(title: "Ways to save", items: projection.waysToSave) }
                 if !projection.assumptions.isEmpty {
                     Section("Assumptions") {
                         ForEach(projection.assumptions.indices, id: \.self) {
@@ -128,13 +129,14 @@ private struct TaxLineSheet: View {
     }
 }
 
-/// Each way to save opens Ask with its question typed in, not sent.
-private struct WaysToSaveSection: View {
+/// Each item opens Ask with its question typed in, not sent.
+private struct AdviceSection: View {
     @Environment(AppModel.self) private var model
+    let title: String
     let items: [TaxAdvice]
 
     var body: some View {
-        Section("Ways to save") {
+        Section(title) {
             ForEach(items.indices, id: \.self) { i in
                 let item = items[i]
                 Button { model.askDraft = item.askPrompt } label: {
@@ -144,6 +146,7 @@ private struct WaysToSaveSection: View {
                         if let savings = item.savingsCents {
                             Text("about \(Money.format(savings)) less tax").textStyle(.caption, color: Palette.gain)
                         }
+                        if let due = item.dueDate { Text("Due \(due)").textStyle(.caption, color: Palette.secondaryText) }
                     }
                     .contentShape(Rectangle())
                 }
