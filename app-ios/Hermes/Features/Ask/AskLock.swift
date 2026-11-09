@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// While balances are hidden, Ask (chat titles included) stays covered until Face ID, so hiding still guards a glance at the screen.
-/// Unlocking here shows nothing elsewhere; it lasts until leaving the tab, the background, or balances being hidden again.
+/// Unlocking here shows nothing elsewhere; it lasts until leaving the tab or balances being hidden again. A trip to the background keeps
+/// it, because the app lock then asks for Face ID on return (without Face ID hardware the background relocks it instead).
 /// That Face ID also unlocks the financial profile. With balances shown there is none, so the profile asks for its own when first used
 /// (Face ID even then); either way it's dropped on the same relock: one per Ask visit.
 struct AskLock<Content: View>: View {
@@ -39,13 +40,21 @@ struct AskLock<Content: View>: View {
                     .background(Palette.background)
                 }
             }
-            .onChange(of: scenePhase) { _, phase in if phase == .background { relock() } }
+            .onChange(of: scenePhase) { _, phase in
+                guard phase == .background else { return }
+                // the app lock's Face ID on return stands for this one; balances hidden on the way out mustn't cover Ask behind it
+                if (unlocked || profileUnlocked) && AppLock.hasBiometricHardware { unlocked = true } else { relock() }
+            }
+            .onChange(of: unlocked || profileUnlocked, initial: true) { _, open in lock.askOpen = open }
             // initial: the tab's content first appears with this tab already selected
             .onChange(of: selectedTab, initial: true) { _, selected in
                 relock()
                 if selected == tab, hideBalances { Task { await unlock() } }
             }
-            .onChange(of: hideBalances) { _, hidden in if hidden { relock() } }
+            // leaving hides balances; an open Ask stays open behind the app lock instead
+            .onChange(of: hideBalances) { _, hidden in
+                if hidden, !(lock.askOpen && UIApplication.shared.applicationState == .background) { relock() }
+            }
     }
 
     private func relock() {
