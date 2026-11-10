@@ -131,7 +131,7 @@ const ENTRIES = new Map<string, Entry>([
     (d, q) => ({ documents: listDocuments(d.db, q.recordType && q.recordId ? { recordType: q.recordType, recordId: q.recordId } : undefined)
       .filter((doc) => !q.kind || doc.kind === q.kind)
       .map((doc) => ({ ...doc, links: doc.links.map((l) => ({ ...l, description: describe(d, l.recordType, l.recordId) })) })) })),
-  entry('document_pages', 'Shows you pages of a kept document (id from documents) as images, at most 4 per call (pages 1-based; default the first 4). Each page costs tokens: use it only when the stored numbers (pay_stubs, jobs, tax_years) don\'t answer the question.',
+  entry('document_pages', 'Shows you pages of a kept document (id from documents) as images, at most 4 per call and 8 per answer (pages 1-based; default the first 4). Each page costs tokens: use it only when the stored numbers (pay_stubs, jobs, tax_years) don\'t answer the question.',
     z.object({ id: z.string().min(1), pages: z.array(z.number().int().min(1)).min(1).max(4).optional() }).strict(),
     (d, q): Pages | null => {
       const doc = getDocument(d.db, q.id);
@@ -166,7 +166,7 @@ const ENTRIES = new Map<string, Entry>([
 
 const RECORD: Record<DocumentRecordType, string> = {
   pay_stub: `SELECT 'Pay stub ' || s.pay_date || COALESCE(', ' || j.employer, '') FROM pay_stubs s LEFT JOIN jobs j ON j.id = s.job_id WHERE s.id = @id`,
-  tax_form: `SELECT upper(kind) || ' ' || year || ', ' || payer FROM tax_forms WHERE id = @id`,
+  tax_form: `SELECT CASE kind WHEN 'w2' THEN 'W-2' WHEN 'other' THEN 'Tax form' ELSE replace(upper(kind), '_', '-') END || ' ' || year || ', ' || payer FROM tax_forms WHERE id = @id`,
   tax_return: `SELECT 'Tax return ' || year || ' ' || jurisdiction FROM tax_returns WHERE id = @id`,
   job: `SELECT 'Job, ' || employer FROM jobs WHERE id = @id`,
   w4: `SELECT 'W-4, ' || employer FROM jobs WHERE id = @id`,

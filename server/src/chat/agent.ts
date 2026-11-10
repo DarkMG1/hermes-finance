@@ -8,6 +8,7 @@ export type ChatEvent = { type: 'tool'; name: string; label: string; input: Reco
   | { type: 'done'; messageId: string; costCents: number; status: 'done' | 'stopped' } | { type: 'error'; code: string };
 export const MAX_ROUNDS = 10;
 const MAX_CHARTS = 2;
+const MAX_PAGES = 8;
 
 type Block = Record<string, unknown>;
 const EPHEMERAL = { type: 'ephemeral' };
@@ -86,6 +87,7 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
   let cost = 0;
   let said = false;
   let charts = 0;
+  let pages = 0;
   // a tool_result carrying document pages → the same result with placeholders, which is what gets stored
   const kept = new Map<Block, Block>();
   const save = (t: ApiMessage[], status: 'done' | 'failed' | 'stopped', code: string | null) => saveAssistant(deps.db, assistantId,
@@ -160,8 +162,12 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
         content: uses.map((b) => {
           const name = b.name as string;
           const input = b.input as Record<string, unknown>;
-          const res = name === 'show_chart' && charts >= MAX_CHARTS
+          let res: ReturnType<typeof runTool> = name === 'show_chart' && charts >= MAX_CHARTS
             ? { content: JSON.stringify({ error: `at most ${MAX_CHARTS} charts per answer` }), isError: true } : runTool(deps, name, input, { chatId, profileUnlocked });
+          if (res.images && pages + res.images.length > MAX_PAGES) {
+            res = { content: JSON.stringify({ error: `at most ${MAX_PAGES} document pages per answer; ${MAX_PAGES - pages} left` }), isError: true };
+          }
+          pages += res.images?.length ?? 0;
           if (name === 'show_chart' && !res.isError) charts++;
           if ('profile' in res && res.profile) markProfile(deps.db, chatId, assistantId);
           // a rejected chart showed nothing, so there's no line for it

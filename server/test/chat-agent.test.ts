@@ -528,3 +528,43 @@ test('document pages go to the model as images in the live answer only; the stor
   assert.match((result.content[0] as { text: string }).text, new RegExp(doc));
   assert.deepEqual(getChat(s.db, s.chatId)!.messages[1]!.tools.map((t) => t.label), ['Document pages', 'Categories']);
 });
+
+const seedPages = (s: ReturnType<typeof setup>, n: number) => {
+  s.db.prepare("INSERT INTO documents (id, kind, page_count, created_at) VALUES ('d1', 'pay_stub', ?, ?)").run(n, NOW);
+  for (let i = 1; i <= n; i++) s.db.prepare("INSERT INTO document_pages (document_id, idx, jpeg) VALUES ('d1', ?, ?)").run(i, Buffer.from([0xff, 0xd8, i]));
+};
+const storedJson = (s: ReturnType<typeof setup>) => s.db.prepare('SELECT content_json FROM chat_messages WHERE id = ?').pluck().get(s.assistantId) as string;
+
+test('an answer sees at most 8 document pages; a call past that is an error result naming the pages left', async () => {
+  const s = setup([
+    [start(), ...tool(0, 'tu1', 'document_pages', { id: 'd1', pages: [1, 2, 3] }), ...end('tool_use')],
+    [start(), ...tool(0, 'tu2', 'document_pages', { id: 'd1', pages: [1, 2, 3, 4] }), ...end('tool_use')],
+    [start(), ...tool(0, 'tu3', 'document_pages', { id: 'd1', pages: [4, 5] }), ...end('tool_use')],
+    [start(), ...tool(0, 'tu4', 'document_pages', { id: 'd1', pages: [5] }), ...end('tool_use')],
+    [start(), ...text(0, 'Done.'), ...end('end_turn')],
+  ]);
+  seedPages(s, 5);
+  await s.run();
+  const result = (r: number) => (lastMessage(s.fake.requests[r]!).content as { content: unknown; is_error: boolean }[])[0]!;
+  assert.deepEqual(result(3), { type: 'tool_result', tool_use_id: 'tu3', content: JSON.stringify({ error: 'at most 8 document pages per answer; 1 left' }), is_error: true });
+  assert.equal(result(4).is_error, false);
+  assert.equal((result(4).content as unknown[]).length, 2);
+});
+
+test('a stopped or failed answer after a document_pages round stores placeholders, never the images', async () => {
+  const rounds = () => [[start(), ...tool(0, 'tu1', 'document_pages', { id: 'd1' }), ...end('tool_use')], [start(), ...text(0, 'never'), ...end('end_turn')]];
+  const stopped = setup(rounds());
+  seedPages(stopped, 2);
+  const ctl = new AbortController();
+  await answer(stopped.deps, stopped.chatId, stopped.assistantId, (e) => { if (e.type === 'tool') ctl.abort(); }, ctl.signal);
+  const failed = setup(rounds());
+  seedPages(failed, 2);
+  failed.fake.fail = { round: 1, code: 'STREAM_overloaded_error' };
+  await failed.run();
+  for (const [s, status] of [[stopped, 'stopped'], [failed, 'failed']] as const) {
+    assert.equal(getChat(s.db, s.chatId)!.messages[1]!.status, status);
+    const json = storedJson(s);
+    assert.doesNotMatch(json, /"image"|base64/, status);
+    assert.match(json, /document pages shown earlier: d1 p\.2/, status);
+  }
+});

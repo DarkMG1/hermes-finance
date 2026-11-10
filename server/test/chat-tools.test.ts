@@ -352,7 +352,7 @@ function withDocument() {
 }
 
 test('documents lists kept documents with a short description of each linked record, filtered by record or kind', () => {
-  const { deps, stubDoc, formDoc } = withDocument();
+  const { deps, db, stubDoc, formDoc } = withDocument();
   const all = call(deps, 'documents', {}, UNLOCKED);
   assert.deepEqual(all.documents.map((d: { id: string }) => d.id), [formDoc, stubDoc]);
   assert.deepEqual(all.documents[1].links, [{ recordType: 'pay_stub', recordId: 's1', description: 'Pay stub 2026-03-15, SYNTHETIC EMPLOYER' }]);
@@ -360,6 +360,13 @@ test('documents lists kept documents with a short description of each linked rec
   assert.deepEqual(call(deps, 'documents', { recordType: 'pay_stub', recordId: 's1' }, UNLOCKED).documents.map((d: { id: string }) => d.id), [stubDoc]);
   assert.deepEqual(call(deps, 'documents', { kind: 'state_w4' }, UNLOCKED).documents.map((d: { id: string }) => d.id), [formDoc]);
   assert.equal(runTool(deps, 'documents', { recordType: 'pay_stub' }, UNLOCKED).isError, true);
+  const form = db.prepare("INSERT INTO tax_forms (id, year, kind, payer, amount_cents, created_at) VALUES (?, 2025, ?, 'SYNTHETIC EMPLOYER', 100, 'x')");
+  for (const [kind, name] of [['w2', 'W-2'], ['1099_int', '1099-INT'], ['1099_b', '1099-B'], ['other', 'Tax form']] as const) {
+    form.run(kind, kind);
+    const doc = saveDocument(db, 'tax_form', [Buffer.from([0xff])], new Date('2026-03-18T12:00:00Z'));
+    linkDocument(db, doc, 'tax_form', kind);
+    assert.equal(call(deps, 'documents', { recordType: 'tax_form', recordId: kind }, UNLOCKED).documents[0].links[0].description, `${name} 2025, SYNTHETIC EMPLOYER`);
+  }
   assert.deepEqual([toolLabel('documents', {}), toolLabel('document_pages', { id: stubDoc })], ['Documents', 'Document pages']);
 });
 
