@@ -6,6 +6,7 @@
     2027
   ],
   "asOf": "2026-03-15",
+  "complete": true,
   "combinedBalanceCents": 240800,
   "returns": [
     {
@@ -41,7 +42,8 @@
           "key": "incomeTax",
           "label": "Income tax",
           "cents": 519200,
-          "source": "IRS figures for 2027"
+          "source": "IRS figures for 2027",
+          "assumption": "Computed by formula: the IRS tax table may differ by a few dollars"
         },
         {
           "key": "totalTax",
@@ -65,15 +67,14 @@
         {
           "key": "safeHarbor",
           "label": "Pay at least this to avoid a penalty",
-          "cents": 467280,
-          "source": "calculated",
-          "assumption": "No prior-year tax entered: safe harbor is 90% of this year's tax"
+          "cents": 376000,
+          "source": "2026 projection"
         }
       ],
       "taxCents": 519200,
       "withheldCents": 740000,
       "balanceCents": 220800,
-      "safeHarborCents": 467280,
+      "safeHarborCents": 376000,
       "unusedCarryover": {
         "shortCents": 0,
         "longCents": 0
@@ -212,15 +213,20 @@
   "assumptions": [
     "Student and dependent status: assumes the same as this year",
     "Scenario: moving to XB on 2027-07-01",
+    "2027 IRA limit: 2026 amounts used until published",
+    "2027 Roth income limits: 2026 amounts used until published",
+    "2027 401(k) limit: 2026 amounts used until published",
     "2026 XA figures used for 2027 until published",
-    "SYNTHETIC EMPLOYER: future paychecks at the median gross of the last 3 stubs, every 14 days through 2027-12-31",
-    "SYNTHETIC EMPLOYER: bonus from the scenario paid in December, withheld at the supplemental rate",
     "No 401(k) contributions entered for 2027",
+    "SYNTHETIC EMPLOYER: future paychecks at the median gross of the last 3 stubs, every 14 days through 2027-12-31; SYNTHETIC EMPLOYER: withholding at the last 3 stubs' rates (at their 401(k) contributions)",
+    "SYNTHETIC EMPLOYER: bonus from the scenario paid in December, withheld at the supplemental rate",
+    "Other pre-tax deductions (health insurance, HSA) are not taken off wages",
     "No tuition entered: education credit not counted",
     "No scholarships entered",
     "No student loan interest entered",
     "Next year's dividends = this year's so far ($0.00 through 2026-03-15)",
     "Bank interest not included",
+    "Safe harbor uses the 2026 projected tax until its return is filed",
     "2026 XB figures used for 2027 until published"
   ],
   "figures": {

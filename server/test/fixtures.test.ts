@@ -53,6 +53,8 @@ test('fixtures satisfy the shared contract', async () => {
   TaxHeadsUp.parse(f['tax-heads-up.json']);
   TaxInputs.parse(f['tax-inputs.json']);
   TaxScenario.parse(f['tax-scenario.json']);
-  assert.equal(TaxLots.parse(f['tax-lots.json']).lots.length, 1);
+  const lots = TaxLots.parse(f['tax-lots.json']);
+  assert.deepEqual([lots.lots.length, lots.unresolved.length], [1, 1]);
+  assert.ok(TaxWhatIf.parse(f['tax-what-if.json']).sales.every((x) => x.term !== 'short' || x.longTermOn));
   for (const kind of ['tax-return', 'tax-form', 'pay-stub', 'offer', 'w4', 'state-w4']) assert.equal(ProfileReadResult.parse(f[`profile-read-${kind}.json`]).kind, kind.replace('-', '_'));
 });

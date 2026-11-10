@@ -11,11 +11,35 @@
       "status": "known"
     }
   ],
-  "sales": [],
+  "sales": [
+    {
+      "accountId": "acct-tax-brokerage",
+      "securityId": "sec-taxb",
+      "date": "2025-11-03",
+      "quantity": 4,
+      "proceedsCents": 40000,
+      "costCents": 40000,
+      "acquiredOn": null,
+      "term": "unknown",
+      "washDisallowedCents": 0,
+      "taxable": true
+    }
+  ],
   "methods": {
     "acct-tax-brokerage": "fifo"
   },
   "inferred": {
     "acct-tax-brokerage": true
-  }
+  },
+  "basisMatched": {
+    "acct-tax-brokerage": true
+  },
+  "unresolved": [
+    {
+      "accountId": "acct-tax-brokerage",
+      "securityId": "sec-taxb",
+      "ticker": "SYNO",
+      "quantity": 4
+    }
+  ]
 }

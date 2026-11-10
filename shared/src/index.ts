@@ -621,10 +621,19 @@ export type Lot = z.infer<typeof Lot>;
 export const Sale = z.object({
   accountId: Id, securityId: Id, date: DateStr, quantity: z.number(), proceedsCents: Cents, costCents: Cents, acquiredOn: DateStr.nullable(),
   term: z.enum(['short', 'long', 'unknown']), washDisallowedCents: Cents, taxable: z.boolean(),
+  /** what-if sales only, short-term ones: the first day the same shares would sell long-term */
+  longTermOn: DateStr.optional(),
 });
 export type Sale = z.infer<typeof Sale>;
 const LotMethod = z.enum(['fifo', 'hifo', 'specific']);
-export const TaxLots = z.object({ lots: z.array(Lot), sales: z.array(Sale), methods: z.record(z.string(), LotMethod), inferred: z.record(z.string(), z.boolean()) });
+/** Shares held before the trade history that past sales took (a fully sold position too): entering their lot (POST /v1/tax/lots) resolves those sales' cost. */
+export const UnresolvedShares = z.object({ accountId: Id, securityId: Id, ticker: z.string().nullable(), quantity: z.number() });
+export type UnresolvedShares = z.infer<typeof UnresolvedShares>;
+/** inferred: the owner hasn't set the account's method; basisMatched: the inferred method reproduces the broker's basis (false: FIFO by default). */
+export const TaxLots = z.object({
+  lots: z.array(Lot), sales: z.array(Sale), methods: z.record(z.string(), LotMethod), inferred: z.record(z.string(), z.boolean()),
+  basisMatched: z.record(z.string(), z.boolean()), unresolved: z.array(UnresolvedShares),
+});
 export type TaxLots = z.infer<typeof TaxLots>;
 export const TaxLine = z.object({ key: z.string(), label: z.string(), cents: Cents, source: z.string(), assumption: z.string().optional() });
 export type TaxLine = z.infer<typeof TaxLine>;
@@ -639,7 +648,8 @@ export const TaxAdvice = z.object({
 });
 export type TaxAdvice = z.infer<typeof TaxAdvice>;
 export const TaxProjection = z.object({
-  year: z.number().int(), openYears: z.array(z.number().int()), asOf: DateStr, combinedBalanceCents: Cents, returns: z.array(TaxReturnResult), assumptions: z.array(z.string()),
+  /** complete false: a state return has no figures, so its tax is left out of combinedBalanceCents */
+  year: z.number().int(), openYears: z.array(z.number().int()), asOf: DateStr, complete: z.boolean(), combinedBalanceCents: Cents, returns: z.array(TaxReturnResult), assumptions: z.array(z.string()),
   figures: z.object({ federalYear: z.number().int(), fallback: z.boolean() }), waysToSave: z.array(TaxAdvice), headsUp: z.array(TaxAdvice),
 });
 export type TaxProjection = z.infer<typeof TaxProjection>;
@@ -650,6 +660,7 @@ export const TaxWhatIfChange = z.object({
 export type TaxWhatIfChange = z.infer<typeof TaxWhatIfChange>;
 export const TaxWhatIfBody = z.object({ year: z.number().int().min(2000).max(2100), change: TaxWhatIfChange }).strict();
 export type TaxWhatIfBody = z.infer<typeof TaxWhatIfBody>;
+/** before and after carry no advice (waysToSave and headsUp are empty): advice belongs to the plain projection. */
 export const TaxWhatIf = z.object({ before: TaxProjection, after: TaxProjection, deltaCents: Cents, blocked: z.string().nullable(), sales: z.array(Sale) });
 export type TaxWhatIf = z.infer<typeof TaxWhatIf>;
 /** items only come with ?unlocked=1, so a locked Home shows a count. */

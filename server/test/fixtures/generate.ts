@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ProfileReadResult } from '@hermes/shared';
@@ -228,6 +228,9 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   tax.db.prepare("INSERT INTO securities (id, name, ticker, type, is_cash, updated_at) VALUES ('sec-taxa', 'Synthetic Tax Fund', 'SYNT', 'etf', 0, 'x')").run();
   tax.db.prepare("INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, updated_at) VALUES ('buy-1', 'acct-tax-brokerage', 'sec-taxa', '2025-10-01', 'buy', 'buy', 10, 100000, 'x')").run();
   tax.db.prepare("INSERT INTO holdings (account_id, security_id, quantity, price_cents, value_cents, cost_basis_cents, updated_at) VALUES ('acct-tax-brokerage', 'sec-taxa', 10, 8000, 80000, 100000, 'x')").run();
+  // shares held before the history, all sold: unresolved until their lot is entered
+  tax.db.prepare("INSERT INTO securities (id, name, ticker, type, is_cash, updated_at) VALUES ('sec-taxb', 'Synthetic Old Fund', 'SYNO', 'etf', 0, 'x')").run();
+  tax.db.prepare("INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, updated_at) VALUES ('sell-1', 'acct-tax-brokerage', 'sec-taxb', '2025-11-03', 'sell', 'sell', -4, -40000, 'x')").run();
   await taxSend('PUT', '/v1/tax/inputs/2026', { studentLoanInterestCents: 50000, k401Cents: 200000 });
   await taxSend('PUT', '/v1/tax/scenario/2027', { bonusCents: 1000000, moveTo: 'XB', moveDate: '2027-07-01' });
   await taxSend('POST', '/v1/tax/roth-contributions', { date: '2026-02-01', amountCents: 100000, taxYear: 2026 });
@@ -237,6 +240,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   out['tax-inputs'] = await taxGet('/v1/tax/inputs/2026');
   out['tax-scenario'] = await taxGet('/v1/tax/scenario/2027');
   out['tax-lots'] = await taxGet('/v1/tax/lots');
+  rmSync(stateFile);
 
   // ids minted at runtime are replaced so the files are stable
   const text = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;

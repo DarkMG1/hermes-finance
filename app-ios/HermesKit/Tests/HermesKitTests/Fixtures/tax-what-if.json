@@ -7,7 +7,8 @@
       2027
     ],
     "asOf": "2026-03-15",
-    "combinedBalanceCents": 172000,
+    "complete": true,
+    "combinedBalanceCents": 174000,
     "returns": [
       {
         "jurisdiction": "federal",
@@ -48,7 +49,8 @@
             "key": "incomeTax",
             "label": "Income tax",
             "cents": 376000,
-            "source": "IRS figures for 2026"
+            "source": "IRS figures for 2026",
+            "assumption": "Computed by formula: the IRS tax table may differ by a few dollars"
           },
           {
             "key": "totalTax",
@@ -93,13 +95,13 @@
           {
             "key": "totalIncome",
             "label": "Total income",
-            "cents": 5000008,
+            "cents": 4950000,
             "source": "pay stubs and investment income"
           },
           {
             "key": "stateIncome",
             "label": "Income taxed by this state",
-            "cents": 5000008,
+            "cents": 4950000,
             "source": "pay stubs and investment income"
           },
           {
@@ -111,19 +113,19 @@
           {
             "key": "taxableIncome",
             "label": "Taxable income",
-            "cents": 4500008,
+            "cents": 4450000,
             "source": "calculated"
           },
           {
             "key": "tax",
             "label": "Tax at 4.0%",
-            "cents": 180000,
+            "cents": 178000,
             "source": "synthetic XA"
           },
           {
             "key": "totalTax",
             "label": "Total tax",
-            "cents": 180000,
+            "cents": 178000,
             "source": "calculated"
           },
           {
@@ -136,23 +138,24 @@
           {
             "key": "balance",
             "label": "Refund",
-            "cents": 28000,
+            "cents": 30000,
             "source": "calculated"
           }
         ],
-        "taxCents": 180000,
+        "taxCents": 178000,
         "withheldCents": 208000,
-        "balanceCents": 28000
+        "balanceCents": 30000
       }
     ],
     "assumptions": [
-      "SYNTHETIC EMPLOYER: future paychecks at the median gross of the last 3 stubs, every 14 days through 2026-12-31",
+      "SYNTHETIC EMPLOYER: future paychecks at the median gross of the last 3 stubs, every 14 days through 2026-12-31; SYNTHETIC EMPLOYER: withholding at the last 3 stubs' rates (at their 401(k) contributions)",
+      "Other pre-tax deductions (health insurance, HSA) are not taken off wages",
       "No tuition entered: education credit not counted",
       "No scholarships entered",
       "Dividends after 2026-03-15 not projected",
       "Bank interest not included",
       "No 2025 federal return: no capital loss carryover counted",
-      "401(k) contributions lower state wages by the same share as federal"
+      "State follows the federal adjustments (401(k), student loan interest)"
     ],
     "figures": {
       "federalYear": 2026,
@@ -169,7 +172,8 @@
       2027
     ],
     "asOf": "2026-03-15",
-    "combinedBalanceCents": 225200,
+    "complete": true,
+    "combinedBalanceCents": 227200,
     "returns": [
       {
         "jurisdiction": "federal",
@@ -228,7 +232,8 @@
             "key": "incomeTax",
             "label": "Income tax",
             "cents": 373600,
-            "source": "IRS figures for 2026"
+            "source": "IRS figures for 2026",
+            "assumption": "Computed by formula: the IRS tax table may differ by a few dollars"
           },
           {
             "key": "totalTax",
@@ -273,13 +278,13 @@
           {
             "key": "totalIncome",
             "label": "Total income",
-            "cents": 4980008,
+            "cents": 4930000,
             "source": "pay stubs and investment income"
           },
           {
             "key": "stateIncome",
             "label": "Income taxed by this state",
-            "cents": 4980008,
+            "cents": 4930000,
             "source": "pay stubs and investment income"
           },
           {
@@ -291,19 +296,19 @@
           {
             "key": "taxableIncome",
             "label": "Taxable income",
-            "cents": 4480008,
+            "cents": 4430000,
             "source": "calculated"
           },
           {
             "key": "tax",
             "label": "Tax at 4.0%",
-            "cents": 179200,
+            "cents": 177200,
             "source": "synthetic XA"
           },
           {
             "key": "totalTax",
             "label": "Total tax",
-            "cents": 179200,
+            "cents": 177200,
             "source": "calculated"
           },
           {
@@ -316,24 +321,25 @@
           {
             "key": "balance",
             "label": "Refund",
-            "cents": 28800,
+            "cents": 30800,
             "source": "calculated"
           }
         ],
-        "taxCents": 179200,
+        "taxCents": 177200,
         "withheldCents": 208000,
-        "balanceCents": 28800
+        "balanceCents": 30800
       }
     ],
     "assumptions": [
-      "SYNTHETIC EMPLOYER: future paychecks at the median gross of the last 3 stubs, every 14 days through 2026-12-31",
+      "SYNTHETIC EMPLOYER: future paychecks at the median gross of the last 3 stubs, every 14 days through 2026-12-31; SYNTHETIC EMPLOYER: withholding at the last 3 stubs' rates (at their 401(k) contributions)",
+      "Other pre-tax deductions (health insurance, HSA) are not taken off wages",
       "No tuition entered: education credit not counted",
       "No scholarships entered",
       "Dividends after 2026-03-15 not projected",
       "Bank interest not included",
-      "Proposed sale on 2026-03-15 at today's price; a buy of the same security in the 30 days after would wash a loss",
+      "Proposed sale on 2026-03-15 at the last synced price; a buy of the same security in the 30 days after would wash a loss",
       "No 2025 federal return: no capital loss carryover counted",
-      "401(k) contributions lower state wages by the same share as federal"
+      "State follows the federal adjustments (401(k), student loan interest)"
     ],
     "figures": {
       "federalYear": 2026,
@@ -355,7 +361,8 @@
       "acquiredOn": "2025-10-01",
       "term": "short",
       "washDisallowedCents": 0,
-      "taxable": true
+      "taxable": true,
+      "longTermOn": "2026-10-02"
     }
   ]
 }
