@@ -299,18 +299,20 @@ test('reading a single-record kind returns the record it updates: the linked one
   assert.equal((await rereadOf(app, offerDoc)).json().recordId, offer);
 });
 
-test('PATCH links a document: stubs and forms add a link, a job replaces its offer document; a bad documentId saves nothing', async () => {
+test('PATCH replaces a record\'s document (an old one linked nowhere else goes); a bad documentId saves nothing', async () => {
   const { send, read, docs, exists, job, deps } = setup();
   const jobId = await job();
-  const stubId = (await send('POST', '/v1/pay-stubs', { jobId, payDate: '2026-02-27', grossCents: 1000, netCents: 1000 })).json().id as string;
-  const formId = (await send('POST', '/v1/tax-forms', { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 100 })).json().id as string;
-  const offerId = (await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'offered', documentId: await read(1, 'offer') })).json().id as string;
-  const [oldOffer] = (await docs('job', offerId)).map((d) => d.id);
-  const offer = await read(1, 'offer');
+  const run = await read(2);
+  const stubId = (await send('POST', '/v1/pay-stubs', { jobId, payDate: '2026-02-27', grossCents: 1000, netCents: 1000, documentId: run })).json().id as string;
+  const otherStub = (await send('POST', '/v1/pay-stubs', { jobId, payDate: '2026-03-13', grossCents: 1000, netCents: 1000, documentId: run })).json().id as string;
+  const oldForm = await read(1, 'tax_form');
+  const formId = (await send('POST', '/v1/tax-forms', { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 100, documentId: oldForm })).json().id as string;
+  const oldOffer = await read(1, 'offer');
+  const offerId = (await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'offered', documentId: oldOffer })).json().id as string;
   for (const [url, recordType, recordId, documentId, body] of [
     [`/v1/pay-stubs/${stubId}`, 'pay_stub', stubId, await read(1, 'pay_stub'), { netCents: 1000 }],
     [`/v1/tax-forms/${formId}`, 'tax_form', formId, await read(1, 'tax_form'), { amountCents: 200 }],
-    [`/v1/jobs/${offerId}`, 'job', offerId, offer, { baseCents: 100 }],
+    [`/v1/jobs/${offerId}`, 'job', offerId, await read(1, 'offer'), { baseCents: 100 }],
   ] as const) {
     const before = deps.db.prepare('SELECT COUNT(*) FROM document_links').pluck().get();
     for (const bad of ['nope', recordType === 'job' ? await read(1, 'w4') : await read(1, 'offer')]) {
@@ -320,11 +322,54 @@ test('PATCH links a document: stubs and forms add a link, a job replaces its off
     assert.equal(deps.db.prepare('SELECT COUNT(*) FROM document_links').pluck().get(), before);
     assert.equal((await send('PATCH', url, { documentId }, `p-${recordType}`)).statusCode, 200, url);
     assert.equal((await send('PATCH', url, { documentId }, `p-${recordType}`)).statusCode, 200, `${url}: a retried PATCH replays`);
-    assert.ok((await docs(recordType, recordId)).some((d) => d.id === documentId), url);
+    assert.deepEqual((await docs(recordType, recordId)).map((d) => d.id), [documentId], url);
   }
   assert.equal(deps.db.prepare('SELECT amount_cents FROM tax_forms').pluck().get(), 100, 'a refused PATCH changes nothing');
-  assert.deepEqual((await docs('job', offerId)).map((d) => d.id), [offer]);
-  assert.ok(!exists(oldOffer!), 'the replaced offer document goes');
+  assert.deepEqual([run, oldForm, oldOffer].map(exists), [true, false, false], 'a stub run still linked to another stub stays');
+  assert.deepEqual((await docs('pay_stub', otherStub)).map((d) => d.id), [run]);
+});
+
+test('a PATCH that makes a stub a duplicate of another is a 409', async () => {
+  const { send, job } = setup();
+  const jobId = await job();
+  await send('POST', '/v1/pay-stubs', { jobId, payDate: '2026-02-27', grossCents: 1000, netCents: 1000 });
+  const b = (await send('POST', '/v1/pay-stubs', { jobId, payDate: '2026-03-13', grossCents: 1000, netCents: 1000 })).json().id as string;
+  const res = await send('PATCH', `/v1/pay-stubs/${b}`, { payDate: '2026-02-27' });
+  assert.deepEqual([res.statusCode, res.json().code], [409, 'DUPLICATE_STUB']);
+  assert.equal((await send('PATCH', `/v1/pay-stubs/${b}`, { payDate: '2026-03-13', grossCents: 1000 })).statusCode, 200, 'matching itself is fine');
+});
+
+test('a W-4, state form, return or offer document links to one record of its type: saving it to another moves the link', async () => {
+  const { send, read, docs, job, deps } = setup();
+  const [a, b] = [await job(), await job()];
+  for (const [kind, save, recordId] of [
+    ['w4', (j: string, documentId: string) => send('PUT', `/v1/jobs/${j}/w4`, { filingStatus: 'single', documentId }), (j: string) => j],
+    ['state_w4', (j: string, documentId: string) => send('PUT', `/v1/jobs/${j}/state-w4/XA`, { allowances: 1, documentId }), (j: string) => `${j}:XA`],
+    ['offer', (j: string, documentId: string) => send('PATCH', `/v1/jobs/${j}`, { documentId }), (j: string) => j],
+  ] as const) {
+    const doc = await read(1, kind);
+    assert.equal((await save(a, doc)).statusCode, 200, kind);
+    assert.equal((await save(b, doc)).statusCode, 200, kind);
+    const type = kind === 'offer' ? 'job' : kind;
+    assert.deepEqual([(await docs(type, recordId(a))).length, (await docs(type, recordId(b))).map((d) => d.id)], [0, [doc]], kind);
+  }
+  const doc = await read(1, 'tax_return');
+  await send('PUT', '/v1/tax-returns', { year: 2024, jurisdiction: 'federal', documentId: doc });
+  await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal', documentId: doc });
+  assert.deepEqual(deps.db.prepare("SELECT r.year FROM document_links l JOIN tax_returns r ON r.id = l.record_id WHERE l.document_id = ?").pluck().all(doc), [2025]);
+});
+
+test('a document deleted while it is re-read is a 404', async () => {
+  const { app, send, read, profileReader } = setup();
+  const doc = await read();
+  let release!: () => void;
+  profileReader.hold = new Promise<void>((r) => { release = r; });
+  const reread = rereadOf(app, doc);
+  while (profileReader.calls.length < 2) await new Promise((r) => setImmediate(r));
+  assert.equal((await send('DELETE', `/v1/documents/${doc}`)).statusCode, 200);
+  release();
+  const res = await reread;
+  assert.deepEqual([res.statusCode, res.json().code], [404, 'NOT_FOUND']);
 });
 
 test('a re-read shares the reader guard; an unknown document is 404', async () => {

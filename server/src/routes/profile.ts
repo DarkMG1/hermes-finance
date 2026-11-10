@@ -63,6 +63,11 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   const assertYear = (year: number) => {
     if (year > Number(today().slice(0, 4)) + 1) throw new ApiError(400, 'INVALID_REQUEST', 'year: must be at most next year', 'year');
   };
+  // reading the same pay stubs twice (one PDF holds a whole run of them) shouldn't save them twice
+  const assertNotDuplicate = (s: PayStubBody, id: string | null = null) => {
+    if (db.prepare('SELECT 1 FROM pay_stubs WHERE job_id IS ? AND pay_date = ? AND gross_cents = ? AND net_cents = ? AND id IS NOT ?')
+      .get(s.jobId ?? null, s.payDate, s.grossCents, s.netCents, id)) throw new ApiError(409, 'DUPLICATE_STUB', 'this pay stub is already saved');
+  };
   const stub = (id: string) => {
     const s = getStub(db, id);
     if (!s) throw notFound('pay stub');
@@ -83,13 +88,16 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   /** a new read keeps its pages as a new document; a re-read (documentId) reads that document's pages again */
   const read = async (kind: ProfileKind, pages: Buffer[], documentId?: string) => {
     const start = performance.now();
+    let result;
     try {
-      const result = withRecordIds(db, await readProfile(deps, kind, pages), documentId);
-      return { ...result, documentId: documentId ?? saveDocument(db, kind, pages, deps.now()) };
+      result = await readProfile(deps, kind, pages);
     } finally {
       const kb = Math.round(pages.reduce((n, p) => n + p.length, 0) / 1024);
       console.log(`[hermes] profile read kind=${kind} pages=${pages.length} kb=${kb} read_ms=${Math.round(performance.now() - start)}${documentId ? ' reread' : ''}`);
     }
+    // deleted while it was being read
+    if (documentId && !getDocument(db, documentId)) throw notFound('document');
+    return { ...withRecordIds(db, result, documentId), documentId: documentId ?? saveDocument(db, kind, pages, deps.now()) };
   };
   // no idempotency key: a retried read keeps a second copy of the pages, purged unsaved like any other
   app.post('/v1/profile/read', { bodyLimit: READ_MAX_BYTES }, async (req) => {
@@ -242,9 +250,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
     assertDates(body, STUB_DATES);
     const r = idempotentWrite(deps, req, () => {
       assertJob(body.jobId);
-      // reading the same pay stubs twice (one PDF holds a whole run of them) shouldn't save them twice
-      if (db.prepare('SELECT 1 FROM pay_stubs WHERE job_id IS ? AND pay_date = ? AND gross_cents = ? AND net_cents = ?')
-        .get(body.jobId ?? null, body.payDate, body.grossCents, body.netCents)) throw new ApiError(409, 'DUPLICATE_STUB', 'this pay stub is already saved');
+      assertNotDuplicate(body);
       const id = randomUUID();
       db.prepare(`INSERT INTO pay_stubs (id, ${STUB_COLS.join(', ')}, created_at) VALUES (?, ${marks(STUB_COLS)}, ?)`).run(id, ...stubValues(body), deps.now().toISOString());
       linkDocument(db, body.documentId, 'pay_stub', id);
@@ -261,8 +267,9 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       const merged = parseBody(PayStubBody, { ...pick(current, Object.keys(PayStubBody.shape)), ...patch });
       assertDates(merged, STUB_DATES);
       assertJob(merged.jobId);
+      assertNotDuplicate(merged, current.id);
       db.prepare(`UPDATE pay_stubs SET ${assign(STUB_COLS)} WHERE id = ?`).run(...stubValues(merged), current.id);
-      linkDocument(db, patch.documentId, 'pay_stub', current.id);
+      replaceLink(db, patch.documentId, 'pay_stub', current.id);
       const s = stub(current.id);
       if (s.transactionIds.length && (patch.netCents !== undefined || patch.payDate !== undefined) && !linkable(db, s, s.transactionIds)) {
         db.prepare('DELETE FROM pay_stub_deposits WHERE stub_id = ?').run(s.id);
@@ -318,7 +325,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       assertYear(merged.year);
       assertJob(merged.jobId);
       db.prepare(`UPDATE tax_forms SET ${assign(FORM_COLS)} WHERE id = ?`).run(...formValues(merged), current.id);
-      linkDocument(db, patch.documentId, 'tax_form', current.id);
+      replaceLink(db, patch.documentId, 'tax_form', current.id);
       return { status: 200, body: getForm(db, current.id) };
     });
     return reply.code(r.status).send(r.body);

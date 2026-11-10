@@ -34,10 +34,14 @@ export function linkDocument(db: Db, documentId: string | undefined, recordType:
   db.prepare('INSERT OR IGNORE INTO document_links (document_id, record_type, record_id) VALUES (?, ?, ?)').run(documentId, recordType, recordId);
 }
 
-/** A record that only the latest form applies to (W-4, state form, tax return): a new document replaces its link; one left with no links goes. */
+/** A record re-saved from a document: the new document replaces its link; one left with no links goes. A W-4, state form, tax return or offer
+ *  document describes one record, so it also leaves any other record of that type; a pay stub or tax form document can hold several. */
 export function replaceLink(db: Db, documentId: string | undefined, recordType: DocumentRecordType, recordId: string): void {
   if (documentId === undefined) return;
   linkDocument(db, documentId, recordType, recordId);
+  if (recordType !== 'pay_stub' && recordType !== 'tax_form') {
+    db.prepare('DELETE FROM document_links WHERE document_id = ? AND record_type = ? AND record_id <> ?').run(documentId, recordType, recordId);
+  }
   const old = db.prepare('SELECT document_id FROM document_links WHERE record_type = ? AND record_id = ? AND document_id <> ?').pluck().all(recordType, recordId, documentId) as string[];
   db.prepare('DELETE FROM document_links WHERE record_type = ? AND record_id = ? AND document_id <> ?').run(recordType, recordId, documentId);
   for (const id of old) orphan(db, id);
