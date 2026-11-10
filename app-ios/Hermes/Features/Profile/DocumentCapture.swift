@@ -135,7 +135,7 @@ private struct DocumentCapture: ViewModifier {
             }
             .alert(unreadable ?? "", isPresented: Binding(get: { unreadable != nil }, set: { if !$0 { unreadable = nil } })) {}
             // every way out, a swipe included, refreshes: something may have been saved
-            .sheet(item: $capture, onDismiss: { Task { await onSaved() } }, content: ProfileCaptureFlow.init)
+            .sheet(item: $capture, onDismiss: { Task { await onSaved() } }, content: ProfileCaptureFlow.init(capture:))
     }
 
     private func open(_ wanted: CaptureRequest) {
@@ -179,10 +179,12 @@ extension View {
 }
 
 /// Preview and read, then the review form, once per pay stub when the pages hold several; by hand goes straight to an empty form.
-private struct ProfileCaptureFlow: View {
+/// A re-read of a kept document starts at the review, every stub included: each saves as an update of the record it matched.
+struct ProfileCaptureFlow: View {
+    @Environment(AppModel.self) private var model
     @Environment(\.profileDrafting) private var drafting
     @Environment(\.dismiss) private var dismiss
-    let capture: Capture
+    private let capture: Capture
     /// what's left to review: pay stubs already saved are skipped
     @State private var reads: [ProfileReadResult] = []
     @State private var skipped: Int?
@@ -191,12 +193,21 @@ private struct ProfileCaptureFlow: View {
     @State private var jobId: String?
     @State private var byHand = false
 
+    fileprivate init(capture: Capture) { self.capture = capture }
+
+    init(reread: ProfileReadResult) {
+        capture = Capture(kind: reread.kind, pages: [], dropped: 0)
+        _reads = State(initialValue: reread.reads)
+        _skipped = State(initialValue: 0)
+    }
+
     var body: some View {
         Group {
             if at < reads.count {
                 let read = reads[at]
                 ProfileDraftForm(kind: capture.kind, draft: read.draft, uncertain: Set(read.uncertain), step: reads.count > 1 ? (at + 1, reads.count) : nil,
-                                 jobId: jobId, note: at == 0 ? skippedNote : nil, next: at + 1 < reads.count ? { jobId = $0; at += 1 } : nil)
+                                 jobId: jobId, note: at == 0 ? skippedNote : nil, documentId: read.documentId, recordId: read.recordId,
+                                 next: at + 1 < reads.count ? { jobId = $0; at += 1 } : nil)
                     .id(at)
             } else if let skipped {
                 NavigationStack {
@@ -211,11 +222,21 @@ private struct ProfileCaptureFlow: View {
                                  onRead: { read in
                                      reads = read.reads.filter { !$0.saved }
                                      skipped = read.reads.count - reads.count
+                                     Task { await keep(read.reads.filter(\.saved)) }
                                  }, onByHand: { byHand = true })
             }
         }
         .onAppear { drafting.wrappedValue = true }
         .onDisappear { drafting.wrappedValue = false }
+    }
+
+    /// Stubs skipped as already saved still get these pages, as a re-scan of any other record does when saved; best effort.
+    private func keep(_ saved: [ProfileReadResult]) async {
+        guard let client = model.client else { return }
+        for read in saved {
+            guard let id = read.recordId, let documentId = read.documentId, case .payStub(let body, _) = read.draft else { continue }
+            _ = try? await client.patchPayStub(id: id, body: body, from: body, documentId: documentId, idempotencyKey: UUID().uuidString)
+        }
     }
 
     private var skippedNote: String? {

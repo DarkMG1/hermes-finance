@@ -379,6 +379,17 @@ public struct KeptDocument: Codable, Sendable, Equatable, Identifiable {
     public let links: [DocumentLink]
 }
 
+/// Saves with the read's kept document; when the server no longer has it (purged unsaved or deleted: 400 on `documentId`), saves again
+/// without it under its own key, since the numbers matter more than the pages.
+public func savingDocument<T>(_ documentId: String?, key: String, isolation: isolated (any Actor)? = #isolation,
+                              _ save: (String?, String) async throws -> T) async throws -> T {
+    do {
+        return try await save(documentId, key)
+    } catch ClientError.api(status: 400, let body) where documentId != nil && body.field == "documentId" {
+        return try await save(nil, key + "-nodoc")
+    }
+}
+
 /// `body` as JSON with the read's kept document, which the server links to the saved record.
 func keeping<B: Encodable>(_ body: B, _ documentId: String?) throws -> [String: JSONValue] {
     var out = try JSONDecoder().decode([String: JSONValue].self, from: JSONEncoder().encode(body))

@@ -35,6 +35,7 @@ struct TaxYearsView: View {
                                 try await client.deleteTaxReturn(id: r.id, idempotencyKey: key)
                                 await load()
                             }
+                            .keptDocument(DocumentLink(recordType: .taxReturn, recordId: r.id)) { await load() }
                         }
                         ForEach(year.forms) { TaxFormRow(form: $0) { await load() } }
                     }

@@ -153,6 +153,10 @@ struct ProfileDraftForm: View {
     private let next: ((String?) -> Void)?
     /// shown above the fields, such as stubs skipped as already saved
     private let note: String?
+    /// the read's kept pages, saved with the record
+    private let documentId: String?
+    /// the saved record the read matched: saved as an update of it
+    private let recordId: String?
 
     private struct GrantRow: Identifiable {
         let id = UUID()
@@ -171,15 +175,21 @@ struct ProfileDraftForm: View {
     @State private var savedJobId: String?
     @State private var savedGrants = 0
     @State private var stub: PayStub?
+    /// the matched record as saved, fetched once so a retry sends the same patch; nil after the fetch: it's gone, so the read saves as new
+    @State private var record: Any?
+    @State private var fetched = false
 
     init(kind: ProfileKind, draft: ProfileDraft, uncertain: Set<String>, step: (Int, Int)? = nil, jobId: String? = nil, note: String? = nil,
-         next: ((String?) -> Void)? = nil) {
+         documentId: String? = nil, recordId: String? = nil, next: ((String?) -> Void)? = nil) {
         self.kind = kind
         self.uncertain = uncertain
         self.step = step
         self.note = note
+        self.documentId = documentId
+        self.recordId = recordId
         self.next = next
-        _jobId = State(initialValue: jobId)
+        // a W-4's record is its job, a state form's "<job id>:<state>"
+        _jobId = State(initialValue: jobId ?? recordId.flatMap { [.w4, .stateW4].contains(kind) ? String($0.prefix { $0 != ":" }) : nil })
         var employer: String?
         var grants: [GrantRow] = []
         let texts: [String: String] = switch draft {
@@ -188,7 +198,8 @@ struct ProfileDraftForm: View {
         case .payStub(let b, let e):
             { employer = e; return DraftField.texts(Self.stubFields, b) }()
         case .offer(let j, let g):
-            { grants = g.map { GrantRow(texts: DraftField.texts(Self.grantFields, $0)) }; return DraftField.texts(Self.jobFields, j) }()
+            // an update leaves the job's grants as they are: the read's would be added again
+            { grants = recordId == nil ? g.map { GrantRow(texts: DraftField.texts(Self.grantFields, $0)) } : []; return DraftField.texts(Self.jobFields, j) }()
         case .w4(let b, let e):
             { employer = e; return DraftField.texts(Self.w4Fields, b) }()
         case .stateW4(let b, let e):
@@ -255,8 +266,12 @@ struct ProfileDraftForm: View {
                     .disabled(locked || i < savedGrants)
                 }
                 Section {
-                    if uncertain.contains("grants") { Text("Check the grants against the letter.").textStyle(.caption, color: Palette.loss) }
-                    Button("Add grant") { grants.append(GrantRow(texts: ["kind": "rsu"])) }.disabled(locked)
+                    if recordId != nil {
+                        Text("Updates the saved job. Its grants stay as they are.").textStyle(.caption, color: Palette.secondaryText)
+                    } else {
+                        if uncertain.contains("grants") { Text("Check the grants against the letter.").textStyle(.caption, color: Palette.loss) }
+                        Button("Add grant") { grants.append(GrantRow(texts: ["kind": "rsu"])) }.disabled(locked)
+                    }
                 }
             }
             if let next { Section { Button("Skip this pay stub") { next(jobId) }.disabled(locked) } }
@@ -301,6 +316,13 @@ struct ProfileDraftForm: View {
         jobsError = nil
         do {
             jobs = try await client.jobs()
+            // an update keeps the record's job
+            let saved: String? = switch kind {
+            case .taxForm: try? await matched(Self.formRecord)?.jobId
+            case .payStub: try? await matched(Self.stubRecord)?.jobId
+            default: nil
+            }
+            if let saved { jobId = saved }
             if jobId == nil { jobId = Job.suggested(for: kind == .taxForm ? texts["payer"] : employer, in: jobs)?.id }
         } catch {
             jobsError = "Couldn't load your jobs: \(errorMessage(error))"
@@ -327,19 +349,60 @@ struct ProfileDraftForm: View {
     private func write(_ client: APIClient) async throws -> Bool {
         switch kind {
         case .taxReturn:
+            // upserts by year and jurisdiction, so a matched return is updated
             guard let body = DraftField.build(Self.returnFields, texts, TaxReturnBody()) else { return false }
-            _ = try await client.putTaxReturn(body, from: nil, idempotencyKey: writes.key)
-        case .taxForm:
-            guard var body = DraftField.build(Self.formFields, texts, TaxFormBody()) else { return false }
-            body.jobId = jobId
-            _ = try await client.createTaxForm(body, idempotencyKey: writes.key)
-        case .payStub:
-            guard var body = DraftField.build(Self.stubFields, texts, PayStubBody()) else { return false }
-            body.jobId = jobId
-            // on to the deposits it matches
-            stub = try await client.createPayStub(body, idempotencyKey: writes.key)
+            _ = try await savingDocument(documentId, key: writes.key) { doc, key in
+                try await client.putTaxReturn(body, from: nil, documentId: doc, idempotencyKey: key)
+            }
+        case .taxForm: return try await writeForm(client)
+        case .payStub: return try await writeStub(client)
         case .offer: return try await writeOffer(client)
         case .w4, .stateW4: return try await writeWithholding(client)
+        }
+        return true
+    }
+
+    /// The record this read matched, as saved now; nil without one or when it's gone.
+    private func matched<B>(_ fetch: (APIClient, String) async throws -> Saved<B>?) async throws -> Saved<B>? {
+        guard let recordId, let client = model.client else { return nil }
+        if !fetched {
+            do { record = try await fetch(client, recordId) } catch ClientError.api(status: 404, _) { record = nil }
+            fetched = true
+        }
+        return record as? Saved<B>
+    }
+
+    private static func formRecord(_ c: APIClient, _ id: String) async throws -> TaxForm? {
+        try await c.taxYears().years.flatMap(\.forms).first { $0.id == id }
+    }
+    private static func stubRecord(_ c: APIClient, _ id: String) async throws -> PayStub? { try await c.payStub(id: id) }
+
+    /// An update patches what the review changes on the record; without the document (gone) and with nothing changed, nothing is sent.
+    private func writeForm(_ client: APIClient) async throws -> Bool {
+        let match = try await matched(Self.formRecord)
+        guard var body = DraftField.build(Self.formFields, texts, match?.fields ?? TaxFormBody()) else { return false }
+        body.jobId = jobId
+        try await savingDocument(documentId, key: writes.key) { doc, key in
+            if let match {
+                if doc != nil || body != match.fields {
+                    _ = try await client.patchTaxForm(id: match.id, body: body, from: match.fields, documentId: doc, idempotencyKey: key)
+                }
+            } else {
+                _ = try await client.createTaxForm(body, documentId: doc, idempotencyKey: key)
+            }
+        }
+        return true
+    }
+
+    private func writeStub(_ client: APIClient) async throws -> Bool {
+        let match = try await matched(Self.stubRecord)
+        guard var body = DraftField.build(Self.stubFields, texts, match?.fields ?? PayStubBody()) else { return false }
+        body.jobId = jobId
+        // on to the deposits it matches
+        stub = try await savingDocument(documentId, key: writes.key) { doc, key in
+            guard let match else { return try await client.createPayStub(body, documentId: doc, idempotencyKey: key) }
+            guard doc != nil || body != match.fields else { return match }
+            return try await client.patchPayStub(id: match.id, body: body, from: match.fields, documentId: doc, idempotencyKey: key)
         }
         return true
     }
@@ -349,20 +412,32 @@ struct ProfileDraftForm: View {
         guard let jobId else { return false }
         if kind == .w4 {
             guard let body = DraftField.build(Self.w4Fields, texts, W4Body()) else { return false }
-            _ = try await client.putW4(jobId: jobId, body: body, idempotencyKey: writes.key)
+            _ = try await savingDocument(documentId, key: writes.key) { doc, key in
+                try await client.putW4(jobId: jobId, body: body, documentId: doc, idempotencyKey: key)
+            }
         } else {
             guard let body = DraftField.build(Self.stateW4Fields, texts, StateW4Body()) else { return false }
-            _ = try await client.putStateW4(jobId: jobId, body: body, idempotencyKey: writes.key)
+            _ = try await savingDocument(documentId, key: writes.key) { doc, key in
+                try await client.putStateW4(jobId: jobId, body: body, documentId: doc, idempotencyKey: key)
+            }
         }
         return true
     }
 
-    /// The job first, then each grant, each its own write; a retry starts at the first one not saved.
+    /// The job first (an update of the matched one keeps its status), then each grant, each its own write; a retry starts at the
+    /// first one not saved.
     private func writeOffer(_ client: APIClient) async throws -> Bool {
         if savedJobId == nil {
-            guard var body = DraftField.build(Self.jobFields, texts, CreateJobBody()) else { return false }
-            body.status = "offered"
-            savedJobId = try await client.createJob(body, idempotencyKey: writes.key).job.id
+            let match = try await matched { c, id in try await c.job(id: id).job }
+            guard var body = DraftField.build(Self.jobFields, texts, match?.fields ?? CreateJobBody()) else { return false }
+            if match == nil { body.status = "offered" }
+            savedJobId = try await savingDocument(documentId, key: writes.key) { doc, key in
+                guard let match else { return try await client.createJob(body, documentId: doc, idempotencyKey: key).job.id }
+                if doc != nil || body != match.fields {
+                    _ = try await client.patchJob(id: match.id, body: body, from: match.fields, documentId: doc, idempotencyKey: key)
+                }
+                return match.id
+            }
             writes.didSucceed()
         }
         guard let jobId = savedJobId else { return false }
@@ -492,91 +567,4 @@ struct ProfileDraftForm: View {
         .init(key: "vestMonths", label: "Vests over (months)", kind: .whole(\.vestMonths)),
         .init(key: "vestEveryMonths", label: "Vests every (months)", kind: .whole(\.vestEveryMonths)),
     ]
-}
-
-/// The deposits a saved pay stub can link: one, or several that add up to its net (a paycheck split across accounts); linking closes it.
-struct PayStubLinkSheet: View {
-    @Environment(AppModel.self) private var model
-    @Environment(\.dismiss) private var dismiss
-    let stub: PayStub
-    var header = "Which deposits are this paycheck?"
-    /// instead of closing the sheet, as when more stubs read off the same file come next
-    var onClose: (() -> Void)?
-    @State private var matches: PayStubMatches?
-    @State private var matchesError: String?
-    @State private var selected: Set<String> = []
-    @State private var writes = WriteGuard()
-    @State private var busy = false
-    @State private var error: String?
-
-    var body: some View {
-        let net = stub.netCents ?? 0
-        let total = matches?.deposits.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.amountCents } ?? 0
-        Sheet(title: "Link deposit", saveTitle: "Link", canSave: !busy && !selected.isEmpty && total == net, busy: busy, unresolved: writes.unresolved,
-              dirty: false, onCancel: { close() }, onSave: { Task { await link() } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
-            Section {
-                if let matches {
-                    if matches.deposits.isEmpty {
-                        Text("No deposit within 3 days of the pay date yet. You can link it later.").textStyle(.subhead, color: Palette.secondaryText)
-                    }
-                    ForEach(matches.deposits) { t in
-                        Button {
-                            if selected.contains(t.id) { selected.remove(t.id) } else { selected.insert(t.id) }
-                        } label: {
-                            HStack {
-                                Image(systemName: selected.contains(t.id) ? "checkmark.circle.fill" : "circle").foregroundStyle(Palette.accent)
-                                TransactionRow(transaction: t)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        // after an unconfirmed link only the same deposits may be retried
-                        .disabled(busy || writes.unresolved)
-                        .accessibilityAddTraits(selected.contains(t.id) ? .isSelected : [])
-                    }
-                } else if let matchesError {
-                    InlineError(message: matchesError)
-                    Button("Try again") { Task { await loadMatches() } }
-                } else {
-                    ProgressView().frame(maxWidth: .infinity)
-                }
-            } header: { Text(header) } footer: {
-                if matches?.deposits.isEmpty == false {
-                    Text("Selected \(Money.format(total)) of \(Money.format(net)) net")
-                        .textStyle(.caption, color: total == net ? Palette.secondaryText : Palette.loss)
-                }
-            }
-            if let error { Section { InlineError(message: error) } }
-        }
-        .task { await loadMatches() }
-    }
-
-    private func close() { if let onClose { onClose() } else { dismiss() } }
-
-    private func loadMatches() async {
-        guard matches == nil, let client = model.client else { return }
-        matchesError = nil
-        do {
-            let m = try await client.payStubMatches(id: stub.id)
-            matches = m
-            selected = Set(stub.transactionIds.isEmpty ? m.suggestions.first ?? [] : stub.transactionIds)
-        } catch {
-            matchesError = errorMessage(error)
-        }
-    }
-
-    private func link() async {
-        guard let client = model.client else { return }
-        busy = true
-        defer { busy = false }
-        error = nil
-        do {
-            let ids = matches?.deposits.map(\.id).filter(selected.contains) ?? []
-            _ = try await client.linkPayStub(id: stub.id, transactionIds: ids, idempotencyKey: writes.key)
-            writes.didSucceed()
-            close()
-        } catch {
-            writes.didFail(error)
-            self.error = writes.unresolved ? "Couldn't confirm the link. Tap Link to retry; it won't be applied twice." : errorMessage(error)
-        }
-    }
 }

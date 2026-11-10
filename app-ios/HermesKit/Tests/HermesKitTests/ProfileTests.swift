@@ -301,3 +301,19 @@ import Testing
     #expect(transport.requests.map { String(data: $0.body ?? Data(), encoding: .utf8) }
         == [#"{"documentId":"d-1","payDate":"2026-03-13"}"#, #"{"documentId":"d-1"}"#, #"{"documentId":"d-1"}"#])
 }
+
+@Test func saveRetriesOnceWithoutAGoneDocument() async throws {
+    let gone = ClientError.api(status: 400, body: APIErrorBody(code: "INVALID_REQUEST", message: "unknown", field: "documentId"))
+    var calls: [String] = []
+    let saved = try await savingDocument("d-1", key: "k") { doc, key in
+        calls.append("\(doc ?? "none") \(key)")
+        if doc != nil { throw gone }
+        return 1
+    }
+    #expect(saved == 1 && calls == ["d-1 k", "none k-nodoc"])
+    let other = ClientError.api(status: 400, body: APIErrorBody(code: "INVALID_REQUEST", message: "bad", field: "payDate"))
+    await #expect(throws: other) { try await savingDocument("d-1", key: "k") { _, _ in throw other } }
+    calls = []
+    await #expect(throws: gone) { try await savingDocument(nil, key: "k") { _, key in calls.append(key); throw gone } }
+    #expect(calls == ["k"], "no document: no retry")
+}
