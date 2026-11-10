@@ -375,12 +375,16 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
     return reply.code(r.status).send(r.body);
   });
   app.put<{ Params: { id: string } }>('/v1/tax/roth-contributions/:id', async (req, reply) => {
-    const { taxYear } = parseBody(PatchRothContributionBody, req.body);
+    const b = parseBody(PatchRothContributionBody, req.body);
+    assertDates(b, ['date']);
     const r = idempotentWrite(deps, req, () => {
-      const row = db.prepare('SELECT date FROM roth_contributions WHERE id = ? AND dismissed = 0').get(req.params.id) as { date: string } | undefined;
+      const row = db.prepare('SELECT date, amount_cents AS amountCents, tax_year AS taxYear FROM roth_contributions WHERE id = ? AND dismissed = 0')
+        .get(req.params.id) as { date: string; amountCents: number; taxYear: number } | undefined;
       if (!row) throw notFound('Roth contribution');
-      assertRothYear(row.date, taxYear);
-      db.prepare('UPDATE roth_contributions SET tax_year = ? WHERE id = ?').run(taxYear, req.params.id);
+      const next = { ...row, ...b };
+      assertRothYear(next.date, next.taxYear);
+      db.prepare('UPDATE roth_contributions SET date = ?, amount_cents = ?, tax_year = ?, owner_edited = owner_edited OR ? WHERE id = ?')
+        .run(next.date, next.amountCents, next.taxYear, b.date !== undefined || b.amountCents !== undefined ? 1 : 0, req.params.id);
       return { status: 200, body: db.prepare('SELECT id, date, amount_cents AS amountCents, tax_year AS taxYear, transaction_id AS transactionId FROM roth_contributions WHERE id = ?').get(req.params.id) };
     });
     return reply.code(r.status).send(r.body);

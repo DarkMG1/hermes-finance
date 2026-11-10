@@ -110,6 +110,24 @@ test('roth suggestions follow their source: amount and date refresh, a removed s
   assert.deepEqual((await list(2026)).map((c) => c.transactionId), ['d1']);
 });
 
+test('an owner-edited roth suggestion keeps its amount and date on refresh; an untouched one follows its source', async () => {
+  const { get, send, db } = setup();
+  seedAccount(db, { id: 'roth', type: 'investment', subtype: 'roth' });
+  const ins = db.prepare("INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, updated_at) VALUES (?, 'roth', NULL, ?, 'cash', 'deposit', 0, ?, 'x')");
+  ins.run('d1', '2026-02-10', -100000);
+  ins.run('d2', '2026-02-12', -200000);
+  const list = async () => ((await get('/v1/tax/roth-contributions?taxYear=2026')).json().contributions as { id: string; date: string; amountCents: number; transactionId: string }[])
+    .map((c) => [c.transactionId, c.date, c.amountCents]);
+  await list();
+  const edited = await send('PUT', '/v1/tax/roth-contributions/roth-d1', { amountCents: 90000, date: '2026-02-09' });
+  assert.deepEqual([edited.statusCode, edited.json().amountCents, edited.json().date, edited.json().taxYear], [200, 90000, '2026-02-09', 2026]);
+  db.prepare("UPDATE investment_transactions SET amount_cents = amount_cents - 5000, date = '2026-02-14'").run();
+  assert.deepEqual(await list(), [['d1', '2026-02-09', 90000], ['d2', '2026-02-14', 205000]]);
+  // a date the stored tax year doesn't allow is refused; an empty edit too
+  assert.equal((await send('PUT', '/v1/tax/roth-contributions/roth-d1', { date: '2025-12-01' })).json().field, 'taxYear');
+  assert.equal((await send('PUT', '/v1/tax/roth-contributions/roth-d1', {})).statusCode, 400);
+});
+
 test('roth contributions: a year out of range is 400; a dismissed suggestion is 404 to PUT and DELETE', async () => {
   const { get, send, db } = setup();
   for (const y of ['1999', '2028', 'x']) assert.equal((await get(`/v1/tax/roth-contributions?taxYear=${y}`)).statusCode, 400, y);

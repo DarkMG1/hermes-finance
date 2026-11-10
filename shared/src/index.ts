@@ -604,7 +604,9 @@ export const RothContribution = z.object({ id: Id, date: DateStr, amountCents: M
 export type RothContribution = z.infer<typeof RothContribution>;
 export const RothContributionBody = z.object({ date: DateInput, amountCents: Money.min(1), taxYear: z.number().int() }).strict();
 export type RothContributionBody = z.infer<typeof RothContributionBody>;
-export const PatchRothContributionBody = z.object({ taxYear: z.number().int() }).strict();
+/** An amount or date the owner sets on a suggested contribution stays when its source transaction changes. */
+export const PatchRothContributionBody = z.object({ date: DateInput.optional(), amountCents: Money.min(1).optional(), taxYear: z.number().int().optional() }).strict()
+  .refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
 export type PatchRothContributionBody = z.infer<typeof PatchRothContributionBody>;
 /** A lot the owner enters for shares held before the investment history. */
 export const LotEntryBody = z.object({ accountId: Id, securityId: Id, acquiredOn: DateInput, quantity: z.number().positive().max(1e12), costCents: Money }).strict();

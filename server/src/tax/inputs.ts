@@ -22,14 +22,14 @@ const SOURCES = `SELECT t.id, t.date, -t.amount_cents AS cents FROM investment_t
         AND abs(julianday(o.date) - julianday(t.date)) <= 7))`;
 
 /** Suggestions follow their source on every read: a new one becomes a contribution for the year it was deposited, a changed one takes the new
- *  date and amount (the owner's tax year stays while the new date allows it), and one whose source is gone (or no longer qualifies) stops counting. */
+ *  date and amount unless the owner edited either (the owner's tax year stays while the new date allows it), and one whose source is gone (or no longer qualifies) stops counting. */
 function suggestRoth(db: Db): void {
   db.prepare(`INSERT INTO roth_contributions (id, date, amount_cents, tax_year, transaction_id)
     SELECT 'roth-' || s.id, s.date, s.cents, CAST(substr(s.date, 1, 4) AS INTEGER), s.id FROM (${SOURCES}) s
     WHERE NOT EXISTS (SELECT 1 FROM roth_contributions r WHERE r.transaction_id = s.id)`).run();
   db.prepare(`UPDATE roth_contributions AS r SET date = s.date, amount_cents = s.cents,
       tax_year = CASE WHEN r.tax_year = CAST(substr(s.date, 1, 4) AS INTEGER) - 1 AND substr(s.date, 6) <= '04-15' THEN r.tax_year ELSE CAST(substr(s.date, 1, 4) AS INTEGER) END
-    FROM (${SOURCES}) s WHERE r.transaction_id = s.id AND (r.date <> s.date OR r.amount_cents <> s.cents)`).run();
+    FROM (${SOURCES}) s WHERE r.transaction_id = s.id AND r.owner_edited = 0 AND (r.date <> s.date OR r.amount_cents <> s.cents)`).run();
 }
 
 export function listRothContributions(db: Db, taxYear: number): RothContribution[] {
