@@ -16,6 +16,9 @@ import Testing
     #expect(scenario.fields.moveTo == "XB" && scenario.fields.bonusCents == 1000000 && scenario.fields.rothCents == nil)
     let lots = try decode(TaxLots.self, "tax-lots")
     #expect(lots.lots.first?.status == "known" && lots.methods["acct-tax-brokerage"] == "fifo" && lots.inferred["acct-tax-brokerage"] == true)
+    #expect(lots.basisMatched["acct-tax-brokerage"] == true && lots.unresolved.first?.ticker == "SYNO" && lots.unresolved.first?.quantity == 4)
+    #expect(projection.complete && projection.incompleteReason == nil && projection.meetsSafeHarbor == true)
+    #expect(whatIf.after.complete && whatIf.sales.last?.longTermOn == "2026-10-02")
     let years = try decode(TaxYears.self, "tax-years")
     #expect(years.years.first?.returns.first?.capitalLossCarryoverShortCents == 5000)
     #expect(years.years.first?.returns.first?.capitalLossCarryoverLongCents == 15000)
@@ -108,4 +111,37 @@ private func json(_ data: Data?) throws -> [String: JSONValue] { try JSONDecoder
     json["returns"] = returns
     let old = try JSONDecoder().decode(TaxProjection.self, from: JSONSerialization.data(withJSONObject: json))
     #expect(old.returns[0].safeHarborCents == nil && old.returns[0].unusedCarryover == nil)
+}
+
+@Test func olderServerTaxV23FieldsDecode() throws {
+    var json = try #require(JSONSerialization.jsonObject(with: fixture("tax-projection")) as? [String: Any])
+    json.removeValue(forKey: "complete")
+    #expect(try JSONDecoder().decode(TaxProjection.self, from: JSONSerialization.data(withJSONObject: json)).complete)
+    var lots = try #require(JSONSerialization.jsonObject(with: fixture("tax-lots")) as? [String: Any])
+    lots.removeValue(forKey: "basisMatched")
+    lots.removeValue(forKey: "unresolved")
+    let old = try JSONDecoder().decode(TaxLots.self, from: JSONSerialization.data(withJSONObject: lots))
+    #expect(old.basisMatched.isEmpty && old.unresolved.isEmpty)
+    var whatIf = try #require(JSONSerialization.jsonObject(with: fixture("tax-what-if")) as? [String: Any])
+    whatIf["sales"] = try #require(whatIf["sales"] as? [[String: Any]]).map { var s = $0; s.removeValue(forKey: "longTermOn"); return s }
+    #expect(try JSONDecoder().decode(TaxWhatIf.self, from: JSONSerialization.data(withJSONObject: whatIf)).sales.allSatisfy { $0.longTermOn == nil })
+    var heads = try #require(JSONSerialization.jsonObject(with: fixture("tax-heads-up")) as? [String: Any])
+    heads.removeValue(forKey: "items")
+    #expect(try JSONDecoder().decode(TaxHeadsUp.self, from: JSONSerialization.data(withJSONObject: heads)).items == nil)
+}
+
+@Test func anIncompleteProjectionSaysWhyAndTheSafeHarborCaptionFollowsFederal() throws {
+    var json = try #require(JSONSerialization.jsonObject(with: fixture("tax-projection")) as? [String: Any])
+    json["complete"] = false
+    json["assumptions"] = ["Wages from pay stubs", "XC not supported: its tax isn't in the total"]
+    var returns = try #require(json["returns"] as? [[String: Any]])
+    returns[0]["withheldCents"] = 1
+    json["returns"] = returns
+    let p = try JSONDecoder().decode(TaxProjection.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(p.incompleteReason == "XC not supported: its tax isn't in the total" && p.meetsSafeHarbor == false)
+    json["assumptions"] = [String]()
+    returns[0].removeValue(forKey: "safeHarborCents")
+    json["returns"] = returns
+    let bare = try JSONDecoder().decode(TaxProjection.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(bare.incompleteReason == "a return's tax isn't in the total" && bare.meetsSafeHarbor == nil)
 }

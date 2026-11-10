@@ -89,6 +89,16 @@ public struct TaxSale: Decodable, Sendable, Equatable {
     public let term: String
     public let washDisallowedCents: Int
     public let taxable: Bool
+    /// a proposed short-term sale: the day it would turn long-term
+    public let longTermOn: String?
+}
+
+/// Shares held before the history that past sales took: their date and cost are still unknown.
+public struct TaxUnresolvedShares: Decodable, Sendable, Equatable {
+    public let accountId: String
+    public let securityId: String
+    public let ticker: String?
+    public let quantity: Double
 }
 
 public struct TaxLots: Decodable, Sendable, Equatable {
@@ -98,6 +108,21 @@ public struct TaxLots: Decodable, Sendable, Equatable {
     public let methods: [String: String]
     /// per account: true when the method is inferred from the holding's cost basis
     public let inferred: [String: Bool]
+    /// per account: false when no method matched the cost basis and FIFO is the default
+    public let basisMatched: [String: Bool]
+    public let unresolved: [TaxUnresolvedShares]
+
+    private enum Keys: String, CodingKey { case lots, sales, methods, inferred, basisMatched, unresolved }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: Keys.self)
+        lots = try c.decode([TaxLot].self, forKey: .lots)
+        sales = try c.decode([TaxSale].self, forKey: .sales)
+        methods = try c.decode([String: String].self, forKey: .methods)
+        inferred = try c.decode([String: Bool].self, forKey: .inferred)
+        basisMatched = try c.decodeIfPresent([String: Bool].self, forKey: .basisMatched) ?? [:]
+        unresolved = try c.decodeIfPresent([TaxUnresolvedShares].self, forKey: .unresolved) ?? []
+    }
 }
 
 /// A lot for shares held before the investment history.
@@ -154,6 +179,8 @@ public struct TaxProjection: Decodable, Sendable, Equatable {
     public let year: Int
     public let openYears: [Int]
     public let asOf: String
+    /// false when a return's tax isn't in the combined result
+    public let complete: Bool
     public let combinedBalanceCents: Int
     public let returns: [TaxReturnResult]
     public let assumptions: [String]
@@ -161,19 +188,33 @@ public struct TaxProjection: Decodable, Sendable, Equatable {
     public let waysToSave: [TaxAdvice]
     public let headsUp: [TaxAdvice]
 
-    private enum Keys: String, CodingKey { case year, openYears, asOf, combinedBalanceCents, returns, assumptions, figures, waysToSave, headsUp }
+    private enum Keys: String, CodingKey { case year, openYears, asOf, complete, combinedBalanceCents, returns, assumptions, figures, waysToSave, headsUp }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: Keys.self)
         year = try c.decode(Int.self, forKey: .year)
         openYears = try c.decode([Int].self, forKey: .openYears)
         asOf = try c.decode(String.self, forKey: .asOf)
+        complete = try c.decodeIfPresent(Bool.self, forKey: .complete) ?? true
         combinedBalanceCents = try c.decode(Int.self, forKey: .combinedBalanceCents)
         returns = try c.decode([TaxReturnResult].self, forKey: .returns)
         assumptions = try c.decode([String].self, forKey: .assumptions)
         figures = try c.decode(Figures.self, forKey: .figures)
         waysToSave = try c.decode([TaxAdvice].self, forKey: .waysToSave)
         headsUp = try c.decodeIfPresent([TaxAdvice].self, forKey: .headsUp) ?? []
+    }
+
+    /// Why the combined result leaves something out: the assumptions that say so.
+    public var incompleteReason: String? {
+        guard !complete else { return nil }
+        let notes = assumptions.filter { $0.contains("isn't in the total") }
+        return notes.isEmpty ? "a return's tax isn't in the total" : notes.joined(separator: "; ")
+    }
+
+    /// The federal return's withholding against its safe harbor, when the server knows one.
+    public var meetsSafeHarbor: Bool? {
+        guard let federal = returns.first(where: { $0.jurisdiction == "federal" }), let harbor = federal.safeHarborCents else { return nil }
+        return federal.withheldCents >= harbor
     }
 }
 
