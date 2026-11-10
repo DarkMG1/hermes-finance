@@ -75,6 +75,8 @@ public struct TaxLot: Decodable, Sendable, Equatable, Identifiable {
     public let costCents: Int
     /// known, entered or unverified
     public let status: String
+    /// the owner's entry this lot came from (also when unverified or wash-split): the id deleteTaxLot takes; nil from older servers
+    public let entryId: String?
 }
 
 public struct TaxSale: Decodable, Sendable, Equatable {
@@ -93,7 +95,7 @@ public struct TaxSale: Decodable, Sendable, Equatable {
     public let longTermOn: String?
 }
 
-/// Shares held before the history that past sales took: their date and cost are still unknown.
+/// All shares held before the history that no entered lot covers, where past sales took some: those sales' date and cost are unknown.
 public struct TaxUnresolvedShares: Decodable, Sendable, Equatable {
     public let accountId: String
     public let securityId: String

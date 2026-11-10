@@ -9,6 +9,17 @@
       "quantity": 10,
       "costCents": 100000,
       "status": "known"
+    },
+    {
+      "id": "entry-1",
+      "accountId": "acct-tax-brokerage",
+      "securityId": "sec-taxb",
+      "ticker": "SYNO",
+      "acquiredOn": "2020-05-01",
+      "quantity": 2,
+      "costCents": 20000,
+      "status": "entered",
+      "entryId": "entry-1"
     }
   ],
   "sales": [

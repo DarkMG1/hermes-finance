@@ -17,6 +17,7 @@ import Testing
     let lots = try decode(TaxLots.self, "tax-lots")
     #expect(lots.lots.first?.status == "known" && lots.methods["acct-tax-brokerage"] == "fifo" && lots.inferred["acct-tax-brokerage"] == true)
     #expect(lots.basisMatched["acct-tax-brokerage"] == true && lots.unresolved.first?.ticker == "SYNO" && lots.unresolved.first?.quantity == 4)
+    #expect(lots.lots.map(\.entryId) == [nil, "entry-1"])
     #expect(projection.complete && projection.incompleteReason == nil && projection.meetsSafeHarbor == true)
     #expect(whatIf.after.complete && whatIf.sales.last?.longTermOn == "2026-10-02")
     let years = try decode(TaxYears.self, "tax-years")
@@ -38,6 +39,10 @@ import Testing
     years["years"] = [year]
     let decoded = try JSONDecoder().decode(TaxYears.self, from: JSONSerialization.data(withJSONObject: years))
     #expect(decoded.years.first?.returns.first?.capitalLossCarryoverShortCents == nil)
+    var lots = try #require(JSONSerialization.jsonObject(with: fixture("tax-lots")) as? [String: Any])
+    lots["lots"] = (lots["lots"] as? [[String: Any]])?.map { $0.filter { $0.key != "entryId" } }
+    let oldLots = try JSONDecoder().decode(TaxLots.self, from: JSONSerialization.data(withJSONObject: lots))
+    #expect(oldLots.lots.allSatisfy { $0.entryId == nil })
 }
 
 private func client(_ transport: FakeTransport) -> APIClient { APIClient(baseURL: testBase, token: "t", transport: transport) }

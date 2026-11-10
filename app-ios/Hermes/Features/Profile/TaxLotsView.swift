@@ -115,10 +115,10 @@ private struct LotRow: View {
         .sheet(isPresented: $entering) {
             EnterLotForm(accountId: lot.accountId, securityId: lot.securityId, quantity: lot.quantity, onChange: onChange)
         }
-        // entered lots carry their own id; the seeded unverified lot and lots from the history can't be deleted
-        if lot.status != "known", !lot.id.hasPrefix("unverified:") {
+        // only the owner's entries can be deleted; the seeded unverified lot and lots from the history can't
+        if let entryId = lot.entryId {
             row.deleteSwipe("Delete this lot?") { client, key in
-                try await client.deleteTaxLot(id: lot.id, idempotencyKey: key)
+                try await client.deleteTaxLot(id: entryId, idempotencyKey: key)
                 await onChange()
             }
         } else {
@@ -127,7 +127,7 @@ private struct LotRow: View {
     }
 }
 
-/// Shares past sales took from before the history: entering their date and cost settles those sales' cost.
+/// Shares held before the history, some sold since: entering their date and cost settles those sales' cost.
 private struct UnresolvedRow: View {
     let shares: TaxUnresolvedShares
     let onChange: () async -> Void
@@ -135,9 +135,10 @@ private struct UnresolvedRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            ListRow(title: "\(shares.ticker ?? "Security") · \(shares.quantity.formatted()) shares sold", subtitle: "Date and cost unknown")
+            ListRow(title: "\(shares.ticker ?? "Security") · \(shares.quantity.formatted()) shares bought before the trade history",
+                    subtitle: "Date and cost unknown")
             Button("Enter date and cost") { entering = true }
-            Text("Held before the history: those sales' cost is unknown").textStyle(.caption, color: Palette.loss)
+            Text("Some were sold: those sales' cost is unknown").textStyle(.caption, color: Palette.loss)
         }
         .listRowBackground(Palette.loss.opacity(0.15))
         .sheet(isPresented: $entering) {

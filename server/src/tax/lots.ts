@@ -15,8 +15,8 @@ export type Sale = {
 };
 /** A lot as the calculator sees it: `boughtOn` is the raw buy (or entered) date, before any wash-sale tacking (null: unverified); `base` the
  *  buy or entered lot it was split from; `replaced` marks shares already used as some loss's wash-sale replacement. */
-export type HeldLot = Lot & { boughtOn: string | null; base: string; replaced: boolean };
-/** Shares held before the history that past sales took, per position (a fully sold position too): entering their lot resolves those sales' cost. */
+export type HeldLot = Lot & { boughtOn: string | null; base: string; replaced: boolean; entryId?: string };
+/** All pre-history shares no entered lot covers, per position where past sales (not transfers) took some, a fully sold one too: entering their lots resolves those sales. */
 export type Unresolved = { accountId: string; securityId: string; ticker: string | null; quantity: number };
 
 /** Fewer shares than this are float leftovers of fractional lots, not a holding. */
@@ -140,7 +140,7 @@ export function buildLots(db: Db, asOf: string): {
     ];
     const sales: Sale[] = [];
     const washUsed = new Map<string, number>();
-    const preSold = new Map<string, number>();
+    const preSold = new Set<string>();
     for (const r of rows) {
       if (r.type === 'buy') continue;
       const pool = lots.filter((l) => l.accountId === r.accountId && l.securityId === r.securityId && l.quantity >= DUST && l.since <= r.date)
@@ -151,7 +151,7 @@ export function buildLots(db: Db, asOf: string): {
         if (need < DUST) break;
         const t = take(lot, Math.min(need, lot.quantity));
         need -= t.quantity;
-        if (lot.id.startsWith('unverified:')) preSold.set(pair(lot.accountId, lot.securityId), (preSold.get(pair(lot.accountId, lot.securityId)) ?? 0) + t.quantity);
+        if (lot.id.startsWith('unverified:') && r.type !== 'transfer' && t.quantity >= DUST) preSold.add(pair(lot.accountId, lot.securityId));
         parts.push({ lot, ...t });
       }
       // more shares sold than the history and holdings account for: like an unverified lot, date and cost unknown
@@ -229,17 +229,21 @@ export function buildLots(db: Db, asOf: string): {
   const basisMatched = Object.fromEntries(accounts.map((a) => [a.id, a.lotMethod === null && matches(methods[a.id] === 'hifo' ? hifo.lots : fifo.lots, a.id)]));
   const { lots, sales, washUsed, preSold } = run((id) => methods[id]!);
   const split = (p: string) => p.split('\u0000') as [string, string];
+  const entryIds = new Set(entered.map((e) => e.id));
   return {
     lots: lots.sort((a, b) => a.accountId.localeCompare(b.accountId) || a.securityId.localeCompare(b.securityId)
       || byMethod('fifo', (l: Work) => `${l.acquiredOn ?? ''}${l.order}`)(a, b))
       .map(({ id, accountId, securityId, ticker, acquiredOn, quantity, costCents, status, order, base, replaced }) => ({
         id, accountId, securityId, ticker, acquiredOn, quantity, costCents, replaced, base, boughtOn: status === 'unverified' ? null : order,
         status: mismatched.has(pair(accountId, securityId)) ? 'unverified' : status,
+        // the owner's lot_entries row it came from (also when unverified or wash-split): the id DELETE /v1/tax/lots/:id takes
+        ...(entryIds.has(base) ? { entryId: base } : {}),
       })),
     sales, methods, inferred, basisMatched,
-    unresolved: [...preSold].filter(([, q]) => q >= DUST).map(([p, quantity]) => {
+    // the whole pre-history quantity no entered lot covers, not just the sold part: entering the true lots resolves the sales
+    unresolved: [...preSold].map((p) => {
       const [accountId, securityId] = split(p);
-      return { accountId, securityId, ticker: tickerOf(securityId), quantity };
+      return { accountId, securityId, ticker: tickerOf(securityId), quantity: before.get(p)! };
     }),
     mismatched: [...mismatched].map((p) => { const [accountId, securityId] = split(p); return { accountId, securityId, ticker: tickerOf(securityId) }; }),
     buys: rows.filter((r) => r.type === 'buy').map(({ id, securityId, date, quantity }) => ({ id, securityId, date, quantity })),
@@ -250,7 +254,8 @@ export function buildLots(db: Db, asOf: string): {
 /** What the API and Ask show of the lots: no calculator bookkeeping. */
 export function lotsView(b: ReturnType<typeof buildLots>) {
   return {
-    lots: b.lots.map(({ id, accountId, securityId, ticker, acquiredOn, quantity, costCents, status }) => ({ id, accountId, securityId, ticker, acquiredOn, quantity, costCents, status })),
+    lots: b.lots.map(({ id, accountId, securityId, ticker, acquiredOn, quantity, costCents, status, entryId }) =>
+      ({ id, accountId, securityId, ticker, acquiredOn, quantity, costCents, status, ...(entryId ? { entryId } : {}) })),
     sales: b.sales, methods: b.methods, inferred: b.inferred, basisMatched: b.basisMatched, unresolved: b.unresolved,
   };
 }

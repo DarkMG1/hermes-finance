@@ -54,7 +54,7 @@ test('fixtures satisfy the shared contract', async () => {
   TaxInputs.parse(f['tax-inputs.json']);
   TaxScenario.parse(f['tax-scenario.json']);
   const lots = TaxLots.parse(f['tax-lots.json']);
-  assert.deepEqual([lots.lots.length, lots.unresolved.length], [1, 1]);
+  assert.deepEqual([lots.lots.map((l) => l.entryId ?? null), lots.unresolved.map((u) => u.quantity)], [[null, 'entry-1'], [4]]);
   assert.ok(TaxWhatIf.parse(f['tax-what-if.json']).sales.every((x) => x.term !== 'short' || x.longTermOn));
   for (const kind of ['tax-return', 'tax-form', 'pay-stub', 'offer', 'w4', 'state-w4']) assert.equal(ProfileReadResult.parse(f[`profile-read-${kind}.json`]).kind, kind.replace('-', '_'));
 });

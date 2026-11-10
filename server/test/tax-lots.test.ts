@@ -148,6 +148,8 @@ test('an entered lot replaces the unverified remainder', async () => {
   db.prepare("UPDATE holdings SET quantity = 8, cost_basis_cents = 110000 WHERE account_id = 'brk'").run();
   const shrunk = buildLots(db, AS_OF).lots;
   assert.deepEqual(shrunk.map((l) => [l.status, l.quantity, l.costCents]), [['unverified', 4, 60000], ['known', 5, 50000]]);
+  // only the owner's entry carries the id DELETE takes, even unverified
+  assert.deepEqual((await get('/v1/tax/lots')).json().lots.map((l: { entryId?: string }) => l.entryId === shrunk[0]!.id), [true, false]);
   assert.notEqual(planSale(shrunk, 'specific', 'brk', 'sx', 1, [shrunk[0]!.id]).blocked, null);
   // pre-history shares a history sale took still count: 10 before the history, 5 of them sold, 5 held
   security(db, 'sp', 'SYNP');
@@ -275,7 +277,7 @@ test('a history that adds up to more shares than held makes the position unverif
   buy(db, 'brk', 'sx', '2025-01-02', 2, 20000);
   holding(db, 'brk', 'sx', 1, 10000);
   const r = buildLots(db, AS_OF);
-  assert.deepEqual(r.lots.map((l) => [l.status, l.quantity]), [['unverified', 2]]);
+  assert.deepEqual(r.lots.map((l) => [l.status, l.quantity, l.entryId]), [['unverified', 2, undefined]]);
   assert.deepEqual(r.mismatched, [{ accountId: 'brk', securityId: 'sx', ticker: 'SYNA' }]);
   assert.notEqual(planSale(r.lots, 'fifo', 'brk', 'sx', 1).blocked, null);
 });
@@ -293,6 +295,24 @@ test('pre-history shares past sales took are unresolved until a lot is entered, 
   const after = buildLots(db, AS_OF);
   assert.deepEqual(after.unresolved, []);
   assert.deepEqual(after.sales.map(brief), [['2025-02-01', 10, 100000, 60000, '2020-05-01', 'long']]);
+});
+
+test('unresolved is the whole pre-history quantity, held shares too, and a transfer out is no sale', async () => {
+  const { db, get, send } = setup();
+  // 10 held before the history, 4 sold, 6 still held
+  holding(db, 'brk', 'sx', 6, 60000);
+  sell(db, 'brk', 'sx', '2025-02-01', 4, 40000);
+  const before = (await get('/v1/tax/lots')).json();
+  assert.deepEqual(before.unresolved, [{ accountId: 'brk', securityId: 'sx', ticker: 'SYNA', quantity: 10 }]);
+  assert.equal((await send('POST', '/v1/tax/lots', { accountId: 'brk', securityId: 'sx', acquiredOn: '2020-05-01', quantity: 10, costCents: 50000 })).statusCode, 201);
+  const after = buildLots(db, AS_OF);
+  assert.deepEqual(after.unresolved, []);
+  assert.deepEqual(after.sales.map(brief), [['2025-02-01', 4, 40000, 20000, '2020-05-01', 'long']]);
+  // pre-history shares only transferred out: nothing sold, nothing unresolved
+  security(db, 'sz', 'SYNC');
+  db.prepare("INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, updated_at) VALUES ('t1', 'brk', 'sz', '2025-03-01', 'transfer', 'transfer', -3, 0, 'x')").run();
+  holding(db, 'brk', 'sz', 2, 2000);
+  assert.deepEqual(buildLots(db, AS_OF).unresolved, []);
 });
 
 test('an entered lot is never sold before its date, and washes a loss like a bought one', () => {

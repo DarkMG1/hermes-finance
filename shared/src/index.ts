@@ -616,6 +616,8 @@ export type LotMethodBody = z.infer<typeof LotMethodBody>;
 export const Lot = z.object({
   id: z.string(), accountId: Id, securityId: Id, ticker: z.string().nullable(), acquiredOn: DateStr.nullable(), quantity: z.number(), costCents: Cents,
   status: z.enum(['known', 'entered', 'unverified']),
+  /** owner-entered lots only (also when unverified or split by a wash sale): the id DELETE /v1/tax/lots/:id removes */
+  entryId: z.string().optional(),
 });
 export type Lot = z.infer<typeof Lot>;
 export const Sale = z.object({
@@ -626,7 +628,7 @@ export const Sale = z.object({
 });
 export type Sale = z.infer<typeof Sale>;
 const LotMethod = z.enum(['fifo', 'hifo', 'specific']);
-/** Shares held before the trade history that past sales took (a fully sold position too): entering their lot (POST /v1/tax/lots) resolves those sales' cost. */
+/** All shares held before the trade history that no entered lot covers, where past sales took some (a fully sold position too): entering their lots (POST /v1/tax/lots) resolves those sales' cost. */
 export const UnresolvedShares = z.object({ accountId: Id, securityId: Id, ticker: z.string().nullable(), quantity: z.number() });
 export type UnresolvedShares = z.infer<typeof UnresolvedShares>;
 /** inferred: the owner hasn't set the account's method; basisMatched: the inferred method reproduces the broker's basis (false: FIFO by default). */
