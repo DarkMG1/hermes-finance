@@ -61,7 +61,7 @@ function buy(db: Db, account: string, sec: string, date: string, quantity: numbe
     .run(`b${(seq += 1)}`, account, sec, date, quantity, costCents);
 }
 // the subtype word is on the personal-data denylist
-const PAYOUT = ['divi', 'dend'].join('');
+const PAYOUT = 'dividend';
 function payout(db: Db, account: string, sec: string, date: string, cents: number) {
   db.prepare("INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, updated_at) VALUES (?, ?, ?, ?, 'cash', ?, 0, ?, 'x')")
     .run(`d${(seq += 1)}`, account, sec, date, PAYOUT, -cents);
