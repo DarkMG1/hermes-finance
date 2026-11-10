@@ -82,3 +82,50 @@ test('roth deposits into a roth account are suggested once', async () => {
   assert.equal((await send('DELETE', `/v1/tax/roth-contributions/${a[1]!.id}`)).statusCode, 200);
   assert.deepEqual(await list(2026), []);
 });
+
+test('roth suggestions follow their source: amount and date refresh, a removed source stops counting, the owner\'s year and dismissals stay', async () => {
+  const { get, send, db } = setup();
+  seedAccount(db, { id: 'roth', type: 'investment', subtype: 'roth' });
+  seedAccount(db, { id: 'roth2', type: 'investment', subtype: 'roth' });
+  const ins = db.prepare('INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, updated_at) VALUES (?, ?, NULL, ?, ?, ?, 0, ?, ?)');
+  ins.run('d1', 'roth', '2026-02-10', 'cash', 'deposit', -100000, 'x');
+  ins.run('d2', 'roth', '2026-03-01', 'cash', 'deposit', -200000, 'x');
+  ins.run('d3', 'roth', '2026-03-05', 'cash', 'deposit', -300000, 'x');
+  // a move between two Roth accounts is no contribution
+  ins.run('o1', 'roth2', '2026-03-02', 'transfer', 'transfer', 400000, 'x');
+  ins.run('i1', 'roth', '2026-03-04', 'transfer', 'transfer', -400000, 'x');
+  const list = async (y: number) => (await get(`/v1/tax/roth-contributions?taxYear=${y}`)).json().contributions as { id: string; date: string; amountCents: number; transactionId: string }[];
+  const a = await list(2026);
+  assert.deepEqual(a.map((c) => c.transactionId), ['d1', 'd2', 'd3']);
+  assert.equal((await send('PUT', `/v1/tax/roth-contributions/${a[0]!.id}`, { taxYear: 2025 })).statusCode, 200);
+  assert.equal((await send('DELETE', `/v1/tax/roth-contributions/${a[2]!.id}`)).statusCode, 200);
+  // a sync corrects d1's amount (still Jan–Apr 15: the owner's 2025 stays) and d3's; drops d2
+  db.prepare("UPDATE investment_transactions SET amount_cents = -700000, date = '2026-02-11' WHERE id = 'd1'").run();
+  db.prepare("UPDATE investment_transactions SET amount_cents = -350000 WHERE id = 'd3'").run();
+  db.prepare("DELETE FROM investment_transactions WHERE id = 'd2'").run();
+  assert.deepEqual((await list(2025)).map((c) => [c.transactionId, c.date, c.amountCents]), [['d1', '2026-02-11', 700000]]);
+  assert.deepEqual(await list(2026), []);
+  // a date moved past Apr 15 can't stay in the prior year
+  db.prepare("UPDATE investment_transactions SET date = '2026-05-01' WHERE id = 'd1'").run();
+  assert.deepEqual((await list(2026)).map((c) => c.transactionId), ['d1']);
+});
+
+test('roth contributions: a year out of range is 400; a dismissed suggestion is 404 to PUT and DELETE', async () => {
+  const { get, send, db } = setup();
+  for (const y of ['1999', '2028', 'x']) assert.equal((await get(`/v1/tax/roth-contributions?taxYear=${y}`)).statusCode, 400, y);
+  assert.equal((await get('/v1/tax/roth-contributions?taxYear=2027')).statusCode, 200);
+  seedAccount(db, { id: 'roth', type: 'investment', subtype: 'roth' });
+  db.prepare("INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, updated_at) VALUES ('d1', 'roth', NULL, '2026-02-10', 'cash', 'deposit', 0, -100000, 'x')").run();
+  const [c] = (await get('/v1/tax/roth-contributions?taxYear=2026')).json().contributions;
+  assert.equal((await send('DELETE', `/v1/tax/roth-contributions/${c.id}`)).statusCode, 200);
+  assert.equal((await send('PUT', `/v1/tax/roth-contributions/${c.id}`, { taxYear: 2025 })).statusCode, 404);
+  assert.equal((await send('DELETE', `/v1/tax/roth-contributions/${c.id}`)).statusCode, 404);
+});
+
+test('scenario moveDate edges: the first and last day of the year; year bounds', async () => {
+  const { send } = setup();
+  for (const d of ['2027-01-01', '2027-12-31']) assert.equal((await send('PUT', '/v1/tax/scenario/2027', { moveDate: d, moveTo: 'XA' })).statusCode, 200, d);
+  assert.equal((await send('PUT', '/v1/tax/scenario/2000', { moveDate: '2000-01-01', moveTo: 'XA' })).statusCode, 200);
+  assert.equal((await send('PUT', '/v1/tax/scenario/2027', { moveDate: '2028-01-01', moveTo: 'XA' })).statusCode, 400);
+  for (const y of ['1999', '2028']) assert.equal((await send('PUT', `/v1/tax/scenario/${y}`, {})).statusCode, 400, y);
+});

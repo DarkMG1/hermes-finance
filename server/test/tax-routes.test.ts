@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.ts';
 import { TaxHeadsUp, TaxProjection, TaxWhatIf } from '@hermes/shared';
-import { AUTH, makeTestDeps } from './helpers.ts';
+import { AUTH, makeTestDeps, seedAccount } from './helpers.ts';
 
 function setup() {
   const app = buildApp(makeTestDeps().deps);
@@ -26,6 +26,13 @@ test('what-if validates input', async () => {
   const r = await post('/v1/tax/what-if', { year: 2026, change: { extraWithholdingCents: 10000 } });
   assert.equal(r.statusCode, 200);
   assert.equal(TaxWhatIf.parse(r.json()).blocked, null);
+  assert.equal((await post('/v1/tax/what-if', { year: 2101, change: {} })).statusCode, 400);
+  const sell = (lotIds?: string[]) => post('/v1/tax/what-if', { year: 2026, change: { sell: [{ accountId: 'brk', securityId: 'sx', quantity: 1, ...(lotIds && { lotIds }) }] } });
+  const twice = await sell(['a', 'a']);
+  assert.deepEqual([twice.statusCode, twice.json().field], [400, 'change.sell']);
+  // nothing held: blocked, nothing changes
+  const blocked = TaxWhatIf.parse((await sell()).json());
+  assert.deepEqual([blocked.blocked, blocked.deltaCents], ['No current holding to sell', 0]);
 });
 
 test('heads-up hides items without unlocked=1 and covers every open year', async () => {
@@ -48,5 +55,14 @@ test('heads-up hides items without unlocked=1 and covers every open year', async
   const open = TaxHeadsUp.parse(await get('/v1/tax/heads-up?unlocked=1'));
   assert.equal(open.count, locked.count);
   assert.equal(open.items!.length, open.count);
-  assert.ok(open.items!.some((a) => a.title.includes('Roth')) && open.items!.some((a) => a.title.includes('401(k)')));
+  assert.ok(open.items!.some((a) => a.title === 'Roth IRA contributions over the 2025 limit') && open.items!.some((a) => a.title === '401(k) over the 2027 limit'));
+  assert.deepEqual(TaxHeadsUp.parse(await get('/v1/tax/heads-up?unlocked=0')), locked);
+  // a loss to harvest: the locked count skips the sale what-ifs, the items run them
+  seedAccount(deps.db, { id: 'brk', type: 'investment', subtype: 'brokerage' });
+  deps.db.prepare("INSERT INTO securities (id, name, ticker, type, is_cash, updated_at) VALUES ('sx', 'Synthetic', 'SYNA', 'etf', 0, 'x')").run();
+  deps.db.prepare("INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, updated_at) VALUES ('b1', 'brk', 'sx', '2025-06-01', 'buy', 'buy', 100, 5000000, 'x')").run();
+  deps.db.prepare("INSERT INTO holdings (account_id, security_id, quantity, price_cents, value_cents, cost_basis_cents, updated_at) VALUES ('brk', 'sx', 100, 10000, 1000000, 5000000, 'x')").run();
+  const withHarvest = TaxHeadsUp.parse(await get('/v1/tax/heads-up?unlocked=1'));
+  assert.ok(withHarvest.items!.some((a) => a.kind === 'harvest_loss'));
+  assert.equal(TaxHeadsUp.parse(await get('/v1/tax/heads-up')).count, withHarvest.count - withHarvest.items!.filter((a) => a.kind === 'harvest_loss').length);
 });

@@ -9,7 +9,7 @@ import { idempotentWrite } from '../idempotency.ts';
 import { readProfile } from '../profile-reader.ts';
 import { getForm, getGrant, getJob, getProfile, getReturn, getStateW4, getStub, getW4, linkable, listJobs, putProfile, stubMatches, taxYears, unassignedStubs } from '../profile.ts';
 import { getScenario, getTaxInputs, listRothContributions } from '../tax/inputs.ts';
-import { buildLots, preHistoryRemainder } from '../tax/lots.ts';
+import { buildLots, DUST, lotsView, preHistoryRemainder } from '../tax/lots.ts';
 import { openYears, project, whatIf } from '../tax/projection.ts';
 import { assertOwnerDate, parseBody } from '../validate.ts';
 import { isJpeg } from './receipts.ts';
@@ -362,11 +362,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       throw new ApiError(400, 'INVALID_REQUEST', 'taxYear: must be the deposit year, or the year before for a deposit from Jan 1 to Apr 15', 'taxYear');
     }
   };
-  app.get<{ Querystring: { taxYear?: string } }>('/v1/tax/roth-contributions', async (req) => {
-    const taxYear = Number(req.query.taxYear);
-    if (!Number.isInteger(taxYear) || taxYear < 2000) throw new ApiError(400, 'INVALID_REQUEST', 'taxYear: expected a year from 2000', 'taxYear');
-    return { contributions: listRothContributions(db, taxYear) };
-  });
+  app.get<{ Querystring: { taxYear?: string } }>('/v1/tax/roth-contributions', async (req) => ({ contributions: listRothContributions(db, yearParam(req.query.taxYear ?? '')) }));
   app.post('/v1/tax/roth-contributions', async (req, reply) => {
     const b = parseBody(RothContributionBody, req.body);
     assertDates(b, ['date']);
@@ -408,17 +404,22 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   app.get<{ Querystring: { year?: string } }>('/v1/tax/projection', async (req) => project(deps, taxYear(req.query.year), today()));
   app.post('/v1/tax/what-if', async (req) => {
     const b = parseBody(TaxWhatIfBody, req.body);
-    return whatIf(deps, taxYear(b.year), today(), b.change);
+    if (b.change.sell?.some((s) => s.lotIds && new Set(s.lotIds).size !== s.lotIds.length)) {
+      throw new ApiError(400, 'INVALID_REQUEST', 'change.sell.lotIds: a lot is chosen more than once', 'change.sell');
+    }
+    return whatIf(deps, b.year, today(), b.change);
   });
+  // the locked count skips the harvest what-ifs (Home asks for it on every load); the items run them
   app.get<{ Querystring: { unlocked?: string } }>('/v1/tax/heads-up', async (req) => {
-    const items = openYears(today()).flatMap((y) => project(deps, y, today()).headsUp);
-    return req.query.unlocked === '1' ? { count: items.length, items } : { count: items.length };
+    const unlocked = req.query.unlocked === '1';
+    const items = openYears(today()).flatMap((y) => project(deps, y, today(), undefined, { harvest: unlocked }).headsUp);
+    return unlocked ? { count: items.length, items } : { count: items.length };
   });
 
-  app.get('/v1/tax/lots', async () => buildLots(db, today()));
+  app.get('/v1/tax/lots', async () => lotsView(buildLots(db, today())));
   app.post('/v1/tax/lots', async (req, reply) => {
     const b = parseBody(LotEntryBody, req.body);
-    assertDates(b, ['acquiredOn']);
+    if (b.acquiredOn > today()) throw new ApiError(400, 'INVALID_REQUEST', 'acquiredOn: must not be after today', 'acquiredOn');
     if (!db.prepare("SELECT 1 FROM accounts WHERE id = ? AND type = 'investment'").get(b.accountId)) {
       throw new ApiError(400, 'INVALID_REQUEST', 'accountId: unknown investment account', 'accountId');
     }
@@ -426,7 +427,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
     const r = idempotentWrite(deps, req, () => {
       // a lot covers shares held before the history that no entered lot covers yet, never more
       const left = preHistoryRemainder(db, b.accountId, b.securityId, today());
-      if (b.quantity - left > 1e-6) throw new ApiError(400, 'INVALID_REQUEST', `quantity: only ${left} shares held before the history have no lot`, 'quantity');
+      if (b.quantity - left > DUST) throw new ApiError(400, 'INVALID_REQUEST', `quantity: only ${+left.toFixed(6)} shares held before the history have no lot`, 'quantity');
       const id = randomUUID();
       db.prepare('INSERT INTO lot_entries (id, account_id, security_id, acquired_on, quantity, cost_cents) VALUES (?, ?, ?, ?, ?, ?)')
         .run(id, b.accountId, b.securityId, b.acquiredOn, b.quantity, b.costCents);
