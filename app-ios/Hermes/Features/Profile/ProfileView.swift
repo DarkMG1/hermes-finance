@@ -24,8 +24,9 @@ struct ProfileGate: View {
     var body: some View {
         NavigationStack(path: $path) {
             if unlocked {
-                ProfileView().environment(\.profileDrafting, $drafting)
-                    .navigationDestination(for: TaxRoute.self) { _ in TaxView() }
+                // after the destination, so the Tax screen opened from Home gets it too
+                ProfileView().navigationDestination(for: TaxRoute.self) { _ in TaxView() }
+                    .environment(\.profileDrafting, $drafting)
             } else {
                 VStack(spacing: Space.l) {
                     HButton(title: "Unlock with Face ID", busy: unlocking) { Task { await unlock() } }

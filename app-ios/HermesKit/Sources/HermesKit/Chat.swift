@@ -34,7 +34,7 @@ public enum JSONValue: Codable, Sendable, Equatable {
 
 }
 
-public struct ChatSummary: Codable, Sendable, Identifiable, Equatable {
+public struct ChatSummary: Codable, Sendable, Identifiable, Hashable {
     public let id: String
     public let title: String
     public let createdAt: String

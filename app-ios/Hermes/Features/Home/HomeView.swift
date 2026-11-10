@@ -20,6 +20,7 @@ struct HomeView: View {
     @State private var showingInbox = false
     @State private var handledSnaps = 0
     @State private var loadGeneration = OpenGeneration()
+    @State private var taxGeneration = OpenGeneration()
     @State private var referencesLoaded = false
     @State private var taxItems = 0
     @State private var openingTax = false
@@ -166,7 +167,7 @@ struct HomeView: View {
         .sheet(item: $selected) { transaction in
             TransactionDetailSheet(transaction: transaction) { await load() }
         }
-        .sheet(isPresented: $openingTax) { ProfileGate(openTax: true) }
+        .sheet(isPresented: $openingTax, onDismiss: { Task { await loadTaxItems() } }, content: { ProfileGate(openTax: true) })
         .sheet(item: $renaming) { account in
             AccountSheet(account: account) { await model.refreshReferenceData() }
         }
@@ -235,7 +236,8 @@ struct HomeView: View {
         let gen = loadGeneration.next()
         async let references: Void = model.refreshReferenceData(coalescing: coalescing)
         async let holdings: Void = loadInvestments(reader: reader, generation: gen)
-        async let tax: Void = loadTaxItems(generation: gen)
+        // the count runs projections: Home never waits on it
+        Task { await loadTaxItems() }
         do {
             let loaded = try await reader.read("/v1/home", as: Home.self)
             guard !Task.isCancelled, loadGeneration.accepts(gen, presented: false) else { return }
@@ -248,13 +250,13 @@ struct HomeView: View {
         guard !Task.isCancelled, loadGeneration.accepts(gen, presented: false) else { return }
         referencesLoaded = true
         await holdings
-        await tax
     }
 
     /// Count only: item text waits for the profile's Face ID. A failure shows nothing.
-    private func loadTaxItems(generation: Int) async {
+    private func loadTaxItems() async {
+        let generation = taxGeneration.next()
         let count = try? await model.client?.taxHeadsUp(unlocked: false).count
-        guard !Task.isCancelled, loadGeneration.accepts(generation, presented: false) else { return }
+        guard taxGeneration.accepts(generation, presented: false) else { return }
         taxItems = count ?? 0
     }
 
