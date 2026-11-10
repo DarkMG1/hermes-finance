@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ExpensesQuery, ListTransactionsQuery, NetWorthQuery, PayeeHistoryQuery, SpendingQuery } from '@hermes/shared';
+import { ExpensesQuery, TaxWhatIfChange, ListTransactionsQuery, NetWorthQuery, PayeeHistoryQuery, SpendingQuery } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { getExpenses, getPayeeHistory, getReimbursements, getSpending } from '../cashflow.ts';
@@ -11,6 +11,8 @@ import { getNetWorth } from '../networth.ts';
 import { localDay } from '../days.ts';
 import { getHoldingHistory, getInvestments } from '../investments.ts';
 import { getJob, getProfile, listJobs, payStubs, taxYears } from '../profile.ts';
+import { openYears, project, whatIf } from '../tax/projection.ts';
+import { buildLots, lotsView } from '../tax/lots.ts';
 import { PROFILE_TOOLS } from './labels.ts';
 import { taxReference } from './tax-reference.ts';
 import { chatUsesProfile, getChat, searchChats } from './store.ts';
@@ -66,7 +68,7 @@ const MONEY: [string, Entry][] = [
   entry('net_worth', 'Daily net worth history over a range with the current value and the change, hidden accounts left out; give accountIds (from accounts) and/or type for those accounts\' daily balance alone, e.g. to find which account moved.',
     NetWorthQuery.extend({ accountIds: z.array(z.string().min(1)).min(1).max(50).optional(), type: z.enum(['depository', 'credit', 'loan', 'investment', 'other']).optional() }).strict(),
     (d, { range, ...filter }, today) => getNetWorth(d.db, range, today, filter)),
-  entry('investments', 'Investment holdings with value, cost basis and gain; give holding (a holding key) for that holding\'s value history over range (default 1y). Hermes has no trades, sales, dividends or contributions: don\'t search transactions for them; a bank transfer to a brokerage and an account\'s balance jumps (net_worth) are the only traces.',
+  entry('investments', 'Investment holdings with value, cost basis and gain; give holding (a holding key) for that holding\'s value history over range (default 1y). Trades, dividends and contributions are in investment_activity, not in transactions.',
     z.object({ holding: z.string().min(1).optional(), range: Range.optional() }).strict(),
     (d, q, today) => (q.holding ? getHoldingHistory(d.db, q.holding, q.range ?? '1y', today) : getInvestments(d.db))),
   entry('accounts', 'Bank, card and investment accounts with current balances.', Empty, (d) => listAccounts(d.db)),
@@ -91,6 +93,33 @@ const PROFILE: [string, Entry][] = [
 
 const ENTRIES = new Map<string, Entry>([
   ...[...MONEY, ...PROFILE].map(([name, e]): [string, Entry] => [name, { ...e, def: { ...e.def, description: `${e.def.description} ${CENTS}` } }]),
+  entry('tax_projection', 'The owner\'s projected tax for a year (default: the first open year, the prior year until Apr 15): withholding, balance due or refund, ways to save and heads-up items, with the assumptions behind it. complete false: a state return has no figures, so its tax is missing from combinedBalanceCents (say so). Use it for any tax amount. ' + CENTS,
+    z.object({ year: z.number().int().min(2000).max(2100).optional() }).strict(),
+    (d, q, today) => project(d, q.year ?? openYears(today)[0]!, today)),
+  entry('tax_what_if', 'The tax projection for a year before and after a change (sell shares by account and security, extra withholding, scenario edits), with the change in the combined balance (deltaCents, positive is better) and the planned sales (term, wash-sale disallowed loss, and longTermOn: the first day a short-term lot would be long-term). A sale it marks blocked changes nothing: say what is missing. ' + CENTS,
+    z.object({ year: z.number().int().min(2000).max(2100), change: TaxWhatIfChange }).strict(),
+    (d, q, today) => whatIf(d, q.year, today, q.change)),
+  entry('investment_activity', 'Stored investment transactions (buys, sells, dividends, contributions) newest first with ticker and account name, filtered by dates, accountId or type, plus sales: realized sales in the range with term and wash-sale disallowed loss. cashCents is cash in (+) or out (-) of the account. ' + CENTS,
+    z.object({ from: Day.optional(), to: Day.optional(), accountId: z.string().min(1).optional(), type: z.string().min(1).optional() }).strict(),
+    (d, q, today) => {
+      const rows = d.db.prepare(`SELECT t.id, t.date, t.type, t.subtype, t.quantity, -t.amount_cents AS cashCents, t.price_cents AS priceCents, t.account_id AS accountId, a.name AS account,
+          t.security_id AS securityId, s.ticker, s.name AS securityName
+        FROM investment_transactions t JOIN accounts a ON a.id = t.account_id LEFT JOIN securities s ON s.id = t.security_id
+        WHERE (? IS NULL OR t.date >= ?) AND (? IS NULL OR t.date <= ?) AND (? IS NULL OR t.account_id = ?) AND (? IS NULL OR t.type = ?)
+        ORDER BY t.date DESC, t.id DESC`).all(...[q.from, q.to, q.accountId, q.type].flatMap((v) => [v ?? null, v ?? null]));
+      const sales = buildLots(d.db, today).sales.filter((x) => (!q.from || x.date >= q.from) && (!q.to || x.date <= q.to) && (!q.accountId || x.accountId === q.accountId));
+      const tickers = new Map((d.db.prepare('SELECT id, ticker FROM securities').all() as { id: string; ticker: string | null }[]).map((r) => [r.id, r.ticker]));
+      const accounts = new Map((d.db.prepare('SELECT id, name FROM accounts').all() as { id: string; name: string }[]).map((r) => [r.id, r.name]));
+      return { transactions: rows, sales: sales.map((x) => ({ ...x, ticker: tickers.get(x.securityId) ?? null, account: accounts.get(x.accountId) ?? null })) };
+    }),
+  entry('tax_lots', 'Tax lots as {lots, methods, inferred, basisMatched, unresolved}, optionally for one account or security. lots: shares with acquired date, quantity, cost and whether the lot is known, entered or unverified (unverified: bought before the trade history, or the history doesn\'t match the holding; such shares can\'t be planned for a sale). methods: each account\'s lot-matching method (fifo, hifo or specific); inferred: true when the owner didn\'t set it; basisMatched: the inferred method reproduces the broker\'s cost basis (false: FIFO by default). unresolved: all shares bought before the trade history that no entered lot covers, per account and security where past sales took some (a fully sold position too; transfers out are no sale): those sales count no gain until the owner enters their purchase date and cost on the Tax screen. ' + CENTS,
+    z.object({ accountId: z.string().min(1).optional(), securityId: z.string().min(1).optional() }).strict(),
+    (d, q, today) => {
+      const v = lotsView(buildLots(d.db, today));
+      const mine = (x: { accountId: string; securityId: string }) => (!q.accountId || x.accountId === q.accountId) && (!q.securityId || x.securityId === q.securityId);
+      const accounts = (r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).filter(([id]) => !q.accountId || id === q.accountId));
+      return { lots: v.lots.filter(mine), methods: accounts(v.methods), inferred: accounts(v.inferred), basisMatched: accounts(v.basisMatched), unresolved: v.unresolved.filter(mine) };
+    }),
   entry('search_chats', "Searches the owner's own earlier conversations with you (questions and your answers) for messages containing every word of query, optionally between from and to; returns each match's chatId, title, date and a snippet with the words in [brackets]. Without query (e.g. for \"our last chat\"), lists the most recently active chats newest first, each with its first question as the snippet and that question's date (from and to then apply to that date).",
     z.object({ query: z.string().max(200).regex(/[\p{L}\p{N}]/u, 'query has no words to search for').optional(), from: Day, to: Day, limit: z.number().int().min(1).max(20).optional() }).strict(),
     (d, q, _today, ctx) => searchChats(d.db, { ...q, limit: q.limit ?? 10 }, ctx.chatId, !ctx.profileUnlocked)),
@@ -113,7 +142,7 @@ const ENTRIES = new Map<string, Entry>([
 export const TOOLS: ToolDef[] = [...ENTRIES.values()].map((e) => e.def);
 const LOCKED = 'the financial profile is locked; ask the owner to unlock it, then ask again';
 
-const ARRAY_KEYS = ['transactions', 'rows', 'items', 'points', 'holdings', 'history', 'messages', 'results', 'stubs'];
+const ARRAY_KEYS = ['transactions', 'rows', 'items', 'points', 'holdings', 'history', 'messages', 'results', 'stubs', 'sales', 'lots', 'unresolved', 'assumptions', 'waysToSave', 'headsUp', 'returns'];
 const TEXT_KEYS = new Set(['notes', 'name', 'payee', 'bankDescription', 'merchantName', 'matchText']);
 
 

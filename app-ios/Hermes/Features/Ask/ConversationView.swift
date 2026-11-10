@@ -12,7 +12,11 @@ struct ConversationView: View {
     @State var title = ""
     @State private var thread: ChatThread?
     @State private var loadError: String?
-    @State private var draft = ""
+    @State var draft = ""
+    /// a question handed over while this chat is open: added below what's typed
+    var handoff: Binding<String?> = .constant(nil)
+    /// whether something is typed, for whoever hands questions over
+    var hasText: Binding<Bool> = .constant(false)
     /// bumped by each send: a vertical TextField cleared as it loses focus keeps its old height, so a new one replaces it
     @State private var sends = 0
     @State private var stream: Task<Void, Never>?
@@ -101,6 +105,12 @@ struct ConversationView: View {
         }
         // a bar, not an inset: it fades the answers scrolling under it, as the tab bar does
         .safeAreaBar(edge: .bottom) { input }
+        .onChange(of: draft.isEmpty, initial: true) { _, empty in hasText.wrappedValue = !empty }
+        .onChange(of: handoff.wrappedValue) { _, question in
+            guard let question else { return }
+            draft += (draft.isEmpty ? "" : "\n") + question
+            handoff.wrappedValue = nil
+        }
         .task(id: typed == nil) {
             var last = ContinuousClock.now
             while typed != nil {

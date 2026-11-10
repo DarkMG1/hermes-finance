@@ -1,0 +1,13 @@
+{
+  "count": 1,
+  "items": [
+    {
+      "savingsCents": 392000,
+      "dueDate": null,
+      "kind": "k401_room",
+      "title": "More 401(k) room in 2027",
+      "detail": "Raising 401(k) contributions to the $24,500.00 limit would lower 2027 taxes, as far as your pay allows.",
+      "askPrompt": "Should I raise my 401(k) contributions in 2027?"
+    }
+  ]
+}

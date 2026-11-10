@@ -132,11 +132,12 @@ struct MainTabs: View {
             Tab("Home", systemImage: "house", value: 0) { NavigationStack { HomeView() } }
             Tab("Spending", systemImage: "chart.bar", value: 1) { NavigationStack { SpendingView() } }
             Tab("Activity", systemImage: "list.bullet", value: 2) { NavigationStack { ActivityView() } }
-            Tab("Ask", systemImage: "sparkles", value: 4) { AskLock(tab: 4) { NavigationStack { AskView() } } }
+            Tab("Ask", systemImage: "sparkles", value: 4) { AskLock(tab: 4) { AskView() } }
             Tab("Settings", systemImage: "gearshape", value: 3) { NavigationStack { SettingsView() } }
         }
         .environment(\.selectedTab, tab)
         .onChange(of: QuickActions.shared.snapRequests) { tab = 0 }
+        .onChange(of: model.askDraft != nil) { _, asking in if asking { tab = 4 } }
         .onChange(of: pdfWaiting, initial: true) { _, waiting in
             guard waiting else { return }
             let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first { $0.activationState == .foregroundActive }

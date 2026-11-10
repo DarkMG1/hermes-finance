@@ -567,6 +567,8 @@ const TaxReturnFields = z.object({
   totalTaxCents: Money.nullable(), creditsCents: Money.nullable(), withholdingCents: Money.nullable(),
   /** positive refund, negative owed */
   refundCents: LedgerCents.nullable(), capitalGainsCents: LedgerCents.nullable(), capitalLossCarryoverCents: Money.nullable(),
+  /** the carryover worksheet's short-term and long-term lines */
+  capitalLossCarryoverShortCents: Money.nullable(), capitalLossCarryoverLongCents: Money.nullable(),
   /** the "someone can claim you as a dependent" box, or a state return's dependent exemption */
   claimedAsDependent: z.boolean().nullable(),
 });
@@ -580,6 +582,94 @@ export const TaxYears = z.object({
   years: z.array(z.object({ year: z.number().int(), returns: z.array(TaxReturn), forms: z.array(TaxForm), effectiveRate: z.number().nullable() })),
 });
 export type TaxYears = z.infer<typeof TaxYears>;
+
+const TaxInputsFields = z.object({ tuitionCents: Money.nullable(), scholarshipsCents: Money.nullable(), studentLoanInterestCents: Money.nullable(), k401Cents: Money.nullable() });
+export const TaxInputs = TaxInputsFields.extend({ year: z.number().int(), updatedAt: z.string().nullable() });
+export type TaxInputs = z.infer<typeof TaxInputs>;
+/** Replaces the year's inputs: a left-out field is null. */
+export const TaxInputsBody = TaxInputsFields.partial().strict();
+export type TaxInputsBody = z.infer<typeof TaxInputsBody>;
+
+const TaxScenarioFields = z.object({
+  moveDate: DateInput.nullable(), moveTo: StateCode.nullable(),
+  relocationCents: Money.nullable(), bonusCents: Money.nullable(), k401Cents: Money.nullable(), rothCents: Money.nullable(),
+});
+export const TaxScenario = TaxScenarioFields.extend({ year: z.number().int(), updatedAt: z.string().nullable() });
+export type TaxScenario = z.infer<typeof TaxScenario>;
+/** Replaces the year's scenario: a left-out field is null. */
+export const TaxScenarioBody = TaxScenarioFields.partial().strict();
+export type TaxScenarioBody = z.infer<typeof TaxScenarioBody>;
+
+export const RothContribution = z.object({ id: Id, date: DateStr, amountCents: Money, taxYear: z.number().int(), transactionId: Id.nullable() });
+export type RothContribution = z.infer<typeof RothContribution>;
+export const RothContributionBody = z.object({ date: DateInput, amountCents: Money.min(1), taxYear: z.number().int() }).strict();
+export type RothContributionBody = z.infer<typeof RothContributionBody>;
+/** An amount or date the owner sets on a suggested contribution stays when its source transaction changes. */
+export const PatchRothContributionBody = z.object({ date: DateInput.optional(), amountCents: Money.min(1).optional(), taxYear: z.number().int().optional() }).strict()
+  .refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+export type PatchRothContributionBody = z.infer<typeof PatchRothContributionBody>;
+/** A lot the owner enters for shares held before the investment history. */
+export const LotEntryBody = z.object({ accountId: Id, securityId: Id, acquiredOn: DateInput, quantity: z.number().positive().max(1e12), costCents: Money }).strict();
+export type LotEntryBody = z.infer<typeof LotEntryBody>;
+/** null goes back to the method inferred from the holding's cost basis. */
+export const LotMethodBody = z.object({ method: z.enum(['fifo', 'hifo', 'specific']).nullable() }).strict();
+export type LotMethodBody = z.infer<typeof LotMethodBody>;
+
+export const Lot = z.object({
+  id: z.string(), accountId: Id, securityId: Id, ticker: z.string().nullable(), acquiredOn: DateStr.nullable(), quantity: z.number(), costCents: Cents,
+  status: z.enum(['known', 'entered', 'unverified']),
+  /** owner-entered lots only (also when unverified or split by a wash sale): the id DELETE /v1/tax/lots/:id removes */
+  entryId: z.string().optional(),
+});
+export type Lot = z.infer<typeof Lot>;
+export const Sale = z.object({
+  accountId: Id, securityId: Id, date: DateStr, quantity: z.number(), proceedsCents: Cents, costCents: Cents, acquiredOn: DateStr.nullable(),
+  term: z.enum(['short', 'long', 'unknown']), washDisallowedCents: Cents, taxable: z.boolean(),
+  /** what-if sales only, short-term ones: the first day the same shares would sell long-term */
+  longTermOn: DateStr.optional(),
+});
+export type Sale = z.infer<typeof Sale>;
+const LotMethod = z.enum(['fifo', 'hifo', 'specific']);
+/** All shares held before the trade history that no entered lot covers, where past sales took some (a fully sold position too): entering their lots (POST /v1/tax/lots) resolves those sales' cost. */
+export const UnresolvedShares = z.object({ accountId: Id, securityId: Id, ticker: z.string().nullable(), quantity: z.number() });
+export type UnresolvedShares = z.infer<typeof UnresolvedShares>;
+/** inferred: the owner hasn't set the account's method; basisMatched: the inferred method reproduces the broker's basis (false: FIFO by default). */
+export const TaxLots = z.object({
+  lots: z.array(Lot), sales: z.array(Sale), methods: z.record(z.string(), LotMethod), inferred: z.record(z.string(), z.boolean()),
+  basisMatched: z.record(z.string(), z.boolean()), unresolved: z.array(UnresolvedShares),
+});
+export type TaxLots = z.infer<typeof TaxLots>;
+export const TaxLine = z.object({ key: z.string(), label: z.string(), cents: Cents, source: z.string(), assumption: z.string().optional() });
+export type TaxLine = z.infer<typeof TaxLine>;
+export const TaxReturnResult = z.object({
+  jurisdiction: z.string(), supported: z.boolean(), lines: z.array(TaxLine), taxCents: Cents, withheldCents: Cents, balanceCents: Cents,
+  safeHarborCents: Cents.optional(), unusedCarryover: z.object({ shortCents: Cents, longCents: Cents }).optional(),
+});
+export type TaxReturnResult = z.infer<typeof TaxReturnResult>;
+export const TaxAdvice = z.object({
+  kind: z.enum(['harvest_loss', 'roth_room', 'k401_room', 'education_credit', 'student_loan_interest', 'moving_expenses', 'estimated_payment', 'withholding_short', 'over_limit']),
+  title: z.string(), detail: z.string(), savingsCents: Cents.nullable(), dueDate: DateStr.nullable(), askPrompt: z.string(),
+});
+export type TaxAdvice = z.infer<typeof TaxAdvice>;
+export const TaxProjection = z.object({
+  /** complete false: a state return has no figures, so its tax is left out of combinedBalanceCents */
+  year: z.number().int(), openYears: z.array(z.number().int()), asOf: DateStr, complete: z.boolean(), combinedBalanceCents: Cents, returns: z.array(TaxReturnResult), assumptions: z.array(z.string()),
+  figures: z.object({ federalYear: z.number().int(), fallback: z.boolean() }), waysToSave: z.array(TaxAdvice), headsUp: z.array(TaxAdvice),
+});
+export type TaxProjection = z.infer<typeof TaxProjection>;
+export const TaxWhatIfChange = z.object({
+  sell: z.array(z.object({ accountId: Id, securityId: Id, quantity: z.number().positive().max(1e12), lotIds: z.array(z.string()).optional() }).strict()).optional(),
+  extraWithholdingCents: Money.optional(), scenario: TaxScenarioFields.partial().strict().optional(),
+}).strict();
+export type TaxWhatIfChange = z.infer<typeof TaxWhatIfChange>;
+export const TaxWhatIfBody = z.object({ year: z.number().int().min(2000).max(2100), change: TaxWhatIfChange }).strict();
+export type TaxWhatIfBody = z.infer<typeof TaxWhatIfBody>;
+/** before and after carry no advice (waysToSave and headsUp are empty): advice belongs to the plain projection. */
+export const TaxWhatIf = z.object({ before: TaxProjection, after: TaxProjection, deltaCents: Cents, blocked: z.string().nullable(), sales: z.array(Sale) });
+export type TaxWhatIf = z.infer<typeof TaxWhatIf>;
+/** items only come with ?unlocked=1, so a locked Home shows a count. */
+export const TaxHeadsUp = z.object({ count: z.number().int(), items: z.array(TaxAdvice).optional() });
+export type TaxHeadsUp = z.infer<typeof TaxHeadsUp>;
 
 /** A job's W-4: step 1(c) filing status (single covers married filing separately), the step 2(c) box, step 3's total, steps 4(a)–(c)
  *  (the extra withholding is per pay period), and exempt. Only the latest applies, so a job has one. */

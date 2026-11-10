@@ -9,17 +9,29 @@ struct AskView: View {
     @State private var error: String?
     @State private var outdated = false
     @State private var composing = false
+    /// a question handed over from elsewhere (Tax's ways to save) for the new chat
+    @State private var composeDraft = ""
+    /// bumped to open a fresh new chat
+    @State private var newChat = 0
+    /// a question handed to a new chat already open with text typed: it's added below that text
+    @State private var handoff: String?
+    @State private var composeHasText = false
     @State private var renaming: ChatSummary?
     @State private var newTitle = ""
+    @State private var path: [ChatSummary] = []
 
     var body: some View {
+        NavigationStack(path: $path) { list }
+    }
+
+    private var list: some View {
         List {
             if outdated {
                 Text("Update the server to use Ask").textStyle(.subhead, color: Palette.secondaryText)
             } else {
                 InlineError(message: error)
                 ForEach(chats ?? []) { chat in
-                    NavigationLink { ConversationView(chatId: chat.id, title: chat.title) } label: {
+                    NavigationLink(value: chat) {
                         ListRow(title: chat.title.isEmpty ? "New chat" : chat.title, subtitle: relative(chat.updatedAt))
                     }
                     .swipeActions {
@@ -40,10 +52,29 @@ struct AskView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Button("New chat", systemImage: "square.and.pencil") { composing = true }.disabled(outdated)
+                Button("New chat", systemImage: "square.and.pencil") {
+                    composeDraft = ""
+                    newChat += 1
+                    composing = true
+                }.disabled(outdated)
             }
         }
-        .navigationDestination(isPresented: $composing) { ConversationView(chatId: nil) }
+        .navigationDestination(for: ChatSummary.self) { ConversationView(chatId: $0.id, title: $0.title) }
+        .navigationDestination(isPresented: $composing) {
+            ConversationView(chatId: nil, draft: composeDraft, handoff: $handoff, hasText: $composeHasText).id(newChat)
+        }
+        .onChange(of: model.askDraft, initial: true) { _, draft in
+            guard let draft else { return }
+            // cleared after this update, so the profile gate and the tab bar see it too
+            Task { @MainActor in model.askDraft = nil }
+            // a saved chat open goes back to the list first
+            path = []
+            // text the owner typed in an open new chat stays; otherwise a fresh chat starts with the question
+            if composing && composeHasText { handoff = draft; return }
+            composeDraft = draft
+            newChat += 1
+            composing = true
+        }
         .alert("Rename chat", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
             TextField("Title", text: $newTitle)
             Button("Save") { if let chat = renaming { Task { await rename(chat) } } }

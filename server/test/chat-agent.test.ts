@@ -374,6 +374,7 @@ test('system prompt, last tool and the newest message block carry cache_control;
   const system = body.system as { text: string; cache_control?: unknown }[];
   assert.deepEqual(system[0]!.cache_control, { type: 'ephemeral' });
   assert.doesNotMatch(system[0]!.text, /\d{4}-\d{2}-\d{2}/);
+  assert.match(system[0]!.text, /never compute tax yourself\. Never recommend a sale the what-if marks blocked; say what's missing\./);
   const content = (body.messages as { content: { cache_control?: unknown }[] }[]).at(-1)!.content;
   assert.deepEqual(content.at(-1)!.cache_control, { type: 'ephemeral' });
   assert.equal(JSON.stringify(body).match(/"cache_control"/g)!.length, 3);

@@ -1,0 +1,368 @@
+{
+  "before": {
+    "year": 2026,
+    "openYears": [
+      2025,
+      2026,
+      2027
+    ],
+    "asOf": "2026-03-15",
+    "complete": true,
+    "combinedBalanceCents": 174000,
+    "returns": [
+      {
+        "jurisdiction": "federal",
+        "supported": true,
+        "lines": [
+          {
+            "key": "wages",
+            "label": "Wages",
+            "cents": 5000000,
+            "source": "pay stubs and projected paychecks",
+            "assumption": "Includes pay on 21 projected paychecks (estimated); Pre-tax 401(k) contributions taken off gross pay"
+          },
+          {
+            "key": "studentLoanInterest",
+            "label": "Student loan interest deduction",
+            "cents": -50000,
+            "source": "owner input: student loan interest"
+          },
+          {
+            "key": "agi",
+            "label": "Adjusted gross income",
+            "cents": 4950000,
+            "source": "calculated"
+          },
+          {
+            "key": "standardDeduction",
+            "label": "Standard deduction",
+            "cents": 1610000,
+            "source": "IRS figures for 2026"
+          },
+          {
+            "key": "taxableIncome",
+            "label": "Taxable income",
+            "cents": 3340000,
+            "source": "calculated"
+          },
+          {
+            "key": "incomeTax",
+            "label": "Income tax",
+            "cents": 376000,
+            "source": "IRS figures for 2026",
+            "assumption": "Computed by formula: the IRS tax table may differ by a few dollars"
+          },
+          {
+            "key": "totalTax",
+            "label": "Total tax",
+            "cents": 376000,
+            "source": "calculated"
+          },
+          {
+            "key": "withheld",
+            "label": "Federal tax withheld",
+            "cents": 520000,
+            "source": "pay stubs and projected paychecks",
+            "assumption": "Includes withholding on 21 projected paychecks (estimated)"
+          },
+          {
+            "key": "balance",
+            "label": "Refund",
+            "cents": 144000,
+            "source": "calculated"
+          },
+          {
+            "key": "safeHarbor",
+            "label": "Pay at least this to avoid a penalty",
+            "cents": 338400,
+            "source": "calculated",
+            "assumption": "No prior-year tax entered: safe harbor is 90% of this year's tax"
+          }
+        ],
+        "taxCents": 376000,
+        "withheldCents": 520000,
+        "balanceCents": 144000,
+        "safeHarborCents": 338400,
+        "unusedCarryover": {
+          "shortCents": 0,
+          "longCents": 0
+        }
+      },
+      {
+        "jurisdiction": "XA",
+        "supported": true,
+        "lines": [
+          {
+            "key": "totalIncome",
+            "label": "Total income",
+            "cents": 4950000,
+            "source": "pay stubs and investment income"
+          },
+          {
+            "key": "stateIncome",
+            "label": "Income taxed by this state",
+            "cents": 4950000,
+            "source": "pay stubs and investment income"
+          },
+          {
+            "key": "exemption",
+            "label": "Personal exemption",
+            "cents": 500000,
+            "source": "synthetic XA"
+          },
+          {
+            "key": "taxableIncome",
+            "label": "Taxable income",
+            "cents": 4450000,
+            "source": "calculated"
+          },
+          {
+            "key": "tax",
+            "label": "Tax at 4.0%",
+            "cents": 178000,
+            "source": "synthetic XA"
+          },
+          {
+            "key": "totalTax",
+            "label": "Total tax",
+            "cents": 178000,
+            "source": "calculated"
+          },
+          {
+            "key": "withheld",
+            "label": "State tax withheld",
+            "cents": 208000,
+            "source": "pay stubs and projected paychecks",
+            "assumption": "Includes withholding on projected paychecks (estimated)"
+          },
+          {
+            "key": "balance",
+            "label": "Refund",
+            "cents": 30000,
+            "source": "calculated"
+          }
+        ],
+        "taxCents": 178000,
+        "withheldCents": 208000,
+        "balanceCents": 30000
+      }
+    ],
+    "assumptions": [
+      "SYNTHETIC EMPLOYER: future paychecks at the median gross of the last 3 stubs, every 14 days through 2026-12-31; SYNTHETIC EMPLOYER: withholding at the last 3 stubs' rates (at their 401(k) contributions)",
+      "Other pre-tax deductions (health insurance, HSA) are not taken off wages",
+      "No tuition entered: education credit not counted",
+      "No scholarships entered",
+      "Dividends after 2026-03-15 not projected",
+      "Bank interest not included",
+      "No 2025 federal return: no capital loss carryover counted",
+      "State follows the federal adjustments (401(k), student loan interest)"
+    ],
+    "figures": {
+      "federalYear": 2026,
+      "fallback": false
+    },
+    "waysToSave": [],
+    "headsUp": []
+  },
+  "after": {
+    "year": 2026,
+    "openYears": [
+      2025,
+      2026,
+      2027
+    ],
+    "asOf": "2026-03-15",
+    "complete": true,
+    "combinedBalanceCents": 227200,
+    "returns": [
+      {
+        "jurisdiction": "federal",
+        "supported": true,
+        "lines": [
+          {
+            "key": "wages",
+            "label": "Wages",
+            "cents": 5000000,
+            "source": "pay stubs and projected paychecks",
+            "assumption": "Includes pay on 21 projected paychecks (estimated); Pre-tax 401(k) contributions taken off gross pay"
+          },
+          {
+            "key": "shortTermNet",
+            "label": "Net short-term gain or loss",
+            "cents": -20000,
+            "source": "investment sales; carryover from prior-year return"
+          },
+          {
+            "key": "longTermNet",
+            "label": "Net long-term gain or loss",
+            "cents": 0,
+            "source": "investment sales; carryover from prior-year return"
+          },
+          {
+            "key": "capitalGain",
+            "label": "Capital gain or (loss)",
+            "cents": -20000,
+            "source": "investment sales; carryover from prior-year return"
+          },
+          {
+            "key": "studentLoanInterest",
+            "label": "Student loan interest deduction",
+            "cents": -50000,
+            "source": "owner input: student loan interest"
+          },
+          {
+            "key": "agi",
+            "label": "Adjusted gross income",
+            "cents": 4930000,
+            "source": "calculated"
+          },
+          {
+            "key": "standardDeduction",
+            "label": "Standard deduction",
+            "cents": 1610000,
+            "source": "IRS figures for 2026"
+          },
+          {
+            "key": "taxableIncome",
+            "label": "Taxable income",
+            "cents": 3320000,
+            "source": "calculated"
+          },
+          {
+            "key": "incomeTax",
+            "label": "Income tax",
+            "cents": 373600,
+            "source": "IRS figures for 2026",
+            "assumption": "Computed by formula: the IRS tax table may differ by a few dollars"
+          },
+          {
+            "key": "totalTax",
+            "label": "Total tax",
+            "cents": 373600,
+            "source": "calculated"
+          },
+          {
+            "key": "withheld",
+            "label": "Federal tax withheld",
+            "cents": 570000,
+            "source": "pay stubs and projected paychecks",
+            "assumption": "Includes withholding on 21 projected paychecks (estimated); Includes $500.00 extra withholding (what-if)"
+          },
+          {
+            "key": "balance",
+            "label": "Refund",
+            "cents": 196400,
+            "source": "calculated"
+          },
+          {
+            "key": "safeHarbor",
+            "label": "Pay at least this to avoid a penalty",
+            "cents": 336240,
+            "source": "calculated",
+            "assumption": "No prior-year tax entered: safe harbor is 90% of this year's tax"
+          }
+        ],
+        "taxCents": 373600,
+        "withheldCents": 570000,
+        "balanceCents": 196400,
+        "safeHarborCents": 336240,
+        "unusedCarryover": {
+          "shortCents": 0,
+          "longCents": 0
+        }
+      },
+      {
+        "jurisdiction": "XA",
+        "supported": true,
+        "lines": [
+          {
+            "key": "totalIncome",
+            "label": "Total income",
+            "cents": 4930000,
+            "source": "pay stubs and investment income"
+          },
+          {
+            "key": "stateIncome",
+            "label": "Income taxed by this state",
+            "cents": 4930000,
+            "source": "pay stubs and investment income"
+          },
+          {
+            "key": "exemption",
+            "label": "Personal exemption",
+            "cents": 500000,
+            "source": "synthetic XA"
+          },
+          {
+            "key": "taxableIncome",
+            "label": "Taxable income",
+            "cents": 4430000,
+            "source": "calculated"
+          },
+          {
+            "key": "tax",
+            "label": "Tax at 4.0%",
+            "cents": 177200,
+            "source": "synthetic XA"
+          },
+          {
+            "key": "totalTax",
+            "label": "Total tax",
+            "cents": 177200,
+            "source": "calculated"
+          },
+          {
+            "key": "withheld",
+            "label": "State tax withheld",
+            "cents": 208000,
+            "source": "pay stubs and projected paychecks",
+            "assumption": "Includes withholding on projected paychecks (estimated)"
+          },
+          {
+            "key": "balance",
+            "label": "Refund",
+            "cents": 30800,
+            "source": "calculated"
+          }
+        ],
+        "taxCents": 177200,
+        "withheldCents": 208000,
+        "balanceCents": 30800
+      }
+    ],
+    "assumptions": [
+      "SYNTHETIC EMPLOYER: future paychecks at the median gross of the last 3 stubs, every 14 days through 2026-12-31; SYNTHETIC EMPLOYER: withholding at the last 3 stubs' rates (at their 401(k) contributions)",
+      "Other pre-tax deductions (health insurance, HSA) are not taken off wages",
+      "No tuition entered: education credit not counted",
+      "No scholarships entered",
+      "Dividends after 2026-03-15 not projected",
+      "Bank interest not included",
+      "Proposed sale on 2026-03-15 at the last synced price; a buy of the same security in the 30 days after would wash a loss",
+      "No 2025 federal return: no capital loss carryover counted",
+      "State follows the federal adjustments (401(k), student loan interest)"
+    ],
+    "figures": {
+      "federalYear": 2026,
+      "fallback": false
+    },
+    "waysToSave": [],
+    "headsUp": []
+  },
+  "deltaCents": 53200,
+  "blocked": null,
+  "sales": [
+    {
+      "accountId": "acct-tax-brokerage",
+      "securityId": "sec-taxa",
+      "date": "2026-03-15",
+      "quantity": 10,
+      "proceedsCents": 80000,
+      "costCents": 100000,
+      "acquiredOn": "2025-10-01",
+      "term": "short",
+      "washDisallowedCents": 0,
+      "taxable": true,
+      "longTermOn": "2026-10-02"
+    }
+  ]
+}

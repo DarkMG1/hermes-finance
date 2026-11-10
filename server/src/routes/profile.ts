@@ -1,13 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { CreateJobBody, GrantBody, LinkPayStubBody, PatchGrantBody, PatchJobBody, PatchPayStubBody, PatchTaxFormBody, PayStubBody, ProfileReadBody, PutProfileBody,
-  StateW4Body, TaxFormBody, TaxReturnBody, W4Body } from '@hermes/shared';
+import { CreateJobBody, GrantBody, LinkPayStubBody, LotEntryBody, LotMethodBody, PatchGrantBody, PatchJobBody, PatchPayStubBody, PatchRothContributionBody, PatchTaxFormBody, PayStubBody, ProfileReadBody, PutProfileBody,
+  RothContributionBody, StateW4Body, TaxFormBody, TaxInputsBody, TaxReturnBody, TaxScenarioBody, TaxWhatIfBody, W4Body } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { localDay } from '../days.ts';
 import { ApiError } from '../errors.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { readProfile } from '../profile-reader.ts';
 import { getForm, getGrant, getJob, getProfile, getReturn, getStateW4, getStub, getW4, linkable, listJobs, putProfile, stubMatches, taxYears, unassignedStubs } from '../profile.ts';
+import { getScenario, getTaxInputs, listRothContributions } from '../tax/inputs.ts';
+import { buildLots, DUST, lotsView, preHistoryRemainder } from '../tax/lots.ts';
+import { openYears, project, whatIf } from '../tax/projection.ts';
 import { assertOwnerDate, parseBody } from '../validate.ts';
 import { isJpeg } from './receipts.ts';
 
@@ -27,7 +30,7 @@ const STUB_COLS = ['job_id', 'pay_date', 'period_start', 'period_end', 'gross_ce
 const FORM_COLS = ['job_id', 'year', 'kind', 'payer', 'amount_cents', 'federal_withheld_cents', 'state', 'state_withheld_cents', 'ss_wages_cents', 'medicare_wages_cents'];
 const RETURN_COLS = ['year', 'jurisdiction', 'filing_status', 'wages_cents', 'total_income_cents', 'agi_cents', 'deduction_kind', 'deduction_cents',
   'taxable_income_cents', 'total_tax_cents', 'credits_cents', 'withholding_cents', 'refund_cents', 'capital_gains_cents', 'capital_loss_carryover_cents',
-  'claimed_as_dependent'];
+  'capital_loss_carryover_short_cents', 'capital_loss_carryover_long_cents', 'claimed_as_dependent'];
 // left-out deduction lines and other pay are 0
 const stubValues = (s: PayStubBody) => [s.jobId ?? null, s.payDate, s.periodStart ?? null, s.periodEnd ?? null, s.grossCents, s.federalCents ?? 0, s.stateCents ?? 0,
   s.socialSecurityCents ?? 0, s.medicareCents ?? 0, s.retirementCents ?? 0, s.otherDeductionsCents ?? 0, s.otherPayCents ?? 0, s.netCents, s.ytdGrossCents ?? null,
@@ -37,6 +40,7 @@ const formValues = (f: TaxFormBody) => [f.jobId ?? null, f.year, f.kind, f.payer
 const returnValues = (t: TaxReturnBody) => [t.year, t.jurisdiction, t.filingStatus ?? null, t.wagesCents ?? null, t.totalIncomeCents ?? null, t.agiCents ?? null,
   t.deductionKind ?? null, t.deductionCents ?? null, t.taxableIncomeCents ?? null, t.totalTaxCents ?? null, t.creditsCents ?? null, t.withholdingCents ?? null,
   t.refundCents ?? null, t.capitalGainsCents ?? null, t.capitalLossCarryoverCents ?? null,
+  t.capitalLossCarryoverShortCents ?? null, t.capitalLossCarryoverLongCents ?? null,
   t.claimedAsDependent == null ? null : Number(t.claimedAsDependent)];
 const marks = (cols: string[]) => cols.map(() => '?').join(', ');
 
@@ -313,4 +317,135 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   });
 
   app.delete('/v1/tax-returns/:id', del('tax_returns', 'tax return'));
+
+  const yearParam = (raw: string) => {
+    const year = Number(raw);
+    if (!Number.isInteger(year) || year < 2000) throw new ApiError(400, 'INVALID_REQUEST', 'year: expected a year from 2000', 'year');
+    assertYear(year);
+    return year;
+  };
+  type YearReq = FastifyRequest<{ Params: { year: string } }>;
+
+  app.get<{ Params: { year: string } }>('/v1/tax/inputs/:year', async (req) => getTaxInputs(db, yearParam(req.params.year)));
+  app.put('/v1/tax/inputs/:year', async (req: YearReq, reply) => {
+    const year = yearParam(req.params.year);
+    const b = parseBody(TaxInputsBody, req.body);
+    const r = idempotentWrite(deps, req, () => {
+      db.prepare(`INSERT INTO tax_inputs (year, tuition_cents, scholarships_cents, student_loan_interest_cents, k401_cents, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (year) DO UPDATE SET tuition_cents = excluded.tuition_cents, scholarships_cents = excluded.scholarships_cents,
+          student_loan_interest_cents = excluded.student_loan_interest_cents, k401_cents = excluded.k401_cents, updated_at = excluded.updated_at`)
+        .run(year, b.tuitionCents ?? null, b.scholarshipsCents ?? null, b.studentLoanInterestCents ?? null, b.k401Cents ?? null, deps.now().toISOString());
+      return { status: 200, body: getTaxInputs(db, year) };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+
+  app.get<{ Params: { year: string } }>('/v1/tax/scenario/:year', async (req) => getScenario(db, yearParam(req.params.year)));
+  app.put('/v1/tax/scenario/:year', async (req: YearReq, reply) => {
+    const year = yearParam(req.params.year);
+    const b = parseBody(TaxScenarioBody, req.body);
+    if (b.moveDate && Number(b.moveDate.slice(0, 4)) !== year) throw new ApiError(400, 'INVALID_REQUEST', 'moveDate: must be within the year', 'moveDate');
+    const r = idempotentWrite(deps, req, () => {
+      db.prepare(`INSERT INTO tax_scenarios (year, move_date, move_to, relocation_cents, bonus_cents, k401_cents, roth_cents, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (year) DO UPDATE SET move_date = excluded.move_date, move_to = excluded.move_to, relocation_cents = excluded.relocation_cents,
+          bonus_cents = excluded.bonus_cents, k401_cents = excluded.k401_cents, roth_cents = excluded.roth_cents, updated_at = excluded.updated_at`)
+        .run(year, b.moveDate ?? null, b.moveTo ?? null, b.relocationCents ?? null, b.bonusCents ?? null, b.k401Cents ?? null, b.rothCents ?? null, deps.now().toISOString());
+      return { status: 200, body: getScenario(db, year) };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+
+  // a contribution counts for its deposit year, or the year before when deposited Jan 1 to Apr 15
+  const assertRothYear = (date: string, taxYear: number) => {
+    const y = Number(date.slice(0, 4));
+    if (taxYear !== y && !(taxYear === y - 1 && date.slice(5) <= '04-15')) {
+      throw new ApiError(400, 'INVALID_REQUEST', 'taxYear: must be the deposit year, or the year before for a deposit from Jan 1 to Apr 15', 'taxYear');
+    }
+  };
+  app.get<{ Querystring: { taxYear?: string } }>('/v1/tax/roth-contributions', async (req) => ({ contributions: listRothContributions(db, yearParam(req.query.taxYear ?? '')) }));
+  app.post('/v1/tax/roth-contributions', async (req, reply) => {
+    const b = parseBody(RothContributionBody, req.body);
+    assertDates(b, ['date']);
+    assertRothYear(b.date, b.taxYear);
+    const r = idempotentWrite(deps, req, () => {
+      const id = randomUUID();
+      db.prepare('INSERT INTO roth_contributions (id, date, amount_cents, tax_year) VALUES (?, ?, ?, ?)').run(id, b.date, b.amountCents, b.taxYear);
+      return { status: 201, body: { id, date: b.date, amountCents: b.amountCents, taxYear: b.taxYear, transactionId: null } };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+  app.put<{ Params: { id: string } }>('/v1/tax/roth-contributions/:id', async (req, reply) => {
+    const b = parseBody(PatchRothContributionBody, req.body);
+    assertDates(b, ['date']);
+    const r = idempotentWrite(deps, req, () => {
+      const row = db.prepare('SELECT date, amount_cents AS amountCents, tax_year AS taxYear FROM roth_contributions WHERE id = ? AND dismissed = 0')
+        .get(req.params.id) as { date: string; amountCents: number; taxYear: number } | undefined;
+      if (!row) throw notFound('Roth contribution');
+      const next = { ...row, ...b };
+      assertRothYear(next.date, next.taxYear);
+      db.prepare('UPDATE roth_contributions SET date = ?, amount_cents = ?, tax_year = ?, owner_edited = owner_edited OR ? WHERE id = ?')
+        .run(next.date, next.amountCents, next.taxYear, b.date !== undefined || b.amountCents !== undefined ? 1 : 0, req.params.id);
+      return { status: 200, body: db.prepare('SELECT id, date, amount_cents AS amountCents, tax_year AS taxYear, transaction_id AS transactionId FROM roth_contributions WHERE id = ?').get(req.params.id) };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+  app.delete<{ Params: { id: string } }>('/v1/tax/roth-contributions/:id', async (req, reply) => {
+    const r = idempotentWrite(deps, req, () => {
+      // a suggested row is kept as dismissed so the next list doesn't suggest it again
+      const changes = db.prepare('UPDATE roth_contributions SET dismissed = 1 WHERE id = ? AND transaction_id IS NOT NULL AND dismissed = 0').run(req.params.id).changes
+        || db.prepare('DELETE FROM roth_contributions WHERE id = ? AND transaction_id IS NULL').run(req.params.id).changes;
+      if (!changes) throw notFound('Roth contribution');
+      return { status: 200, body: { ok: true } };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+
+  const taxYear = (v: unknown) => {
+    const year = v === undefined ? openYears(today())[0]! : Number(v);
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) throw new ApiError(400, 'INVALID_REQUEST', 'year: expected a year from 2000 to 2100', 'year');
+    return year;
+  };
+  app.get<{ Querystring: { year?: string } }>('/v1/tax/projection', async (req) => project(deps, taxYear(req.query.year), today()));
+  app.post('/v1/tax/what-if', async (req) => {
+    const b = parseBody(TaxWhatIfBody, req.body);
+    if (b.change.sell?.some((s) => s.lotIds && new Set(s.lotIds).size !== s.lotIds.length)) {
+      throw new ApiError(400, 'INVALID_REQUEST', 'change.sell.lotIds: a lot is chosen more than once', 'change.sell');
+    }
+    return whatIf(deps, b.year, today(), b.change);
+  });
+  // the locked count skips the harvest what-ifs (Home asks for it on every load); the items run them
+  app.get<{ Querystring: { unlocked?: string } }>('/v1/tax/heads-up', async (req) => {
+    const unlocked = req.query.unlocked === '1';
+    const items = openYears(today()).flatMap((y) => project(deps, y, today(), undefined, { harvest: unlocked }).headsUp);
+    return unlocked ? { count: items.length, items } : { count: items.length };
+  });
+
+  app.get('/v1/tax/lots', async () => lotsView(buildLots(db, today())));
+  app.post('/v1/tax/lots', async (req, reply) => {
+    const b = parseBody(LotEntryBody, req.body);
+    if (b.acquiredOn > today()) throw new ApiError(400, 'INVALID_REQUEST', 'acquiredOn: must not be after today', 'acquiredOn');
+    if (!db.prepare("SELECT 1 FROM accounts WHERE id = ? AND type = 'investment'").get(b.accountId)) {
+      throw new ApiError(400, 'INVALID_REQUEST', 'accountId: unknown investment account', 'accountId');
+    }
+    if (!db.prepare('SELECT 1 FROM securities WHERE id = ?').get(b.securityId)) throw new ApiError(400, 'INVALID_REQUEST', 'securityId: unknown security', 'securityId');
+    const r = idempotentWrite(deps, req, () => {
+      // a lot covers shares held before the history that no entered lot covers yet, never more
+      const left = preHistoryRemainder(db, b.accountId, b.securityId, today());
+      if (b.quantity - left > DUST) throw new ApiError(400, 'INVALID_REQUEST', `quantity: only ${+left.toFixed(6)} shares held before the history have no lot`, 'quantity');
+      const id = randomUUID();
+      db.prepare('INSERT INTO lot_entries (id, account_id, security_id, acquired_on, quantity, cost_cents) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(id, b.accountId, b.securityId, b.acquiredOn, b.quantity, b.costCents);
+      return { status: 201, body: { id, ...b } };
+    });
+    return reply.code(r.status).send(r.body);
+  });
+  app.delete('/v1/tax/lots/:id', del('lot_entries', 'lot'));
+  app.patch<{ Params: { id: string } }>('/v1/accounts/:id/lot-method', async (req, reply) => {
+    const { method } = parseBody(LotMethodBody, req.body);
+    const r = idempotentWrite(deps, req, () => {
+      if (!db.prepare("UPDATE accounts SET lot_method = ? WHERE id = ? AND type = 'investment'").run(method, req.params.id).changes) throw notFound('investment account');
+      return { status: 200, body: { accountId: req.params.id, method } };
+    });
+    return reply.code(r.status).send(r.body);
+  });
 }

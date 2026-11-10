@@ -16,6 +16,8 @@
     "refundCents": 150000,
     "capitalGainsCents": null,
     "capitalLossCarryoverCents": null,
+    "capitalLossCarryoverShortCents": null,
+    "capitalLossCarryoverLongCents": null,
     "claimedAsDependent": null
   },
   "uncertain": [

@@ -396,6 +396,8 @@ struct ProfileDraftForm: View {
         .init(key: "refundCents", label: "Refund (negative when owed)", kind: .money(\.refundCents, signed: true)),
         .init(key: "capitalGainsCents", label: "Capital gains (negative for a loss)", kind: .money(\.capitalGainsCents, signed: true)),
         .init(key: "capitalLossCarryoverCents", label: "Capital loss carryover", kind: .money(\.capitalLossCarryoverCents)),
+        .init(key: "capitalLossCarryoverShortCents", label: "Carryover, short-term", kind: .money(\.capitalLossCarryoverShortCents)),
+        .init(key: "capitalLossCarryoverLongCents", label: "Carryover, long-term", kind: .money(\.capitalLossCarryoverLongCents)),
         .init(key: "claimedAsDependent", label: "Someone could claim me as a dependent", kind: .flag(\.claimedAsDependent)),
     ]
 

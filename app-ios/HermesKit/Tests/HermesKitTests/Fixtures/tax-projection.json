@@ -1,0 +1,280 @@
+{
+  "year": 2027,
+  "openYears": [
+    2025,
+    2026,
+    2027
+  ],
+  "asOf": "2026-03-15",
+  "complete": true,
+  "combinedBalanceCents": 240800,
+  "returns": [
+    {
+      "jurisdiction": "federal",
+      "supported": true,
+      "lines": [
+        {
+          "key": "wages",
+          "label": "Wages",
+          "cents": 6200000,
+          "source": "pay stubs and projected paychecks",
+          "assumption": "Includes pay on 27 projected paychecks (estimated)"
+        },
+        {
+          "key": "agi",
+          "label": "Adjusted gross income",
+          "cents": 6200000,
+          "source": "calculated"
+        },
+        {
+          "key": "standardDeduction",
+          "label": "Standard deduction",
+          "cents": 1660000,
+          "source": "IRS figures for 2027"
+        },
+        {
+          "key": "taxableIncome",
+          "label": "Taxable income",
+          "cents": 4540000,
+          "source": "calculated"
+        },
+        {
+          "key": "incomeTax",
+          "label": "Income tax",
+          "cents": 519200,
+          "source": "IRS figures for 2027",
+          "assumption": "Computed by formula: the IRS tax table may differ by a few dollars"
+        },
+        {
+          "key": "totalTax",
+          "label": "Total tax",
+          "cents": 519200,
+          "source": "calculated"
+        },
+        {
+          "key": "withheld",
+          "label": "Federal tax withheld",
+          "cents": 740000,
+          "source": "pay stubs and projected paychecks",
+          "assumption": "Includes withholding on 27 projected paychecks (estimated)"
+        },
+        {
+          "key": "balance",
+          "label": "Refund",
+          "cents": 220800,
+          "source": "calculated"
+        },
+        {
+          "key": "safeHarbor",
+          "label": "Pay at least this to avoid a penalty",
+          "cents": 376000,
+          "source": "2026 projection"
+        }
+      ],
+      "taxCents": 519200,
+      "withheldCents": 740000,
+      "balanceCents": 220800,
+      "safeHarborCents": 376000,
+      "unusedCarryover": {
+        "shortCents": 0,
+        "longCents": 0
+      }
+    },
+    {
+      "jurisdiction": "XA",
+      "supported": true,
+      "lines": [
+        {
+          "key": "totalIncome",
+          "label": "Total income",
+          "cents": 6200000,
+          "source": "pay stubs and investment income"
+        },
+        {
+          "key": "stateIncome",
+          "label": "Income taxed by this state",
+          "cents": 6200000,
+          "source": "pay stubs and investment income"
+        },
+        {
+          "key": "exemption",
+          "label": "Personal exemption",
+          "cents": 500000,
+          "source": "synthetic XA"
+        },
+        {
+          "key": "taxableIncome",
+          "label": "Taxable income",
+          "cents": 5700000,
+          "source": "calculated"
+        },
+        {
+          "key": "tax",
+          "label": "Tax at 4.0%",
+          "cents": 228000,
+          "source": "synthetic XA"
+        },
+        {
+          "key": "totalTax",
+          "label": "Total tax",
+          "cents": 228000,
+          "source": "calculated"
+        },
+        {
+          "key": "withheld",
+          "label": "State tax withheld",
+          "cents": 248000,
+          "source": "pay stubs and projected paychecks",
+          "assumption": "Includes withholding on projected paychecks (estimated)"
+        },
+        {
+          "key": "balance",
+          "label": "Refund",
+          "cents": 20000,
+          "source": "calculated"
+        }
+      ],
+      "taxCents": 228000,
+      "withheldCents": 248000,
+      "balanceCents": 20000
+    },
+    {
+      "jurisdiction": "XB",
+      "supported": true,
+      "lines": [
+        {
+          "key": "totalIncome",
+          "label": "Total income",
+          "cents": 6200000,
+          "source": "pay stubs and investment income"
+        },
+        {
+          "key": "stateIncome",
+          "label": "Income taxed by this state",
+          "cents": 3600000,
+          "source": "pay stubs and investment income"
+        },
+        {
+          "key": "standardDeduction",
+          "label": "Standard deduction",
+          "cents": 500000,
+          "source": "synthetic XB"
+        },
+        {
+          "key": "taxableIncome",
+          "label": "Taxable income as a full-year resident",
+          "cents": 5700000,
+          "source": "calculated"
+        },
+        {
+          "key": "fullYearTax",
+          "label": "Tax on total income, less exemption credit",
+          "cents": 225000,
+          "source": "synthetic XB"
+        },
+        {
+          "key": "ratio",
+          "label": "Tax × in-state share 58.1%",
+          "cents": 130645,
+          "source": "calculated",
+          "assumption": "Tax apportioned by in-state income over total income"
+        },
+        {
+          "key": "otherStateCredit",
+          "label": "Credit for tax paid to another state",
+          "cents": 130645,
+          "source": "calculated from the other state's return",
+          "assumption": "Capped at this state's tax on the resident income earned in the other state"
+        },
+        {
+          "key": "totalTax",
+          "label": "Total tax",
+          "cents": 0,
+          "source": "calculated"
+        },
+        {
+          "key": "withheld",
+          "label": "State tax withheld",
+          "cents": 0,
+          "source": "pay stubs"
+        },
+        {
+          "key": "balance",
+          "label": "Refund",
+          "cents": 0,
+          "source": "calculated"
+        }
+      ],
+      "taxCents": 0,
+      "withheldCents": 0,
+      "balanceCents": 0
+    }
+  ],
+  "assumptions": [
+    "Student and dependent status: assumes the same as this year",
+    "Scenario: moving to XB on 2027-07-01",
+    "2027 IRA limit: 2026 amounts used until published",
+    "2027 Roth income limits: 2026 amounts used until published",
+    "2027 401(k) limit: 2026 amounts used until published",
+    "2026 XA figures used for 2027 until published",
+    "No 401(k) contributions entered for 2027",
+    "SYNTHETIC EMPLOYER: future paychecks at the median gross of the last 3 stubs, every 14 days through 2027-12-31; SYNTHETIC EMPLOYER: withholding at the last 3 stubs' rates (at their 401(k) contributions)",
+    "SYNTHETIC EMPLOYER: bonus from the scenario paid in December, withheld at the supplemental rate",
+    "Other pre-tax deductions (health insurance, HSA) are not taken off wages",
+    "No tuition entered: education credit not counted",
+    "No scholarships entered",
+    "No student loan interest entered",
+    "Next year's dividends = this year's so far ($0.00 through 2026-03-15)",
+    "Bank interest not included",
+    "Safe harbor uses the 2026 projected tax until its return is filed",
+    "2026 XB figures used for 2027 until published"
+  ],
+  "figures": {
+    "federalYear": 2027,
+    "fallback": false
+  },
+  "waysToSave": [
+    {
+      "savingsCents": null,
+      "dueDate": "2028-04-15",
+      "kind": "roth_room",
+      "title": "Roth IRA room left for 2027",
+      "detail": "You can still put $7,500.00 into a Roth IRA for 2027 until 2028-04-15. It doesn't lower this year's tax; it grows tax-free.",
+      "askPrompt": "Should I put more into my Roth IRA for 2027?"
+    },
+    {
+      "savingsCents": 392000,
+      "dueDate": null,
+      "kind": "k401_room",
+      "title": "More 401(k) room in 2027",
+      "detail": "Raising 401(k) contributions to the $24,500.00 limit would lower 2027 taxes, as far as your pay allows.",
+      "askPrompt": "Should I raise my 401(k) contributions in 2027?"
+    },
+    {
+      "savingsCents": null,
+      "dueDate": null,
+      "kind": "education_credit",
+      "title": "Enter tuition and scholarships",
+      "detail": "Tuition for 2027 isn't entered, so no education credit is counted. Enter tuition and scholarships on the Tax screen.",
+      "askPrompt": "Do I qualify for an education credit in 2027?"
+    },
+    {
+      "savingsCents": null,
+      "dueDate": null,
+      "kind": "moving_expenses",
+      "title": "Moving costs may be deductible",
+      "detail": "Your new state lets you deduct moving costs the employer didn't pay; keep receipts.",
+      "askPrompt": "Can I deduct my moving costs on my state return?"
+    }
+  ],
+  "headsUp": [
+    {
+      "savingsCents": 392000,
+      "dueDate": null,
+      "kind": "k401_room",
+      "title": "More 401(k) room in 2027",
+      "detail": "Raising 401(k) contributions to the $24,500.00 limit would lower 2027 taxes, as far as your pay allows.",
+      "askPrompt": "Should I raise my 401(k) contributions in 2027?"
+    }
+  ]
+}

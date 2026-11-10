@@ -162,6 +162,9 @@ public struct TaxReturnBody: Codable, Sendable, Equatable {
     public var refundCents: Int?
     public var capitalGainsCents: Int?
     public var capitalLossCarryoverCents: Int?
+    /// the carryover worksheet's short-term and long-term lines
+    public var capitalLossCarryoverShortCents: Int?
+    public var capitalLossCarryoverLongCents: Int?
     /// the "someone can claim you as a dependent" box, or a state return's dependent exemption
     public var claimedAsDependent: Bool?
     public init() {}

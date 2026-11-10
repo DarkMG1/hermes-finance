@@ -1,0 +1,56 @@
+{
+  "lots": [
+    {
+      "id": "buy-1",
+      "accountId": "acct-tax-brokerage",
+      "securityId": "sec-taxa",
+      "ticker": "SYNT",
+      "acquiredOn": "2025-10-01",
+      "quantity": 10,
+      "costCents": 100000,
+      "status": "known"
+    },
+    {
+      "id": "entry-1",
+      "accountId": "acct-tax-brokerage",
+      "securityId": "sec-taxb",
+      "ticker": "SYNO",
+      "acquiredOn": "2020-05-01",
+      "quantity": 2,
+      "costCents": 20000,
+      "status": "entered",
+      "entryId": "entry-1"
+    }
+  ],
+  "sales": [
+    {
+      "accountId": "acct-tax-brokerage",
+      "securityId": "sec-taxb",
+      "date": "2025-11-03",
+      "quantity": 4,
+      "proceedsCents": 40000,
+      "costCents": 40000,
+      "acquiredOn": null,
+      "term": "unknown",
+      "washDisallowedCents": 0,
+      "taxable": true
+    }
+  ],
+  "methods": {
+    "acct-tax-brokerage": "fifo"
+  },
+  "inferred": {
+    "acct-tax-brokerage": true
+  },
+  "basisMatched": {
+    "acct-tax-brokerage": true
+  },
+  "unresolved": [
+    {
+      "accountId": "acct-tax-brokerage",
+      "securityId": "sec-taxb",
+      "ticker": "SYNO",
+      "quantity": 4
+    }
+  ]
+}

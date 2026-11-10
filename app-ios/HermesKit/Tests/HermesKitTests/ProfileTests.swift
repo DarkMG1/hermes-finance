@@ -132,7 +132,7 @@ import Testing
     _ = try await client.putTaxReturn(read, from: nil, idempotencyKey: "k-1")
     let body = try JSONDecoder().decode([String: JSONValue].self, from: try #require(transport.requests.first?.body))
     #expect(body["totalTaxCents"] == .number(650000) && body["year"] == .number(2025))
-    #expect(body["capitalGainsCents"] == .null && body["creditsCents"] == .null && body.count == 16, "every field of the return is sent")
+    #expect(body["capitalGainsCents"] == .null && body["creditsCents"] == .null && body.count == 18, "every field of the return is sent")
 }
 
 @Test func aStubBalancesWithinACentCountingOtherPay() {
