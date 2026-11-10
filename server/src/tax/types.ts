@@ -1,4 +1,4 @@
-import type { TaxScenario } from '@hermes/shared';
+import type { TaxWhatIfChange } from '@hermes/shared';
 
 /** One return-style line; `source` says where the number came from, `assumption` what was assumed to get it. */
 export type Line = { key: string; label: string; cents: number; source: string; assumption?: string };
@@ -17,12 +17,11 @@ export type Advice = {
 };
 export type TaxProjection = {
   year: number; openYears: number[]; asOf: string;
-  /** the returns' balances added up: + refund, − owed */
+  /** false: a return isn't supported (no figures), so its tax is missing from the total */
+  complete: boolean;
+  /** the supported returns' balances added up: + refund, − owed */
   combinedBalanceCents: number; returns: ReturnResult[]; assumptions: string[];
   figures: { federalYear: number; fallback: boolean }; waysToSave: Advice[]; headsUp: Advice[];
 };
-/** A change to try: shares to sell now (at today's price), extra federal withholding for the year, scenario inputs over the stored ones. */
-export type WhatIf = {
-  sell?: { accountId: string; securityId: string; quantity: number; lotIds?: string[] }[];
-  extraWithholdingCents?: number; scenario?: Partial<TaxScenario>;
-};
+/** A change to try: shares to sell now (at the last synced price), extra federal withholding for the year, scenario inputs over the stored ones. */
+export type WhatIf = TaxWhatIfChange;

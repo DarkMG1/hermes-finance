@@ -10,6 +10,8 @@ export type FederalInput = {
   /** Gross pay; `k401PreTaxCents` comes off it to give W-2 box 1 wages. */
   wagesCents: number; interestCents: number; ordinaryDividendsCents: number; qualifiedDividendsCents: number;
   sales: Sale[]; carryover: { shortCents: number; longCents: number };
+  /** long-term capital gain distributions (1099-DIV box 2a): long-term gains without a sale */
+  capitalGainDistributionsCents?: number;
   studentLoanInterestCents: number; k401PreTaxCents: number; tuitionCents: number; scholarshipsCents: number;
   /** null: assume years remain. */
   aotcYearsUsed: number | null;
@@ -20,17 +22,20 @@ export type FederalInput = {
   assumptions?: Partial<Record<'wagesCents' | 'ordinaryDividendsCents' | 'withheldCents', string>>;
 };
 
-const DEFAULT_SOURCES: Record<keyof FederalInput | 'figures', string> = {
+const DEFAULT_SOURCES: Record<Exclude<keyof FederalInput, 'sources' | 'assumptions'> | 'figures', string> = {
   filingStatus: 'profile', claimable: 'profile', fullTimeStudent: 'profile', wagesCents: 'pay stubs', interestCents: 'investment income',
-  ordinaryDividendsCents: 'investment income', qualifiedDividendsCents: 'investment income', sales: 'investment sales',
+  ordinaryDividendsCents: 'investment income', qualifiedDividendsCents: 'investment income', sales: 'investment sales', capitalGainDistributionsCents: 'investment income',
   carryover: 'carryover from prior-year return', studentLoanInterestCents: 'owner input: student loan interest', k401PreTaxCents: 'pay stubs',
   tuitionCents: 'owner input: tuition', scholarshipsCents: 'owner input: scholarships', aotcYearsUsed: 'prior returns', withheldCents: 'pay stubs',
-  priorYearTaxCents: 'prior-year return', priorYearAgiCents: 'prior-year return', sources: '', assumptions: '', figures: 'IRS published figures',
+  priorYearTaxCents: 'prior-year return', priorYearAgiCents: 'prior-year return', figures: 'IRS published figures',
 };
 
-// Statutory, not indexed: 110% safe harbor above $150,000 prior AGI; NIIT and additional Medicare tax start at $200,000 (single).
+// Statutory, not indexed: 110% safe harbor above $150,000 prior AGI; NIIT and additional Medicare tax start at $200,000 ($250,000 joint,
+// $125,000 separate).
 const HIGH_PRIOR_AGI = 15_000_000;
-const NIIT_FLOOR = 20_000_000;
+const NIIT_FLOOR = { single: 20_000_000, married_joint: 25_000_000, married_separate: 12_500_000, head_of_household: 20_000_000 };
+// The IRS tax table (taxable income under $100,000) taxes the middle of each $50 row; the formula can differ by a few dollars.
+const TAX_TABLE_TOP = 10_000_000;
 // AOTC: 100% of the first $2,000 of expenses plus 25% of the next $2,000 (not indexed).
 const AOTC_TIER = 200_000;
 
@@ -69,21 +74,24 @@ export function computeFederal(input: FederalInput, f: FederalFigures): ReturnRe
   if (input.interestCents) add('interest', 'Taxable interest', input.interestCents, src.interestCents);
   if (input.ordinaryDividendsCents) add('ordinaryDividends', 'Ordinary dividends', input.ordinaryDividendsCents, src.ordinaryDividendsCents,
     input.assumptions?.ordinaryDividendsCents ?? false);
-  if (input.qualifiedDividendsCents) add('qualifiedDividends', 'Qualified dividends (included above)', input.qualifiedDividendsCents, src.qualifiedDividendsCents);
+  const qualifiedDividends = Math.min(input.qualifiedDividendsCents, input.ordinaryDividendsCents);
+  if (qualifiedDividends) add('qualifiedDividends', 'Qualified dividends (included above)', qualifiedDividends, src.qualifiedDividendsCents);
+  const distributions = input.capitalGainDistributionsCents ?? 0;
 
   const taxable = input.sales.filter((s) => s.taxable);
   const unknown = taxable.filter((s) => s.term === 'unknown').length;
   const gains = (term: Sale['term']) => taxable.filter((s) => s.term === term).reduce((sum, s) => sum + s.proceedsCents - s.costCents + s.washDisallowedCents, 0);
   const short = gains('short') - input.carryover.shortCents;
-  const long = gains('long') - input.carryover.longCents;
+  const long = gains('long') + distributions - input.carryover.longCents;
   const lossDeduction = Math.min(Math.max(0, -(short + long)), f.capitalLossLimit);
   const capitalGain = short + long >= 0 ? short + long : -lossDeduction;
   const capitalSource = `${src.sales}; ${src.carryover}`;
-  if (taxable.length || input.carryover.shortCents || input.carryover.longCents) {
+  if (distributions) add('capitalGainDistributions', 'Capital gain distributions (in long-term below)', distributions, src.capitalGainDistributionsCents);
+  if (taxable.length || distributions || input.carryover.shortCents || input.carryover.longCents) {
     add('shortTermNet', 'Net short-term gain or loss', short, capitalSource);
     add('longTermNet', 'Net long-term gain or loss', long, capitalSource);
     add('capitalGain', 'Capital gain or (loss)', capitalGain, capitalSource,
-      unknown > 0 && `${unknown} sales of shares bought before the trade history: cost unknown, counted as no gain`,
+      unknown > 0 && `${unknown} sale${unknown === 1 ? '' : 's'} of shares bought before the trade history: cost unknown, counted as no gain`,
       short + long < 0 && -(short + long) > lossDeduction && 'Loss above the yearly limit carries to next year');
   }
 
@@ -114,7 +122,7 @@ export function computeFederal(input: FederalInput, f: FederalFigures): ReturnRe
   // Qualified Dividends and Capital Gain Tax Worksheet
   const brackets = f.brackets[status];
   const [top0, top15] = f.ltcg[status];
-  const preferential = Math.min(taxableIncome, input.qualifiedDividendsCents + Math.max(0, Math.min(long, short + long)));
+  const preferential = Math.min(taxableIncome, qualifiedDividends + Math.max(0, Math.min(long, short + long)));
   const ordinary = taxableIncome - preferential;
   const at0 = Math.min(preferential, Math.max(0, Math.min(taxableIncome, top0) - ordinary));
   const at15 = Math.min(preferential - at0, Math.max(0, Math.min(taxableIncome, top15) - ordinary - at0));
@@ -122,8 +130,9 @@ export function computeFederal(input: FederalInput, f: FederalFigures): ReturnRe
     bracketTax(ordinary, brackets) + at15 * 0.15 + (preferential - at0 - at15) * 0.2));
   const unearned = input.interestCents + input.ordinaryDividendsCents + Math.max(0, capitalGain);
   add('incomeTax', 'Income tax', incomeTax, src.figures, statusNote,
-    input.claimable && input.fullTimeStudent && unearned > 0 && 'Kiddie tax not computed: investment income above the yearly threshold may be taxed at a parent\'s rate',
-    agi > NIIT_FLOOR && 'Net investment income tax and additional Medicare tax not computed');
+    taxableIncome > 0 && taxableIncome < TAX_TABLE_TOP && 'Computed by formula: the IRS tax table may differ by a few dollars',
+    input.claimable && unearned > 0 && 'Kiddie tax not computed: investment income above the yearly threshold may be taxed at a parent\'s rate',
+    agi > NIIT_FLOOR[input.filingStatus] && 'Net investment income tax and additional Medicare tax not computed');
 
   // American opportunity credit (Form 8863)
   const qualified = Math.max(0, input.tuitionCents - input.scholarshipsCents);

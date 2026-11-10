@@ -18,7 +18,8 @@ const pct = (share: number) => `${(share * 100).toFixed(1)}%`;
 export function computeState(input: StateInput, model: StateModel | null): ReturnResult {
   const { code, withheldCents } = input;
   if (!model) {
-    return { jurisdiction: code, supported: false, taxCents: 0, withheldCents, balanceCents: withheldCents,
+    // its tax is unknown, so no balance: withholding alone would read as a refund
+    return { jurisdiction: code, supported: false, taxCents: 0, withheldCents, balanceCents: 0,
       lines: [{ key: 'unsupported', label: 'Not supported', cents: 0, source: 'state figures file', assumption: 'No figures for this state' }] };
   }
   const lines: Line[] = [];
@@ -34,7 +35,8 @@ export function computeState(input: StateInput, model: StateModel | null): Retur
     if (resident && i.sourceState && i.sourceState !== code) doubled += amount;
   }
   const total = input.totalIncomeCents;
-  const share = total > 0 ? Math.min(1, taxed / total) : 0;
+  // a loss while resident can make the taxed income negative: no negative share, so no negative tax
+  const share = total > 0 ? Math.min(1, Math.max(0, taxed / total)) : 0;
   add('totalIncome', 'Total income', total, 'pay stubs and investment income');
   add('stateIncome', 'Income taxed by this state', taxed, 'pay stubs and investment income');
 
@@ -48,18 +50,21 @@ export function computeState(input: StateInput, model: StateModel | null): Retur
     tax = Math.round(taxable * model.rate);
     add('tax', `Tax at ${pct(model.rate)}`, tax, model.source);
   } else {
-    add('standardDeduction', 'Standard deduction', model.standardDeductionCents, model.source);
+    add('standardDeduction', 'Standard deduction', model.standardDeductionCents, model.source,
+      input.claimable ? 'Claimable as a dependent: this state\'s figures have no dependent rule, so the full deduction is used' : undefined);
     const taxable = Math.max(0, total - model.standardDeductionCents);
     add('taxableIncome', 'Taxable income as a full-year resident', taxable, 'calculated');
-    const surtax = model.surtax ? Math.max(0, taxable - model.surtax.overCents) * model.surtax.rate : 0;
-    const full = Math.round(Math.max(0, bracketTax(taxable, model.brackets) - model.exemptionCreditCents) + surtax);
-    add('fullYearTax', 'Tax on total income, less exemption credit', full, model.source);
+    const surtax = Math.round(model.surtax ? Math.max(0, taxable - model.surtax.overCents) * model.surtax.rate : 0);
+    const base = Math.round(Math.max(0, bracketTax(taxable, model.brackets) - model.exemptionCreditCents));
+    add('fullYearTax', 'Tax on total income, less exemption credit', base, model.source);
+    if (surtax) add('surtax', `Surtax at ${pct(model.surtax!.rate)}`, surtax, model.source);
+    const full = base + surtax;
     tax = Math.round(full * share);
     add('ratio', `Tax × in-state share ${pct(share)}`, tax, 'calculated', share < 1 ? 'Tax apportioned by in-state income over total income' : undefined);
   }
 
-  if (doubled > 0 && input.otherStateTaxCents > 0) {
-    const credit = Math.min(input.otherStateTaxCents, Math.round(tax * doubled / taxed));
+  if (doubled > 0 && taxed > 0 && input.otherStateTaxCents > 0) {
+    const credit = Math.min(input.otherStateTaxCents, Math.round(tax * Math.min(1, doubled / taxed)));
     add('otherStateCredit', 'Credit for tax paid to another state', credit, 'calculated from the other state\'s return',
       'Capped at this state\'s tax on the resident income earned in the other state');
     tax = Math.max(0, tax - credit);

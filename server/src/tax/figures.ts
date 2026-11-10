@@ -23,7 +23,7 @@ export type FederalFigures = {
   studentLoanInterest: { max: number; phaseOut: { single: Pair; marriedJoint: Pair } };
   k401Limit: number;
   /** Figure groups copied from the previous year because the IRS has not published the new ones. */
-  carriedFrom2026?: string[];
+  carriedFrom2026?: ('ira' | 'rothPhaseOut' | 'k401Limit')[];
 };
 
 const Y2026: FederalFigures = {
@@ -73,11 +73,13 @@ export const SOURCES = 'IRS Rev. Proc. 2025-32 (2026), Rev. Proc. 2026-35 (2027)
 
 export const federalYears = () => Object.keys(YEARS).map(Number);
 
+/** The year's figures, else the latest earlier year's (the earliest year's for a year before them all), with fallback true. */
 export function federalFigures(year: number): { figures: FederalFigures; year: number; fallback: boolean } {
   const exact = YEARS[year];
   if (exact) return { figures: exact, year, fallback: false };
-  const latest = Math.max(...federalYears());
-  return { figures: YEARS[latest]!, year: latest, fallback: true };
+  const years = federalYears();
+  const used = Math.max(...years.filter((y) => y < year), Math.min(...years));
+  return { figures: YEARS[used]!, year: used, fallback: true };
 }
 
 const Rate = z.number().min(0).max(1);
@@ -94,13 +96,14 @@ export const StateModel = z.discriminatedUnion('model', [
 ]);
 export type StateModel = z.infer<typeof StateModel>;
 
-/** The code's model for `year` from the state file, or the latest earlier year in it (fallback true). Anything missing or malformed is null. */
+/** The code's model for `year` from the state file, or the latest earlier year that has the code (fallback true). Anything missing or malformed is null. */
 export function stateFigures(file: string | null, year: number, code: string): { model: StateModel; year: number; fallback: boolean } | null {
   if (!file) return null;
   try {
     const all = JSON.parse(readFileSync(file, 'utf8')) as Record<string, Record<string, unknown> | undefined>;
-    const used = Math.max(-1, ...Object.keys(all).map(Number).filter((y) => y <= year));
-    const parsed = StateModel.safeParse(all[String(used)]?.[code]);
+    const used = Object.keys(all).map(Number).filter((y) => y <= year && all[String(y)]?.[code] !== undefined).sort((a, b) => b - a)[0];
+    if (used === undefined) return null;
+    const parsed = StateModel.safeParse(all[String(used)]![code]);
     return parsed.success ? { model: parsed.data, year: used, fallback: used !== year } : null;
   } catch { return null; }
 }

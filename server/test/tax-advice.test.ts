@@ -77,6 +77,11 @@ test('harvest_loss: an unrealized loss saves what the calculator says; a buy in 
   assert.ok(sold.deltaCents > 0);
   assert.equal(h.savingsCents, sold.deltaCents);
   assert.match(h.detail, /within 30 days.*Roth IRA/);
+  assert.equal(h.title, 'Sell SYNA in Account brk to harvest a loss');
+  assert.match(h.detail, /^Selling all of SYNA in Account brk now realizes a loss \(\$500\.00 short-term\)/);
+  // the saving is the drop in tax, not in the balance
+  const tax = (x: { returns: { withheldCents: number; balanceCents: number }[] }) => x.returns.reduce((a, r) => a + r.withheldCents - r.balanceCents, 0);
+  assert.equal(h.savingsCents, tax(sold.before) - tax(sold.after));
   assert.ok(!/\d/.test(h.askPrompt.replace('SYNA', '')));
   assert.ok(kinds(p.headsUp).includes('harvest_loss'));
 
@@ -104,14 +109,17 @@ test('harvest_loss guards: unverified lots, gains and recent buys never reach th
   security(db, 'sx', 'SYNA');
   holding(db, 'brk', 'sx', 10, $(100), $(1_500));
   let calls = 0;
-  const run = (lots: Partial<Lot>[]) => {
+  const run = (lots: Partial<Lot>[], harvest = true) => {
     calls = 0;
-    const l = lots.map((x) => ({ id: 'l', accountId: 'brk', securityId: 'sx', ticker: 'SYNA', acquiredOn: '2025-06-01', quantity: 10, costCents: $(1_500), status: 'known', ...x }) as Lot);
-    const ctx = {
-      db, year: 2026, projection: { combinedBalanceCents: 0, returns: [{ balanceCents: 0, withheldCents: 0 }] }, fed: LIMIT, safeHarborCents: 0, claimable: false,
-      inputs: { tuitionCents: 0, studentLoanInterestCents: 0, k401Cents: null }, scenario: null, lots: l, remainingPaychecks: 0, stateModel: () => null,
-      delta: () => { calls += 1; return $(100); },
-    } as unknown as AdviceCtx;
+    const l = lots.map((x): Lot => ({ id: 'l', accountId: 'brk', securityId: 'sx', ticker: 'SYNA', acquiredOn: '2025-06-01', quantity: 10, costCents: $(1_500), status: 'known', ...x }));
+    const ctx: AdviceCtx = {
+      db, year: 2026, fed: LIMIT, safeHarborCents: 0, claimable: false, filingStatus: 'single', birthYear: null,
+      projection: { year: 2026, openYears: [2026, 2027], asOf: TODAY, complete: true, combinedBalanceCents: 0, assumptions: [], figures: { federalYear: 2026, fallback: false },
+        returns: [{ jurisdiction: 'federal', supported: true, lines: [], taxCents: 0, withheldCents: 0, balanceCents: 0 }], waysToSave: [], headsUp: [] },
+      inputs: { year: 2026, tuitionCents: 0, scholarshipsCents: 0, studentLoanInterestCents: 0, k401Cents: null, updatedAt: null }, scenario: null, move: null,
+      lots: l, remainingPaychecks: 0, stateModel: () => null, harvest,
+      delta: () => { calls += 1; return { savedCents: $(100), sales: [] }; },
+    };
     return kinds(advise(ctx, TODAY).waysToSave).includes('harvest_loss');
   };
   assert.equal(run([{}]), true); // control: a known lot at a loss reaches the what-if
@@ -120,13 +128,19 @@ test('harvest_loss guards: unverified lots, gains and recent buys never reach th
   assert.equal(calls, 0);
   assert.equal(run([{ costCents: $(900) }]), false); // price 100 x 10 = 1,000 > cost 900
   assert.equal(calls, 0);
+  // held in another account too (a buy there after the sale could wash it), or the heads-up count skipping the what-ifs
+  assert.equal(run([{}, { id: 'r', accountId: 'roth', ticker: 'syna' }]), false);
+  assert.equal(calls, 0);
+  assert.equal(run([{}], false), false);
+  assert.equal(calls, 0);
   buy(db, 'brk', 'sx', '2026-03-01', 1, $(100));
   assert.equal(run([{}]), false);
   assert.equal(calls, 0);
 });
 
 test('roth_room and over_limit for the open tax years', async () => {
-  const { deps, db } = await setup();
+  const { deps, db, send } = await setup();
+  await job(send, 200, null);
   roth(db, 'r1', 2026, $(2_000));
   roth(db, 'r0', 2025, LIMIT.ira.limit + $(100));
   const room = project(deps, 2026, TODAY).waysToSave.find((a) => a.kind === 'roth_room')!;
@@ -139,6 +153,32 @@ test('roth_room and over_limit for the open tax years', async () => {
   assert.equal(over.dueDate, '2026-04-15');
   // after Apr 15 the prior year is closed
   assert.ok(!kinds(project(deps, 2025, '2026-04-16').headsUp).includes('over_limit'));
+  // next year counts the scenario's planned contribution
+  await send('PUT', '/v1/tax/scenario/2027', { rothCents: $(7_000) });
+  const planned = project(deps, 2027, TODAY).waysToSave.find((a) => a.kind === 'roth_room')!;
+  assert.match(planned.detail, new RegExp(`put \\$${((LIMIT.ira.limit - $(7_000)) / 100).toLocaleString('en-US')}\\.00 into.*Counts the \\$7,000\\.00 planned in the scenario`));
+  await send('PUT', '/v1/tax/scenario/2027', { rothCents: LIMIT.ira.limit + $(1) });
+  assert.ok(kinds(project(deps, 2027, TODAY).headsUp).includes('over_limit'));
+});
+
+test('roth_room: the limit is capped at taxable pay and phased out by income', async () => {
+  const low = await setup();
+  await job(low.send, 0, '2026-03-06', 100);
+  roth(low.db, 'r1', 2026, $(2_000));
+  // 5 stubs of 100 = 500 of pay: 1,500 over
+  const over = project(low.deps, 2026, TODAY).headsUp.find((a) => a.kind === 'over_limit')!;
+  assert.match(over.detail, /\$1,500\.00 more than your \$500\.00 limit\. Your 2026 limit is your taxable pay/);
+
+  const high = await setup();
+  await job(high.send, 0, null, 6_200);
+  const p = project(high.deps, 2026, TODAY);
+  const agi = p.returns[0]!.lines.find((l) => l.key === 'agi')!.cents;
+  const [from, to] = LIMIT.rothPhaseOut.single;
+  assert.ok(agi > from && agi < to, String(agi));
+  const max = Math.round(LIMIT.ira.limit * (to - agi) / (to - from));
+  const room = p.waysToSave.find((a) => a.kind === 'roth_room')!;
+  assert.ok(room.detail.includes(`put $${(max / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })} into`), room.detail);
+  assert.match(room.detail, /phases the limit down/);
 });
 
 test('k401_room: next year, only when more would lower the tax; over_limit above the limit', async () => {
@@ -190,19 +230,52 @@ test("moving_expenses: next year's move into a state that allows the deduction",
   assert.equal(m.savingsCents, null);
 });
 
-test('estimated_payment and withholding_short when a lot is owed', async () => {
+test('estimated_payment and withholding_short are per return, naming the form that fixes each', async () => {
   const { deps, send } = await setup();
   await job(send, 0, '2026-06-30', 8_000);
   const soon = '2026-04-01';
   const p = project(deps, 2026, soon);
-  assert.ok(p.combinedBalanceCents < -$(1_000));
-  const est = p.headsUp.find((a) => a.kind === 'estimated_payment')!;
-  assert.equal(est.dueDate, '2026-04-15');
-  const w = p.headsUp.find((a) => a.kind === 'withholding_short')!;
-  assert.match(w.detail, /remaining paychecks/);
-  assert.ok(w.detail.includes(`$${Math.ceil(-p.combinedBalanceCents / Number(w.detail.match(/of the (\d+) remaining/)![1]) / 100)} more`), w.detail);
+  const [fed, xa] = p.returns;
+  assert.ok(fed!.balanceCents < -$(1_000) && xa!.balanceCents < -$(1_000));
+  assert.deepEqual(p.headsUp.filter((a) => a.kind === 'estimated_payment').map((a) => [a.title, a.dueDate]),
+    [['Estimated federal tax payment due soon', '2026-04-15'], ['Estimated XA tax payment due soon', '2026-04-15']]);
+  const [w, ws] = p.headsUp.filter((a) => a.kind === 'withholding_short');
+  const n = Number(w!.detail.match(/of the (\d+) remaining/)![1]);
+  assert.ok(w!.detail.includes(`$${Math.ceil(-fed!.balanceCents / n / 100)} more`) && w!.detail.endsWith('Change it on your W-4.'), w!.detail);
+  assert.ok(ws!.title.startsWith('XA withholding is short') && ws!.detail.includes(`$${Math.ceil(-xa!.balanceCents / n / 100)} more`)
+    && ws!.detail.endsWith('Change it on your XA withholding certificate.'), ws!.detail);
   // not within 30 days of a due date: no estimated payment item
   assert.ok(!kinds(project(deps, 2026, '2026-05-10').headsUp).includes('estimated_payment'));
+});
+
+test('a refund on one return never hides a shortfall on another; a closed year and an unsupported state get no withholding alert', async () => {
+  const { deps, send } = await setup();
+  // federal well over-withheld, XA under-withheld
+  const j = await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'current', startDate: '2025-01-01', endDate: '2026-06-30' });
+  for (const payDate of ['2026-01-09', '2026-01-23', '2026-02-06', '2026-02-20', '2026-03-06']) {
+    await send('POST', '/v1/pay-stubs', { jobId: j.id, payDate, grossCents: $(8_000), federalCents: $(3_000), stateCents: 0, netCents: $(5_000), state: 'XA' });
+  }
+  const p = project(deps, 2026, TODAY);
+  assert.ok(p.combinedBalanceCents > 0);
+  assert.deepEqual(p.headsUp.filter((a) => a.kind === 'withholding_short').map((a) => a.title.split(' ')[0]), ['XA']);
+  // last year: no paychecks left to change
+  await send('POST', '/v1/pay-stubs', { jobId: j.id, payDate: '2025-12-19', grossCents: $(8_000), federalCents: 0, stateCents: 0, netCents: $(8_000), state: 'XA' });
+  assert.ok(!kinds(project(deps, 2025, TODAY).headsUp).includes('withholding_short'));
+  // a state with no figures: no alert, and the projection says why
+  await send('PUT', '/v1/profile', { state: 'XC' });
+  const xc = project(deps, 2026, TODAY);
+  assert.deepEqual([xc.complete, xc.headsUp.some((a) => a.title.startsWith('XC'))], [false, false]);
+  assert.ok(xc.assumptions.includes("XC not supported: its tax isn't in the total") && xc.assumptions.includes("Withholding alerts skip XC: its tax isn't known"));
+});
+
+test('ask prompts never hold amounts', async () => {
+  const { deps, db, send } = await setup();
+  await job(send, 0, '2026-06-30', 8_000);
+  roth(db, 'r1', 2026, $(100_000));
+  await send('PUT', '/v1/tax/scenario/2027', { k401Cents: $(1_000), moveDate: '2027-03-01', moveTo: 'XB' });
+  const items = [2026, 2027].flatMap((y) => { const p = project(deps, y, '2026-04-01'); return [...p.waysToSave, ...p.headsUp]; });
+  assert.ok(items.length >= 5, String(items.length));
+  for (const a of items) assert.ok(!a.askPrompt.includes('$'), a.askPrompt);
 });
 
 test('estimated_payment needs a lot owed AND withholding under the safe harbor; a refund never triggers it', async () => {

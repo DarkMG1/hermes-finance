@@ -95,7 +95,7 @@ test('short and long losses net against gains; $3,000 limit; carryover split pre
   assert.equal(cents(r, 'agi'), $(47_000));
   assert.equal(r.taxCents, $(3_460));
   assert.deepEqual(r.unusedCarryover, { shortCents: 0, longCents: $(4_500) });
-  assert.match(assumptions(r), /1 sales of shares bought before the trade history: cost unknown, counted as no gain/);
+  assert.match(assumptions(r), /1 sale of shares bought before the trade history: cost unknown, counted as no gain/);
 
   // short −4,000, long −1,000 (carryovers only), wages 50,000: line4 = 3,000; short carry 4,000 − 3,000 = 1,000;
   // long carry 1,000 − (0 + max(0, 3,000 − 4,000)) = 1,000
@@ -186,4 +186,21 @@ test('safe harbor is 100% of prior tax (110% above $150k AGI) or 90% of this yea
   assert.match(assumptions(noAgi), /110%/);
   // refundable credit lowers this year's tax for the 90% test: tax 0 − refundable 1,000 → floor 0
   assert.equal(computeFederal(input({ wagesCents: $(30_000), tuitionCents: $(5_000) }), F).safeHarborCents, 0);
+});
+
+test('labels: tax by formula under the tax table limit; kiddie tax for any claimable filer with investment income; NIIT floor by status', () => {
+  const small = computeFederal(input({ wagesCents: $(40_000) }), F);
+  assert.match(line(small, 'incomeTax')!.assumption ?? '', /IRS tax table may differ/);
+  assert.doesNotMatch(line(computeFederal(input({ wagesCents: $(150_000) }), F), 'incomeTax')!.assumption ?? '', /tax table/);
+  assert.match(line(computeFederal(input({ claimable: true, wagesCents: $(5_000), interestCents: $(3_000) }), F), 'incomeTax')!.assumption ?? '', /Kiddie tax/);
+  assert.doesNotMatch(line(computeFederal(input({ filingStatus: 'married_joint', wagesCents: $(220_000) }), F), 'incomeTax')!.assumption ?? '', /Net investment/);
+  assert.match(line(computeFederal(input({ filingStatus: 'married_joint', wagesCents: $(260_000) }), F), 'incomeTax')!.assumption ?? '', /Net investment/);
+  assert.match(line(computeFederal(input({ wagesCents: $(210_000) }), F), 'incomeTax')!.assumption ?? '', /Net investment/);
+});
+
+test('qualified dividends never exceed ordinary ones; long-term distributions are long-term gains', () => {
+  const r = computeFederal(input({ wagesCents: $(60_000), ordinaryDividendsCents: $(100), qualifiedDividendsCents: $(500), capitalGainDistributionsCents: $(300) }), F);
+  assert.equal(cents(r, 'qualifiedDividends'), $(100));
+  assert.deepEqual([cents(r, 'capitalGainDistributions'), cents(r, 'longTermNet'), cents(r, 'capitalGain')], [$(300), $(300), $(300)]);
+  assert.equal(cents(r, 'agi'), $(60_400));
 });

@@ -163,7 +163,9 @@ test('an entered lot replaces the unverified remainder', async () => {
   assert.equal(await bad({ accountId: 'nope' }), 'accountId');
   assert.equal(await bad({ securityId: 'nope' }), 'securityId');
   assert.equal(await bad({ quantity: 0 }), 'quantity');
-  assert.equal(await bad({ acquiredOn: '1999-12-31' }), 'acquiredOn');
+  // any past date the contract takes; never after today
+  assert.equal(await bad({ acquiredOn: '1999-12-31' }), 'quantity');
+  assert.equal(await bad({ acquiredOn: '2026-03-16' }), 'acquiredOn');
 });
 
 test('a loss sale with a buy of the same security within 30 days before or after has its loss disallowed and added to the replacement lot', () => {
@@ -265,4 +267,82 @@ test('planSale blocks when any taken lot is unverified', () => {
   // only the specific method lets the owner pick
   assert.deepEqual(take(planSale(known, 'fifo', 'brk', 'sx', 4, ['k2'])), [[['k1', 3], ['k2', 1]], false]);
   assert.deepEqual(take(planSale(known, 'fifo', 'brk', 'sx', 8)), [[['k1', 3], ['k2', 4]], true]);
+});
+
+test('a history that adds up to more shares than held makes the position unverified', () => {
+  const { db } = setup();
+  // 2 bought, 1 held (a missed outflow, or holdings synced before the trades): the extra share must not be planned for a sale
+  buy(db, 'brk', 'sx', '2025-01-02', 2, 20000);
+  holding(db, 'brk', 'sx', 1, 10000);
+  const r = buildLots(db, AS_OF);
+  assert.deepEqual(r.lots.map((l) => [l.status, l.quantity]), [['unverified', 2]]);
+  assert.deepEqual(r.mismatched, [{ accountId: 'brk', securityId: 'sx', ticker: 'SYNA' }]);
+  assert.notEqual(planSale(r.lots, 'fifo', 'brk', 'sx', 1).blocked, null);
+});
+
+test('pre-history shares past sales took are unresolved until a lot is entered, a fully sold position too', async () => {
+  const { db, get, send } = setup();
+  // 10 held before the history, all sold: no lot left to show, but the sale's cost is unknown
+  sell(db, 'brk', 'sx', '2025-02-01', 10, 100000);
+  const before = (await get('/v1/tax/lots')).json();
+  assert.deepEqual([before.lots, before.unresolved], [[], [{ accountId: 'brk', securityId: 'sx', ticker: 'SYNA', quantity: 10 }]]);
+  assert.deepEqual(before.sales.map((s: { term: string }) => s.term), ['unknown']);
+  assert.equal(before.lots.some((l: object) => 'base' in l || 'replaced' in l), false);
+  const entered = await send('POST', '/v1/tax/lots', { accountId: 'brk', securityId: 'sx', acquiredOn: '2020-05-01', quantity: 10, costCents: 60000 });
+  assert.equal(entered.statusCode, 201);
+  const after = buildLots(db, AS_OF);
+  assert.deepEqual(after.unresolved, []);
+  assert.deepEqual(after.sales.map(brief), [['2025-02-01', 10, 100000, 60000, '2020-05-01', 'long']]);
+});
+
+test('an entered lot is never sold before its date, and washes a loss like a bought one', () => {
+  const { db } = setup();
+  // 5 held before the history; the owner says they were bought 2025-05-25, after a sale of other pre-history shares
+  holding(db, 'brk', 'sx', 5, 50000);
+  sell(db, 'brk', 'sx', '2025-02-01', 3, 30000);
+  db.prepare("INSERT INTO lot_entries (id, account_id, security_id, acquired_on, quantity, cost_cents) VALUES ('e1', 'brk', 'sx', '2025-05-25', 5, 50000)").run();
+  // a loss sale in another taxable account 7 days after the entered buy: the entered shares replace them
+  seedAccount(db, { id: 'brk2', type: 'investment', subtype: 'brokerage' });
+  buy(db, 'brk2', 'sx', '2025-01-02', 2, 40000);
+  sell(db, 'brk2', 'sx', '2025-06-01', 2, 20000);
+  const r = buildLots(db, AS_OF);
+  assert.deepEqual(r.sales.filter((s) => s.accountId === 'brk2').map((s) => s.washDisallowedCents), [20000]);
+  // the February sale took the unverified pre-history shares, not the entered lot
+  assert.deepEqual(r.sales.filter((s) => s.securityId === 'sx' && s.accountId === 'brk').map(brief), [['2025-02-01', 3, 30000, 30000, null, 'unknown']]);
+  assert.deepEqual(r.unresolved, [{ accountId: 'brk', securityId: 'sx', ticker: 'SYNA', quantity: 3 }]);
+  assert.ok(r.lots.some((l) => l.id === 'e1' && l.status === 'entered'));
+});
+
+test('wash split ids name the sale, so a sync adding unrelated rows keeps them', () => {
+  const { db } = setup();
+  buy(db, 'brk', 'sx', '2025-01-02', 2, 20000);
+  sell(db, 'brk', 'sx', '2025-06-01', 2, 14000);
+  const rep = buy(db, 'brk', 'sx', '2025-06-05', 5, 35000);
+  const ids = () => buildLots(db, AS_OF).lots.filter((l) => l.securityId === 'sx').map((l) => l.id).sort();
+  const first = ids();
+  security(db, 'sy', 'SYNB');
+  buy(db, 'brk', 'sy', '2025-01-02', 1, 100);
+  sell(db, 'brk', 'sy', '2025-03-01', 1, 50);
+  assert.deepEqual(ids(), first);
+  assert.ok(first.includes(rep) && first.some((id) => id.startsWith(`${rep}:w`)), first.join());
+});
+
+test('basisMatched tells a method that reproduces the basis from FIFO by default', () => {
+  const { db } = setup();
+  twoLotsOneSale(db, 80000);
+  security(db, 'sy', 'SYNB');
+  seedAccount(db, { id: 'brk2', type: 'investment', subtype: 'brokerage' });
+  buy(db, 'brk2', 'sy', '2024-03-01', 10, 100000);
+  holding(db, 'brk2', 'sy', 10, 55555);
+  const r = buildLots(db, AS_OF);
+  assert.deepEqual([r.methods.brk, r.basisMatched.brk, r.methods.brk2, r.inferred.brk2, r.basisMatched.brk2], ['hifo', true, 'fifo', true, false]);
+});
+
+test('planSale: a lot chosen twice blocks; FIFO goes by the buy date, not a wash-tacked one', () => {
+  const lot = (id: string, acquiredOn: string, boughtOn: string) => ({ id, accountId: 'brk', securityId: 'sx', ticker: 'SYNA', acquiredOn, quantity: 2,
+    costCents: 200, status: 'known' as const, boughtOn, base: id, replaced: false });
+  const lots = [lot('a', '2025-01-01', '2025-01-01'), lot('b', '2024-06-01', '2025-03-01')];
+  assert.match(planSale(lots, 'specific', 'brk', 'sx', 4, ['a', 'a']).blocked ?? '', /more than once/);
+  assert.deepEqual(planSale(lots, 'fifo', 'brk', 'sx', 2).taken.map((t) => t.id), ['a']);
+  assert.match(planSale(lots, 'fifo', 'brk', 'sx', 4.3).blocked ?? '', /^Only 4 shares/);
 });

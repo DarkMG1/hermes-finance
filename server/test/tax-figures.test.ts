@@ -61,3 +61,9 @@ test('a missing year falls back to the latest year in the file', () => {
   assert.equal(stateFigures(file, 2025, 'XA')?.fallback, false);
   assert.equal(stateFigures(file, 2024, 'XA'), null);
 });
+
+test('a state falls back to its own latest year, not the latest year of any state; a year before the federal ones uses the earliest', () => {
+  const file = stateFile({ 2026: { XA }, 2027: { XB } });
+  assert.deepEqual(stateFigures(file, 2027, 'XA'), { model: XA, year: 2026, fallback: true });
+  assert.deepEqual([federalFigures(2020).year, federalFigures(2020).fallback], [2026, true]);
+});

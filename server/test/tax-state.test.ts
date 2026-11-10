@@ -60,7 +60,8 @@ test('progressive nonresident pays tax on total income × in-state share', () =>
     code: 'XB', residency: YEAR.map((p) => ({ code: 'XC', ...p })),
     incomeByPeriod: [inc(90_000, '2026-04-01', 'XC'), inc(30_000, '2026-05-01', 'XB')],
   }), XB);
-  assert.equal(line(r, 'fullYearTax')?.cents, $(5_200));
+  assert.equal(line(r, 'fullYearTax')?.cents, $(5_050));
+  assert.equal(line(r, 'surtax')?.cents, $(150));
   assert.equal(line(r, 'ratio')?.cents, $(1_300));
   assert.match(line(r, 'ratio')?.label ?? '', /25\.0%/);
   assert.equal(r.taxCents, $(1_300));
@@ -101,6 +102,26 @@ test('unknown state is not supported', () => {
   assert.equal(r.supported, false);
   assert.equal(r.taxCents, 0);
   assert.equal(r.withheldCents, $(300));
-  assert.equal(r.balanceCents, $(300));
+  // its tax is unknown, so withholding is no refund
+  assert.equal(r.balanceCents, 0);
   assert.deepEqual(r.lines.map((l) => l.assumption), ['No figures for this state']);
+});
+
+test('a loss while resident never makes a negative tax', () => {
+  // 100,000 earned in XA before moving to XB, then a 3,000 investment loss as an XB resident
+  const r = computeState(input({
+    code: 'XB', residency: [{ code: 'XA', from: '2026-01-01', to: '2026-06-30' }, { code: 'XB', from: '2026-07-01', to: '2026-12-31' }],
+    incomeByPeriod: [inc(100_000, '2026-03-01', 'XA'), inc(0, '2026-09-01', null, -3_000)],
+  }), XB);
+  assert.equal(line(r, 'stateIncome')?.cents, -$(3_000));
+  assert.deepEqual([r.taxCents, r.balanceCents], [0, 0]);
+});
+
+test('the other-state credit under the progressive model; a claimable filer is told the model has no dependent rule', () => {
+  // resident all year; 30,000 of 80,000 sourced to XC. 75,000 taxable: 400 + 2,750 = 3,150 − 100 = 3,050; cap 3,050 × 30/80 = 1,143.75
+  const base = { code: 'XB', incomeByPeriod: [inc(50_000, '2026-02-01', 'XB'), inc(30_000, '2026-08-01', 'XC')] };
+  const r = computeState(input({ ...base, otherStateTaxCents: $(2_000) }), XB);
+  assert.equal(line(r, 'otherStateCredit')?.cents, 114375);
+  assert.equal(r.taxCents, $(3_050) - 114375);
+  assert.match(line(computeState(input({ ...base, claimable: true }), XB), 'standardDeduction')?.assumption ?? '', /no dependent rule/);
 });

@@ -150,8 +150,8 @@ test('next year uses the scenario (move date splits residency; relocation overri
   assert.equal(line(ret(p, 'XA'), 'stateIncome'), 0);
   assert.equal(line(ret(p, 'XB'), 'stateIncome'), line(ret(p, 'XB'), 'totalIncome'));
   assert.equal(line(fed, 'longTermNet'), -$(2_000));
-  for (const a of ['Scenario: moving to XB on 2027-03-01', '401(k) contributions lower state wages by the same share as federal', '2026 XA figures used for 2027 until published', '2026 XB figures used for 2027 until published',
-    'Capital loss carryover from the 2026 projection', 'Student and dependent status: assumes the same as this year']) assert.ok(p.assumptions.includes(a), a);
+  for (const a of ['Scenario: moving to XB on 2027-03-01', 'State follows the federal adjustments (401(k), student loan interest)', '2026 XA figures used for 2027 until published', '2026 XB figures used for 2027 until published',
+    'Capital loss carryover from the 2026 projection (its assumptions apply)', 'Safe harbor uses the 2026 projected tax until its return is filed', 'Student and dependent status: assumes the same as this year']) assert.ok(p.assumptions.includes(a), a);
   assert.ok(p.assumptions.some((a) => a.includes('Estimated withholding')), p.assumptions.join('\n'));
   // Roth contributions don't change the tax
   assert.equal(project(deps, 2027, TODAY, { scenario: { rothCents: 0 } }).combinedBalanceCents, p.combinedBalanceCents);
@@ -169,9 +169,11 @@ test('jurisdictions come from stub states, profile state and the scenario', asyn
   // a state the file lacks is "not supported", never a silent 0
   assert.deepEqual([ret(now, 'XC').supported, ret(now, 'XC').lines.map((l) => l.key)], [false, ['unsupported']]);
   assert.ok(now.assumptions.includes('Pay stub state not recorded; counted as XA'));
-  // this year ignores next year's scenario, and says so when one is passed
+  // this year ignores next year's scenario; its own move counts, its pay inputs don't (and it says so)
   assert.ok(!now.returns.some((r) => r.jurisdiction === 'XB'));
-  assert.ok(project(deps, 2026, TODAY, { scenario: { moveTo: 'XB', moveDate: '2026-06-01' } }).assumptions.includes('Scenario inputs apply to next year only: ignored for 2026'));
+  const moved = project(deps, 2026, TODAY, { scenario: { moveTo: 'XB', moveDate: '2026-06-01', bonusCents: $(1_000) } });
+  assert.ok(moved.returns.some((r) => r.jurisdiction === 'XB'));
+  assert.ok(moved.assumptions.includes('Scenario pay and contribution inputs apply to next year only: ignored for 2026'));
   assert.deepEqual(project(deps, 2027, TODAY).returns.map((r) => r.jurisdiction), ['federal', 'XA', 'XB']);
 });
 
@@ -293,4 +295,249 @@ test('a loss limit in a move year stays on the sale date: the new state taxes no
   assert.equal(line(ret(r.after, 'XA'), 'stateIncome'), -$(3_000));
   assert.equal(line(ret(r.after, 'XB'), 'stateIncome'), 0);
   assert.ok(r.after.assumptions.includes('Sale counted on Jan 1 of 2027 for the holding period'));
+});
+
+function sellRow(db: Db, account: string, sec: string, date: string, quantity: number, proceedsCents: number) {
+  db.prepare("INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, updated_at) VALUES (?, ?, ?, ?, 'sell', 'sell', ?, ?, 'x')")
+    .run(`s${(seq += 1)}`, account, sec, date, -quantity, -proceedsCents);
+}
+function cashRow(db: Db, account: string, subtype: string, date: string, cents: number) {
+  db.prepare("INSERT INTO investment_transactions (id, account_id, security_id, date, type, subtype, quantity, amount_cents, updated_at) VALUES (?, ?, NULL, ?, 'cash', ?, 0, ?, 'x')")
+    .run(`c${(seq += 1)}`, account, date, subtype, -cents);
+}
+const finite = (p: { combinedBalanceCents: number; returns: ReturnResult[] }) =>
+  Number.isFinite(p.combinedBalanceCents) && p.returns.every((r) => [r.taxCents, r.balanceCents, ...r.lines.map((l) => l.cents)].every(Number.isFinite));
+
+test('a break-even sale after the last gain never turns the state tax into NaN', async () => {
+  const { deps, db, send } = await setup();
+  await currentJob(send);
+  await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal', capitalLossCarryoverLongCents: $(500) });
+  seedAccount(db, { id: 'brk', type: 'investment', subtype: 'brokerage' });
+  security(db, 'sx', 'SYNA');
+  buy(db, 'brk', 'sx', '2025-01-02', 10, $(1_000));
+  sellRow(db, 'brk', 'sx', '2026-02-01', 10, $(2_000));
+  // 5 more sold than the history bought: cost unknown, no gain, after the gain
+  sellRow(db, 'brk', 'sx', '2026-02-10', 5, $(700));
+  const p = project(deps, 2026, TODAY);
+  assert.ok(finite(p), JSON.stringify(p.returns));
+  assert.doesNotMatch(JSON.stringify(p), /"(cents|taxCents|balanceCents|combinedBalanceCents)":null/);
+});
+
+test("this year's stored move counts once the year has started", async () => {
+  const { deps, send } = await setup();
+  await currentJob(send);
+  await send('PUT', '/v1/tax/scenario/2027', { moveDate: '2027-07-01', moveTo: 'XB', bonusCents: $(1_000) });
+  const inYear = project(deps, 2027, '2027-03-15');
+  assert.deepEqual(inYear.returns.map((r) => r.jurisdiction), ['federal', 'XA', 'XB']);
+  assert.ok(inYear.assumptions.includes('Scenario: moving to XB on 2027-07-01'));
+  assert.ok(inYear.assumptions.includes('Scenario pay and contribution inputs apply to next year only: ignored for 2027'));
+  // and stays while the year is still open
+  assert.ok(project(deps, 2027, '2028-02-01').returns.some((r) => r.jurisdiction === 'XB'));
+});
+
+test('a state with no figures is left out of the total and marks the projection incomplete', async () => {
+  const { deps, send } = await setup();
+  await currentJob(send, 'XC');
+  const p = project(deps, 2026, TODAY);
+  const xc = ret(p, 'XC');
+  assert.deepEqual([xc.supported, xc.balanceCents, xc.withheldCents > 0, p.complete], [false, 0, true, false]);
+  assert.equal(p.combinedBalanceCents, ret(p, 'federal').balanceCents + ret(p, 'XA').balanceCents);
+  assert.ok(p.assumptions.includes("XC not supported: its tax isn't in the total"));
+  assert.equal(project(deps, 2026, TODAY).complete, false);
+  await send('PUT', '/v1/profile', { state: 'XA' });
+  const ok = await setup();
+  await currentJob(ok.send);
+  assert.equal(project(ok.deps, 2026, TODAY).complete, true);
+});
+
+test('state income follows the federal adjustments: student loan interest too', async () => {
+  const { deps, send } = await setup();
+  await currentJob(send);
+  await send('PUT', '/v1/tax/inputs/2026', { studentLoanInterestCents: $(2_500) });
+  const p = project(deps, 2026, TODAY);
+  // 26,000 wages − 2,500 = 23,500 federal AGI and XA income
+  assert.equal(line(ret(p, 'federal'), 'agi'), $(23_500));
+  assert.equal(line(ret(p, 'XA'), 'stateIncome'), $(23_500));
+  assert.ok(p.assumptions.includes('State follows the federal adjustments (401(k), student loan interest)'));
+});
+
+test('pre-tax 401(k) lowers estimated withholding; the 401(k) saving is the drop in tax, not in the balance', async () => {
+  const { deps, send } = await setup();
+  await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'accepted', startDate: '2027-01-01', baseCents: $(104_000) });
+  const withheld = (k401Cents: number) => ret(project(deps, 2027, TODAY, { scenario: { k401Cents } }), 'federal').withheldCents;
+  assert.ok(withheld($(24_500)) < withheld(0), `${withheld($(24_500))} ${withheld(0)}`);
+  await send('PUT', '/v1/tax/scenario/2027', { k401Cents: 0 });
+  const p = project(deps, 2027, TODAY);
+  const k = p.waysToSave.find((a) => a.kind === 'k401_room')!;
+  const full = project(deps, 2027, TODAY, { scenario: { k401Cents: federalFigures(2027).figures.k401Limit } });
+  const tax = (x: { returns: ReturnResult[] }) => x.returns.reduce((a, r) => a + r.withheldCents - r.balanceCents, 0);
+  assert.equal(k.savingsCents, tax(p) - tax(full));
+});
+
+test('proposed sales are planned as one set: a partly sold recent lot, split entries, bought-and-sold buys, holdingKey, longTermOn', async () => {
+  const { deps, db } = await setup();
+  seedAccount(db, { id: 'brk', type: 'investment', subtype: 'brokerage' });
+  seedAccount(db, { id: 'other', type: 'investment', subtype: 'brokerage' });
+  security(db, 'sx', 'SYNA');
+  buy(db, 'brk', 'sx', '2025-06-01', 10, $(1_500));
+  buy(db, 'brk', 'sx', '2026-03-05', 10, $(1_000));
+  holding(db, 'brk', 'sx', 20, $(100), $(2_500));
+  // FIFO 15: all of the $150 lot (a $500 loss), 5 of the recent one; its other 5 shares, still held, replace 5 of the 10
+  const one = whatIf(deps, 2026, TODAY, { sell: [{ accountId: 'brk', securityId: 'sx', quantity: 15 }] });
+  assert.deepEqual(one.sales.map((s) => [s.quantity, s.costCents, s.washDisallowedCents, s.term, s.longTermOn]),
+    [[10, $(1_500), $(250), 'short', '2026-06-02'], [5, $(500), 0, 'short', '2027-03-06']]);
+  // the same 15 as two entries: the same sales
+  const two = whatIf(deps, 2026, TODAY, { sell: [{ accountId: 'brk', securityId: 'sx', quantity: 10 }, { accountId: 'brk', securityId: 'sx', quantity: 5 }] });
+  assert.deepEqual(two.sales, one.sales);
+  assert.equal(two.deltaCents, one.deltaCents);
+  // all 20: nothing left to replace them
+  assert.deepEqual(whatIf(deps, 2026, TODAY, { sell: [{ accountId: 'brk', securityId: 'sx', quantity: 20 }] }).sales.map((s) => s.washDisallowedCents), [0, 0]);
+  // a buy of the same ticker (another security id, lower case) in another account, already sold, still washes 3 shares
+  security(db, 'sy', 'syna');
+  buy(db, 'other', 'sy', '2026-03-01', 3, $(300));
+  sellRow(db, 'other', 'sy', '2026-03-10', 3, $(300));
+  const all = whatIf(deps, 2026, TODAY, { sell: [{ accountId: 'brk', securityId: 'sx', quantity: 20 }] });
+  assert.deepEqual(all.sales.map((s) => s.washDisallowedCents), [$(150), 0]);
+  assert.ok(all.after.assumptions.some((a) => a.startsWith('Shares bought in the 30 days before and already sold count as wash-sale replacements')));
+  assert.ok(all.after.assumptions.some((a) => a.includes('at the last synced price')));
+});
+
+test('a past wash replacement is not counted again for a proposed sale', async () => {
+  const { deps, db } = await setup();
+  seedAccount(db, { id: 'brk', type: 'investment', subtype: 'brokerage' });
+  security(db, 'sx', 'SYNA');
+  buy(db, 'brk', 'sx', '2025-01-02', 4, $(800));
+  sellRow(db, 'brk', 'sx', '2026-02-25', 4, $(400));
+  // bought back 4 days later: these 4 already carry that loss
+  buy(db, 'brk', 'sx', '2026-03-01', 4, $(400));
+  buy(db, 'brk', 'sx', '2025-02-01', 6, $(1_200));
+  holding(db, 'brk', 'sx', 10, $(100), $(2_000));
+  await setupLotMethod(db, 'brk', 'specific');
+  const lots = (await import('../src/tax/lots.ts')).buildLots(db, TODAY).lots;
+  const old = lots.find((l) => l.boughtOn === '2025-02-01')!;
+  const r = whatIf(deps, 2026, TODAY, { sell: [{ accountId: 'brk', securityId: 'sx', quantity: 6, lotIds: [old.id] }] });
+  assert.deepEqual(r.sales.map((s) => [s.quantity, s.washDisallowedCents]), [[6, 0]]);
+});
+
+async function setupLotMethod(db: Db, account: string, method: string) {
+  db.prepare('UPDATE accounts SET lot_method = ? WHERE id = ?').run(method, account);
+}
+
+test('phantom shares, a lot chosen twice and lots chosen on a FIFO account', async () => {
+  const { deps, db } = await setup();
+  seedAccount(db, { id: 'brk', type: 'investment', subtype: 'brokerage' });
+  security(db, 'sx', 'SYNA');
+  buy(db, 'brk', 'sx', '2025-06-01', 2, $(300));
+  holding(db, 'brk', 'sx', 1, $(100), $(150));
+  const p = project(deps, 2026, TODAY);
+  assert.ok(p.assumptions.includes('SYNA: the trade history adds up to more shares than are held, so its lots are unverified'));
+  assert.ok(!p.waysToSave.some((a) => a.kind === 'harvest_loss'));
+  assert.match(whatIf(deps, 2026, TODAY, { sell: [{ accountId: 'brk', securityId: 'sx', quantity: 1 }] }).blocked ?? '', /before the transaction history/);
+
+  db.prepare('DELETE FROM holdings').run();
+  holding(db, 'brk', 'sx', 2, $(100), $(300));
+  const id = db.prepare("SELECT id FROM investment_transactions WHERE type = 'buy'").pluck().get() as string;
+  const fifo = whatIf(deps, 2026, TODAY, { sell: [{ accountId: 'brk', securityId: 'sx', quantity: 1, lotIds: [id] }] });
+  assert.ok(fifo.after.assumptions.includes('Lots chosen ignored: account matches by FIFO'));
+  await setupLotMethod(db, 'brk', 'specific');
+  assert.match(whatIf(deps, 2026, TODAY, { sell: [{ accountId: 'brk', securityId: 'sx', quantity: 2, lotIds: [id, id] }] }).blocked ?? '', /more than once/);
+});
+
+test('brokerage interest and capital gain distributions count', async () => {
+  const { deps, db, send } = await setup();
+  await currentJob(send);
+  seedAccount(db, { id: 'brk', type: 'investment', subtype: 'brokerage' });
+  seedAccount(db, { id: 'roth', type: 'investment', subtype: 'roth' });
+  cashRow(db, 'brk', 'interest', '2026-02-01', $(50));
+  cashRow(db, 'brk', 'long-term capital gain', '2026-02-15', $(300));
+  cashRow(db, 'brk', 'short-term capital gain', '2026-02-15', $(200));
+  cashRow(db, 'roth', 'interest', '2026-02-01', $(999));
+  const fed = ret(project(deps, 2026, TODAY), 'federal');
+  assert.deepEqual([line(fed, 'interest'), line(fed, 'capitalGainDistributions'), line(fed, 'longTermNet'), line(fed, 'ordinaryDividends')],
+    [$(50), $(300), $(300), $(200)]);
+  const p = project(deps, 2026, TODAY);
+  assert.ok(p.assumptions.includes('Capital gain distributions: long-term counted as long-term gains, short-term as ordinary dividends'));
+  // XA taxes all of it: 26,000 + 550
+  assert.equal(line(ret(p, 'XA'), 'stateIncome'), $(26_550));
+});
+
+test('unassigned stubs, unaccepted offers and earlier pay a stub\'s year-to-date shows', async () => {
+  const { deps, send } = await setup();
+  await send('POST', '/v1/pay-stubs', { jobId: null, payDate: '2026-02-01', grossCents: $(1_000), netCents: $(1_000), state: 'XA' });
+  await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'offered', startDate: '2026-05-01', baseCents: $(104_000) });
+  // an ended job with only its final stub: 2,000 this check, 40,000 for the year
+  const ended = await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'past', startDate: '2025-01-01', endDate: '2026-03-01' });
+  await send('POST', '/v1/pay-stubs', { jobId: ended.id, payDate: '2026-02-27', grossCents: $(2_000), federalCents: $(200), netCents: $(1_800), ytdGrossCents: $(40_000), state: 'XA' });
+  const p = project(deps, 2026, TODAY);
+  assert.equal(line(ret(p, 'federal'), 'wages'), $(40_000));
+  assert.equal(ret(p, 'federal').withheldCents, $(200));
+  for (const a of ['1 pay stub not assigned to a job: not counted', 'Offers not accepted are not counted: SYNTHETIC EMPLOYER',
+    "SYNTHETIC EMPLOYER: $38,000.00 earlier pay not in Hermes (from the stub's year-to-date); its withholding isn't counted"]) assert.ok(p.assumptions.includes(a), a);
+});
+
+test('next year: the safe harbor uses this year\'s projected tax without a return; carried figure groups are named', async () => {
+  const { deps, send } = await setup();
+  await currentJob(send);
+  const now = project(deps, 2026, TODAY);
+  const next = project(deps, 2027, TODAY);
+  const sh = ret(next, 'federal').lines.find((l) => l.key === 'safeHarbor')!;
+  assert.equal(sh.source, '2026 projection');
+  assert.equal(sh.cents, Math.min(Math.round(0.9 * ret(next, 'federal').taxCents), ret(now, 'federal').taxCents));
+  for (const a of ['2027 IRA limit: 2026 amounts used until published', '2027 Roth income limits: 2026 amounts used until published', '2027 401(k) limit: 2026 amounts used until published',
+    'Safe harbor uses the 2026 projected tax until its return is filed']) assert.ok(next.assumptions.includes(a), a);
+  assert.ok(now.assumptions.includes('Other pre-tax deductions (health insurance, HSA) are not taken off wages'));
+});
+
+test('notes: no home state with a move, a scholarship above tuition, a job with no start or stubs, a past-year sale', async () => {
+  const { deps, send } = await setup();
+  await send('PUT', '/v1/profile', { state: null });
+  await send('PUT', '/v1/tax/scenario/2027', { moveDate: '2027-06-01', moveTo: 'XB' });
+  assert.ok(project(deps, 2027, TODAY).assumptions.includes('No home state in the profile: no resident state return before the move'));
+  await send('PUT', '/v1/profile', { state: 'XA' });
+  await send('PUT', '/v1/tax/inputs/2026', { tuitionCents: $(1_000), scholarshipsCents: $(3_000) });
+  await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'current', baseCents: $(26_000) });
+  const p = project(deps, 2026, TODAY);
+  assert.ok(p.assumptions.includes('Taxable scholarships not included in state income'));
+  assert.ok(p.assumptions.some((a) => a.includes(`SYNTHETIC EMPLOYER: no start date or pay stubs, so pay before ${TODAY} isn't counted`)), p.assumptions.join('\n'));
+  const past = whatIf(deps, 2025, TODAY, { sell: [{ accountId: 'brk', securityId: 'sx', quantity: 1 }] });
+  assert.deepEqual([past.blocked, past.deltaCents], ['2025 is over: a sale now counts in 2026', 0]);
+});
+
+test('a move year: income before the move stays with the old state; a partial-overlap credit', async () => {
+  const { deps, send } = await setup();
+  // XB pay all year while living in XA until Jul 1, then in XB
+  await currentJob(send, 'XB');
+  await send('PUT', '/v1/tax/scenario/2026', { moveDate: '2026-04-01', moveTo: 'XB' });
+  const p = project(deps, 2026, TODAY);
+  const xa = ret(p, 'XA'), xb = ret(p, 'XB');
+  // the 6 checks through 03-20 were paid while in XA; XA credits XB's tax on that pay only
+  assert.equal(line(xa, 'stateIncome'), $(12_000));
+  assert.equal(line(xb, 'stateIncome'), $(26_000));
+  const credit = line(xa, 'otherStateCredit')!;
+  assert.ok(credit > 0 && credit < ret(p, 'XB').taxCents, `${credit}`);
+});
+
+test('semi-monthly pay steps on its two days of the month', async () => {
+  const { db, send } = await setup();
+  const job = await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'current', startDate: '2025-01-01', endDate: '2026-05-31' });
+  for (const payDate of ['2026-01-15', '2026-01-31', '2026-02-15', '2026-02-28', '2026-03-15']) {
+    await send('POST', '/v1/pay-stubs', { jobId: job.id, payDate, grossCents: $(2_000), federalCents: $(200), netCents: $(1_800), state: 'XA' });
+  }
+  const j = getJob(db, job.id, TODAY)!;
+  const pay = futurePaychecks(j, j.stubs, 2026, TODAY, { figures: federalFigures(2026).figures, scenario: null, stateOn: () => 'XA', stateTax: () => null, stateSupplementalRate: () => null });
+  assert.deepEqual(pay.map((p) => p.date), ['2026-03-31', '2026-04-15', '2026-04-30', '2026-05-15', '2026-05-31']);
+});
+
+test('an off-cycle stub just before a regular one is not the anchor, and its withholding rate is left out', async () => {
+  const { db, send } = await setup();
+  const jobId = await currentJob(send);
+  // a bonus run 3 days before the next regular stub, withheld at 22%
+  await send('POST', '/v1/pay-stubs', { jobId, payDate: '2026-03-17', grossCents: $(5_000), federalCents: $(1_100), stateCents: $(200), netCents: $(3_700), state: 'XA' });
+  await send('POST', '/v1/pay-stubs', { jobId, payDate: '2026-03-20', grossCents: $(2_000), federalCents: $(200), stateCents: $(80), netCents: $(1_720), state: 'XA' });
+  const job = getJob(db, jobId, '2026-03-21')!;
+  const pay = futurePaychecks(job, job.stubs, 2026, '2026-03-21', {
+    figures: federalFigures(2026).figures, scenario: null, stateOn: () => 'XA', stateTax: () => null, stateSupplementalRate: () => null,
+  });
+  assert.equal(pay[0]!.date, '2026-04-03');
+  assert.ok(pay.every((p) => p.grossCents === $(2_000) && p.federalCents === $(200)), JSON.stringify(pay[0]));
 });

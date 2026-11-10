@@ -10,10 +10,17 @@ export type Lot = {
 export type Sale = {
   accountId: string; securityId: string; date: string; quantity: number; proceedsCents: number; costCents: number; acquiredOn: string | null;
   term: 'short' | 'long' | 'unknown'; washDisallowedCents: number; taxable: boolean;
+  /** what-if sales only: the first day a short-term sale of these shares would be long-term */
+  longTermOn?: string;
 };
+/** A lot as the calculator sees it: `boughtOn` is the raw buy (or entered) date, before any wash-sale tacking (null: unverified); `base` the
+ *  buy or entered lot it was split from; `replaced` marks shares already used as some loss's wash-sale replacement. */
+export type HeldLot = Lot & { boughtOn: string | null; base: string; replaced: boolean };
+/** Shares held before the history that past sales took, per position (a fully sold position too): entering their lot resolves those sales' cost. */
+export type Unresolved = { accountId: string; securityId: string; ticker: string | null; quantity: number };
 
 /** Fewer shares than this are float leftovers of fractional lots, not a holding. */
-const DUST = 1e-6;
+export const DUST = 1e-6;
 /** Plaid's tax-advantaged investment subtypes: sales there aren't taxable, but their buys still wash a taxable loss. */
 export const SHELTERED = new Set(['401a', '401k', '403b', '457b', '529', 'education savings account', 'health reimbursement arrangement', 'hsa', 'ira', 'keogh',
   'lif', 'lira', 'lrif', 'lrsp', 'non-taxable brokerage account', 'pension', 'prif', 'profit sharing plan', 'qshr', 'rdsp', 'resp', 'retirement', 'rlif',
@@ -21,12 +28,15 @@ export const SHELTERED = new Set(['401a', '401k', '403b', '457b', '529', 'educat
 
 /** `order` is the date FIFO goes by (the buy date, before any wash-sale tacking); `since` is when the lot can be sold (an entered or
  *  unverified lot is there from the start); `replaced` marks shares already used as some loss's wash-sale replacement. */
-type Work = Lot & { order: string; since: string; key: string; sheltered: boolean; replaced: boolean };
+type Work = Lot & { order: string; since: string; key: string; sheltered: boolean; replaced: boolean; base: string };
 type Row = { id: string; accountId: string; securityId: string; date: string; type: string; subtype: string | null; quantity: number; amountCents: number };
 
 /** Held more than one year: bought on D, long-term from D + 1 year + 1 day. */
 export const termOf = (acquiredOn: string | null, sold: string): Sale['term'] =>
   acquiredOn === null ? 'unknown' : sold > `${Number(acquiredOn.slice(0, 4)) + 1}${acquiredOn.slice(4)}` ? 'long' : 'short';
+/** The first day termOf calls a sale long-term (Feb 29 has no anniversary: Mar 1). */
+export const longTermOn = (acquiredOn: string) =>
+  acquiredOn.slice(5) === '02-29' ? `${Number(acquiredOn.slice(0, 4)) + 1}-03-01` : addDays(`${Number(acquiredOn.slice(0, 4)) + 1}${acquiredOn.slice(4)}`, 1);
 const days = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
 
 /** Unverified lots go first in every method: their date and cost are unknown, so any sale may be touching them. */
@@ -75,6 +85,8 @@ function load(db: Db, asOf: string) {
   // shares held before the history = holding − the history's net (buys add, sells and transfers out remove); entered lots then come off
   const before = new Map<string, number>(holdings.map((h) => [pair(h.accountId, h.securityId), h.quantity]));
   for (const r of rows) before.set(pair(r.accountId, r.securityId), (before.get(pair(r.accountId, r.securityId)) ?? 0) - r.quantity);
+  // below 0: the history adds up to more shares than are held (a reverse split, a cancelled trade, an outflow it lacks, a stale holding)
+  const mismatched = new Set([...before].filter(([, q]) => q <= -DUST).map(([p]) => p));
   // entered lots fill those shares oldest first; one that no longer fits (the holding shrank) stays unverified so no sale plans on it
   const fits = new Set<string>();
   for (const e of entered) {
@@ -82,7 +94,7 @@ function load(db: Db, asOf: string) {
     if (e.quantity - left < DUST) fits.add(e.id);
     before.set(pair(e.accountId, e.securityId), left - e.quantity);
   }
-  return { tickerOf, rows, holdings, entered, before, fits };
+  return { tickerOf, rows, holdings, entered, before, fits, mismatched };
 }
 
 /** Shares held before the history that no entered lot covers yet: the most a new entered lot may hold. */
@@ -98,29 +110,37 @@ export function preHistoryRemainder(db: Db, accountId: string, securityId: strin
  * security, less any lots the owner entered for them.
  */
 export function buildLots(db: Db, asOf: string): {
-  lots: Lot[]; sales: Sale[]; methods: Record<string, LotMethod>; inferred: Record<string, boolean>;
+  lots: HeldLot[]; sales: Sale[]; methods: Record<string, LotMethod>;
+  /** inferred: no owner-set method; basisMatched: the inferred method reproduces the broker's basis (false: FIFO by default) */
+  inferred: Record<string, boolean>; basisMatched: Record<string, boolean>; unresolved: Unresolved[];
+  /** positions whose history adds up to more shares than held: their lots are unverified */
+  mismatched: { accountId: string; securityId: string; ticker: string | null }[];
+  /** stored buys (raw date) and the shares of each buy or entered lot ever used as a wash-sale replacement */
+  buys: { id: string; securityId: string; date: string; quantity: number }[]; washUsed: Map<string, number>;
 } {
   const accounts = db.prepare("SELECT id, subtype, lot_method AS lotMethod FROM accounts WHERE type = 'investment'")
     .all() as { id: string; subtype: string | null; lotMethod: LotMethod | null }[];
   const sheltered = new Map(accounts.map((a) => [a.id, SHELTERED.has((a.subtype ?? '').toLowerCase())]));
-  const { tickerOf, rows, holdings, entered, before, fits } = load(db, asOf);
+  const { tickerOf, rows, holdings, entered, before, fits, mismatched } = load(db, asOf);
   const keyOf = (id: string) => holdingKey({ securityId: id, ticker: tickerOf(id), type: null, isCash: 0 });
   const holdingOf = new Map(holdings.map((h) => [pair(h.accountId, h.securityId), h]));
 
   const run = (methodOf: (accountId: string) => LotMethod) => {
     const work = (l: Omit<Lot, 'ticker'>, order: string, since: string): Work =>
-      ({ ...l, ticker: tickerOf(l.securityId), order, since, key: keyOf(l.securityId), sheltered: sheltered.get(l.accountId)!, replaced: false });
+      ({ ...l, ticker: tickerOf(l.securityId), order, since, key: keyOf(l.securityId), sheltered: sheltered.get(l.accountId)!, replaced: false, base: l.id });
     const lots: Work[] = [
       ...[...before].filter(([, q]) => q >= DUST).map(([p, quantity]) => {
         const [accountId, securityId] = p.split('\u0000') as [string, string];
         return work({ id: `unverified:${accountId}:${securityId}`, accountId, securityId, acquiredOn: null, quantity, costCents: 0, status: 'unverified' }, '', '');
       }),
-      ...entered.map((e) => work({ ...e, status: fits.has(e.id) ? 'entered' : 'unverified' }, e.acquiredOn, '')),
+      // an entered lot can't be sold before the date the owner says it was bought
+      ...entered.map((e) => work({ ...e, status: fits.has(e.id) ? 'entered' : 'unverified' }, e.acquiredOn, e.acquiredOn)),
       ...rows.filter((r) => r.type === 'buy').map((r) =>
         work({ id: r.id, accountId: r.accountId, securityId: r.securityId, acquiredOn: r.date, quantity: r.quantity, costCents: r.amountCents, status: 'known' }, r.date, r.date)),
     ];
     const sales: Sale[] = [];
-    let splits = 0;
+    const washUsed = new Map<string, number>();
+    const preSold = new Map<string, number>();
     for (const r of rows) {
       if (r.type === 'buy') continue;
       const pool = lots.filter((l) => l.accountId === r.accountId && l.securityId === r.securityId && l.quantity >= DUST && l.since <= r.date)
@@ -131,6 +151,7 @@ export function buildLots(db: Db, asOf: string): {
         if (need < DUST) break;
         const t = take(lot, Math.min(need, lot.quantity));
         need -= t.quantity;
+        if (lot.id.startsWith('unverified:')) preSold.set(pair(lot.accountId, lot.securityId), (preSold.get(pair(lot.accountId, lot.securityId)) ?? 0) + t.quantity);
         parts.push({ lot, ...t });
       }
       // more shares sold than the history and holdings account for: like an unverified lot, date and cost unknown
@@ -150,21 +171,23 @@ export function buildLots(db: Db, asOf: string): {
         const loss = costCents - proceedsCents;
         let washDisallowedCents = 0;
         if (taxable && loss > 0) {
-          // shares of the same security bought in any account within 30 days either side and still held replace them; the rest of the
-          // sold lot itself never does (Rev. Rul. 56-602)
-          const replacements = lots.filter((l) => l.key === p.lot!.key && l.status === 'known' && !l.replaced && l !== p.lot && l.quantity >= DUST
-            && Math.abs(days(r.date, l.since)) <= 30).sort((a, b) => a.since.localeCompare(b.since));
+          // shares of the same security bought (or entered as bought) in any account within 30 days either side and still held replace them;
+          // the rest of the sold lot itself never does (Rev. Rul. 56-602)
+          const replacements = lots.filter((l) => l.key === p.lot!.key && l.status !== 'unverified' && !l.replaced && l.base !== p.lot!.base && l.quantity >= DUST
+            && Math.abs(days(r.date, l.order)) <= 30).sort((a, b) => a.order.localeCompare(b.order));
           let washed = 0;
           for (const rep of replacements) {
             if (p.quantity - washed < DUST) break;
             const used = Math.min(rep.quantity, p.quantity - washed);
             let target = rep;
             if (rep.quantity - used >= DUST) {
-              target = { ...rep, id: `${rep.id}:w${(splits += 1)}` };
+              // named by the sale row and part, so the ids survive a sync that adds unrelated rows
+              target = { ...rep, id: `${rep.id}:w${r.id}.${i}` };
               Object.assign(target, take(rep, used));
               lots.push(target);
             }
             washed += used;
+            washUsed.set(rep.base, (washUsed.get(rep.base) ?? 0) + used);
             const disallowed = Math.round(loss * Math.min(1, washed / p.quantity));
             target.replaced = true;
             // a tax-advantaged account's basis doesn't move: the loss there is lost for good
@@ -185,7 +208,7 @@ export function buildLots(db: Db, asOf: string): {
         .reduce((a, l) => a + l.costCents, 0);
       u.costCents = Math.max(0, (holdingOf.get(pair(u.accountId, u.securityId))?.basisCents ?? 0) - others);
     }
-    return { lots: lots.filter((l) => l.quantity >= DUST), sales };
+    return { lots: lots.filter((l) => l.quantity >= DUST), sales, washUsed, preSold };
   };
 
   /** Remaining cost of lots in holdings the broker reports a basis for and that hold no unverified shares, against that basis. */
@@ -203,25 +226,47 @@ export function buildLots(db: Db, asOf: string): {
   const methods = Object.fromEntries(accounts.map((a) =>
     [a.id, a.lotMethod ?? (!matches(fifo.lots, a.id) && matches(hifo.lots, a.id) ? 'hifo' : 'fifo')])) as Record<string, LotMethod>;
   const inferred = Object.fromEntries(accounts.map((a) => [a.id, a.lotMethod === null]));
-  const { lots, sales } = run((id) => methods[id]!);
+  const basisMatched = Object.fromEntries(accounts.map((a) => [a.id, a.lotMethod === null && matches(methods[a.id] === 'hifo' ? hifo.lots : fifo.lots, a.id)]));
+  const { lots, sales, washUsed, preSold } = run((id) => methods[id]!);
+  const split = (p: string) => p.split('\u0000') as [string, string];
   return {
     lots: lots.sort((a, b) => a.accountId.localeCompare(b.accountId) || a.securityId.localeCompare(b.securityId)
       || byMethod('fifo', (l: Work) => `${l.acquiredOn ?? ''}${l.order}`)(a, b))
-      .map(({ id, accountId, securityId, ticker, acquiredOn, quantity, costCents, status }) => ({ id, accountId, securityId, ticker, acquiredOn, quantity, costCents, status })),
-    sales, methods, inferred,
+      .map(({ id, accountId, securityId, ticker, acquiredOn, quantity, costCents, status, order, base, replaced }) => ({
+        id, accountId, securityId, ticker, acquiredOn, quantity, costCents, replaced, base, boughtOn: status === 'unverified' ? null : order,
+        status: mismatched.has(pair(accountId, securityId)) ? 'unverified' : status,
+      })),
+    sales, methods, inferred, basisMatched,
+    unresolved: [...preSold].filter(([, q]) => q >= DUST).map(([p, quantity]) => {
+      const [accountId, securityId] = split(p);
+      return { accountId, securityId, ticker: tickerOf(securityId), quantity };
+    }),
+    mismatched: [...mismatched].map((p) => { const [accountId, securityId] = split(p); return { accountId, securityId, ticker: tickerOf(securityId) }; }),
+    buys: rows.filter((r) => r.type === 'buy').map(({ id, securityId, date, quantity }) => ({ id, securityId, date, quantity })),
+    washUsed,
+  };
+}
+
+/** What the API and Ask show of the lots: no calculator bookkeeping. */
+export function lotsView(b: ReturnType<typeof buildLots>) {
+  return {
+    lots: b.lots.map(({ id, accountId, securityId, ticker, acquiredOn, quantity, costCents, status }) => ({ id, accountId, securityId, ticker, acquiredOn, quantity, costCents, status })),
+    sales: b.sales, methods: b.methods, inferred: b.inferred, basisMatched: b.basisMatched, unresolved: b.unresolved,
   };
 }
 
 /** The lots a sale of quantity shares would take. The owner picks lots only under "specific" (else highest cost first); any shortfall
  *  or unverified lot blocks the sale. */
-export function planSale(lots: Lot[], method: LotMethod, accountId: string, securityId: string, quantity: number, chosenLotIds?: string[]): {
-  taken: (Lot & { takeQuantity: number })[]; blocked: string | null;
+export function planSale<T extends Lot>(lots: T[], method: LotMethod, accountId: string, securityId: string, quantity: number, chosenLotIds?: string[]): {
+  taken: (T & { takeQuantity: number })[]; blocked: string | null;
 } {
+  if (chosenLotIds && new Set(chosenLotIds).size !== chosenLotIds.length) return { taken: [], blocked: 'The same lot is chosen more than once' };
   const own = lots.filter((l) => l.accountId === accountId && l.securityId === securityId && l.quantity >= DUST);
+  // FIFO goes by the buy date, not a date moved back by a wash sale
   const ordered = method === 'specific' && chosenLotIds?.length
     ? chosenLotIds.flatMap((id) => own.filter((l) => l.id === id))
-    : own.toSorted(byMethod(matchOf(method), (l) => l.acquiredOn ?? ''));
-  const taken: (Lot & { takeQuantity: number })[] = [];
+    : own.toSorted(byMethod(matchOf(method), (l) => ('boughtOn' in l ? l.boughtOn as string | null : null) ?? l.acquiredOn ?? ''));
+  const taken: (T & { takeQuantity: number })[] = [];
   let need = quantity;
   for (const l of ordered) {
     if (need < DUST) break;
@@ -231,6 +276,79 @@ export function planSale(lots: Lot[], method: LotMethod, accountId: string, secu
   }
   const blocked = taken.some((l) => l.status === 'unverified')
     ? 'Some of these shares were bought before the transaction history: enter their purchase date and cost first'
-    : need >= DUST ? `Only ${quantity - need} shares are in these lots` : null;
+    : need >= DUST ? `Only ${+(quantity - need).toFixed(6)} shares are in these lots` : null;
   return { taken, blocked };
+}
+
+export const isSheltered = (db: Db, accountId: string) =>
+  SHELTERED.has(String(db.prepare('SELECT subtype FROM accounts WHERE id = ?').pluck().get(accountId) ?? '').toLowerCase());
+
+/**
+ * Proposed sales on `date` at each holding's last synced price, planned together as one set. A loss is washed by shares of the same holding
+ * (any account) bought in the 30 days up to the date, by raw buy date: shares still held after the whole set, and shares bought then and
+ * already sold; never the sold lot's own other shares, nor shares already used as a past wash's replacement. Buys after today aren't known.
+ * Replacements are never sold in the set, so the disallowed loss moves to shares no later sale in it touches.
+ */
+export function planSales(db: Db, built: ReturnType<typeof buildLots>, sell: { accountId: string; securityId: string; quantity: number; lotIds?: string[] }[], date: string):
+  { sales: Sale[]; blocked: string | null; washedBySold: boolean } {
+  const left = built.lots.map((l) => ({ ...l }));
+  const parts: { lot: HeldLot; quantity: number; costCents: number; proceedsCents: number; taxable: boolean }[] = [];
+  for (const s of sell) {
+    const price = db.prepare('SELECT price_cents FROM holdings WHERE account_id = ? AND security_id = ?').pluck().get(s.accountId, s.securityId) as number | undefined;
+    if (price === undefined || !left.some((l) => l.accountId === s.accountId && l.securityId === s.securityId)) return { sales: [], blocked: 'No current holding to sell', washedBySold: false };
+    const { taken, blocked } = planSale(left, built.methods[s.accountId] ?? 'fifo', s.accountId, s.securityId, s.quantity, s.lotIds);
+    if (blocked) return { sales: [], blocked, washedBySold: false };
+    const taxable = !isSheltered(db, s.accountId);
+    for (const t of taken) {
+      const lot = left.find((l) => l.id === t.id)!;
+      const original = { ...lot };
+      const got = take(lot, t.takeQuantity);
+      parts.push({ lot: original, ...got, proceedsCents: Math.round(price * got.quantity), taxable });
+    }
+  }
+
+  const keyOf = (securityId: string, ticker: string | null) => holdingKey({ securityId, ticker, type: null, isCash: 0 });
+  const tickers = new Map(built.lots.map((l) => [l.securityId, l.ticker]));
+  const from = addDays(date, -30);
+  // free replacement shares per buy or entered lot: held after the set, plus bought in the window and since sold
+  const free = new Map<string, { key: string; on: string; held: number; sold: number }>();
+  for (const l of left) {
+    if (l.status === 'unverified' || l.replaced || !l.boughtOn || l.boughtOn < from || l.boughtOn > date || l.quantity < DUST) continue;
+    const f = free.get(l.base) ?? { key: keyOf(l.securityId, l.ticker), on: l.boughtOn, held: 0, sold: 0 };
+    f.held += l.quantity;
+    free.set(l.base, f);
+  }
+  for (const b of built.buys.filter((x) => x.date >= from && x.date <= date)) {
+    const pieces = built.lots.filter((l) => l.base === b.id);
+    const held = pieces.reduce((a, l) => a + l.quantity, 0);
+    const replacedHeld = pieces.filter((l) => l.replaced).reduce((a, l) => a + l.quantity, 0);
+    const sold = b.quantity - held - Math.max(0, (built.washUsed.get(b.id) ?? 0) - replacedHeld);
+    if (sold < DUST) continue;
+    const ticker = tickers.get(b.securityId) ?? db.prepare('SELECT ticker FROM securities WHERE id = ?').pluck().get(b.securityId) as string | null ?? null;
+    const f = free.get(b.id) ?? { key: keyOf(b.securityId, ticker), on: b.date, held: 0, sold: 0 };
+    f.sold += sold;
+    free.set(b.id, f);
+  }
+  const pool = [...free].sort(([, a], [, b]) => a.on.localeCompare(b.on));
+
+  let washedBySold = false;
+  const sales = parts.map((p): Sale => {
+    let washed = 0;
+    if (p.taxable && p.costCents > p.proceedsCents) {
+      for (const [base, f] of pool) {
+        if (f.key !== keyOf(p.lot.securityId, p.lot.ticker) || base === p.lot.base) continue;
+        for (const part of ['held', 'sold'] as const) {
+          const used = Math.min(f[part], p.quantity - washed);
+          f[part] -= used;
+          washed += used;
+          if (part === 'sold' && used >= DUST) washedBySold = true;
+        }
+      }
+    }
+    const term = termOf(p.lot.acquiredOn, date);
+    return { accountId: p.lot.accountId, securityId: p.lot.securityId, date, quantity: p.quantity, proceedsCents: p.proceedsCents, costCents: p.costCents,
+      acquiredOn: p.lot.acquiredOn, term, washDisallowedCents: washed >= DUST ? Math.round((p.costCents - p.proceedsCents) * Math.min(1, washed / p.quantity)) : 0,
+      taxable: p.taxable, ...(term === 'short' && { longTermOn: longTermOn(p.lot.acquiredOn!) }) };
+  });
+  return { sales, blocked: null, washedBySold };
 }

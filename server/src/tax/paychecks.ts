@@ -19,6 +19,8 @@ export type PayContext = {
   /** a state's tax on a year of these wages alone (null: no figures for it) */
   stateTax: (code: string, annualCents: number) => number | null;
   stateSupplementalRate: (code: string) => number | null;
+  /** the share of gross pay deferred pre-tax to a 401(k): an estimated W-4 withholds on the rest */
+  deferralShare?: number;
 };
 
 const days = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
@@ -26,6 +28,7 @@ const median = (xs: number[]) => xs.toSorted((a, b) => a - b)[Math.floor((xs.len
 
 /** IRS percentage method (Pub 15-T, 2020+ W-4) on a year of wages: the W-4's steps, or a standard W-4 without one. */
 function w4Tax(job: JobDetail, annualCents: number, periods: number, f: FederalFigures): number {
+  // shortcut: ignores FICA and other pre-tax deductions, as the projection's wages do
   const w = job.w4;
   if (w?.exempt) return 0;
   const status = w?.filingStatus === 'married_joint' ? 'marriedJoint' : 'single';
@@ -50,35 +53,53 @@ export function futurePaychecks(job: JobDetail, stubs: PayStub[], year: number, 
   const name = job.employer;
   const sorted = stubs.toSorted((a, b) => a.payDate.localeCompare(b.payDate));
   const last = sorted.at(-1);
-  // a stub under 7 days after the one before is off-cycle (a bonus or stipend run): it sets neither the cadence nor the schedule
+  // of two stubs under 7 days apart, one is off-cycle (a bonus or stipend run): the one whose gross is further from the usual pay sets neither
+  // the cadence, the schedule, the gross nor the withholding rates
+  const usual = sorted.length ? median(sorted.map((s) => s.grossCents)) : 0;
   const onCycle: PayStub[] = [];
-  for (const s of sorted) if (!onCycle.length || days(onCycle.at(-1)!.payDate, s.payDate) >= 7) onCycle.push(s);
+  for (const s of sorted) {
+    const prev = onCycle.at(-1);
+    if (!prev || days(prev.payDate, s.payDate) >= 7) onCycle.push(s);
+    else if (Math.abs(s.grossCents - usual) <= Math.abs(prev.grossCents - usual)) onCycle[onCycle.length - 1] = s;
+  }
   const gaps = onCycle.slice(1).map((s, i) => days(onCycle[i]!.payDate, s.payDate));
   const gap = gaps.length ? median(gaps) : !last && job.baseCents === null && job.monthlyCents !== null ? 30 : 14;
   const monthly = gap >= 28;
-  const periods = monthly ? 12 : Math.round(365 / gap);
-  const gross = last ? median(sorted.slice(-3).map((s) => s.grossCents)) : (job.baseCents !== null ? Math.round(job.baseCents / 26) : job.monthlyCents
+  // 15- or 16-day gaps: paid twice a month on the last two stubs' days of the month (28 or later is the month's end)
+  const semi = !monthly && gap >= 15 && gap <= 16 && onCycle.length >= 2 ? onCycle.slice(-2).map((s) => Number(s.payDate.slice(8))).map((d) => (d >= 28 ? 31 : d)) : null;
+  const periods = monthly ? 12 : semi ? 24 : Math.round(365 / gap);
+  const gross = last ? median(onCycle.slice(-3).map((s) => s.grossCents)) : (job.baseCents !== null ? Math.round(job.baseCents / 26) : job.monthlyCents
     ?? (job.hourlyCents !== null && job.hoursPerWeek !== null ? Math.round(job.hourlyCents * job.hoursPerWeek * 2) : 0));
   const annual = gross * periods;
   // a job with stubs keeps its stubs' state; a new job pays where the owner lives
   const stateOf = (date: string) => (last ? last.state : ctx.stateOn(date));
 
-  const recent = sorted.filter((s) => s.grossCents > 0).slice(-3);
+  const recent = onCycle.filter((s) => s.grossCents > 0).slice(-3);
   const avg = (part: (s: PayStub) => number) => recent.reduce((a, s) => a + part(s) / s.grossCents, 0) / recent.length;
-  const fedRate = recent.length ? avg((s) => s.federalCents) : annual ? w4Tax(job, annual, periods, ctx.figures) / annual : 0;
+  const fedRate = recent.length ? avg((s) => s.federalCents)
+    : annual ? w4Tax(job, Math.round(annual * (1 - (ctx.deferralShare ?? 0))), periods, ctx.figures) / annual : 0;
   const stateRate = (code: string | null) => (recent.length ? avg((s) => s.stateCents) : code && annual ? (ctx.stateTax(code, annual) ?? 0) / annual : 0);
   const check = (date: string, grossCents: number, fed: number, state: number, assumption: string): Paycheck =>
     ({ date, grossCents, federalCents: Math.round(grossCents * fed), stateCents: Math.round(grossCents * state), state: stateOf(date), estimated: true, assumption });
 
-  const notes = [`${name}: future paychecks ${last ? 'at the median gross of the last 3 stubs' : 'from the recorded pay'}, every ${monthly ? 'month' : `${gap} days`}${gaps.length ? '' : ' (assumed)'} through ${end}`];
-  if (!recent.length) notes.push(`Estimated withholding: ${job.w4 ? 'from its W-4' : 'a standard W-4'} by the IRS percentage method`);
+  const notes = [`${name}: future paychecks ${last ? 'at the median gross of the last 3 stubs' : 'from the recorded pay'}, every ${monthly ? 'month' : semi ? 'half month' : `${gap} days`}${gaps.length ? '' : ' (assumed)'} through ${end}`];
+  if (!recent.length) notes.push(`Estimated withholding: ${job.w4 ? 'from its W-4' : 'a standard W-4'} by the IRS percentage method${ctx.deferralShare ? ', after pre-tax 401(k)' : ''}`);
+  else notes.push(`${name}: withholding at the last 3 stubs' rates (at their 401(k) contributions)`);
   const out: Paycheck[] = [];
   if (gross > 0) {
     const anchor = onCycle.at(-1)?.payDate ?? job.startDate ?? today;
     if (!last && !job.startDate) notes.push(`${name}: no start date or pay stubs, so pay before ${today} isn't counted`);
+    const twice = (k: number) => {
+      const [y, m] = anchor.split('-').map(Number) as [number, number];
+      const month = new Date(Date.UTC(y, m - 1 + Math.floor((k - 1) / 2), 1));
+      const eom = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth() + 1, 0)).getUTCDate();
+      const days2 = semi!.toSorted((a, b) => a - b).map((d) => Math.min(d, eom));
+      return `${month.toISOString().slice(0, 8)}${String(days2[(k - 1) % 2]!).padStart(2, '0')}`;
+    };
     for (let k = 1; ; k++) {
-      const date = monthly ? addInterval(anchor, 'monthly', k)! : addDays(anchor, gap * k);
-      if (date > end) break;
+      const date = monthly ? addInterval(anchor, 'monthly', k)! : semi ? twice(k) : addDays(anchor, gap * k);
+      if (semi && date <= anchor) continue;
+      if (date > end || k > 1000) break;
       if (date < start) continue;
       const code = stateOf(date);
       if (!recent.length && code && ctx.stateTax(code, annual) === null) notes.push(`No ${code} figures: state withholding not estimated`);
