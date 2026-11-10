@@ -203,6 +203,12 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   const lockedDetail = await get(`/v1/chats/${locked}`) as { messages: { id: string }[] };
   out['chat-detail-profile-locked'] = JSON.parse([locked, ...lockedDetail.messages.map((m) => m.id)]
     .reduce((t, id, i) => t.replaceAll(id, i ? `msg-${i}` : 'chat-2'), JSON.stringify(lockedDetail))) as unknown;
+  // the pay stub read's document kept with stub-1, listed and read again (stub-1 shares the first stub's pay date)
+  const docId = (out['profile-read-pay-stub'] as { documentId: string }).documentId;
+  await app.inject({ method: 'PATCH', url: '/v1/pay-stubs/stub-1', headers: { ...AUTH, 'idempotency-key': 'fixture-doc-link' }, payload: { documentId: docId } });
+  out.documents = await get('/v1/documents?recordType=pay_stub&recordId=stub-1');
+  profileReader.next = { ...ProfileReadResult.parse(out['profile-read-pay-stub']), model: 'fake-model' } as ProfileReadOutput;
+  out['document-reread'] = await post(`/v1/documents/${docId}/read`);
   // tax projection: its own database, a synthetic state-figures file (XA flat, XB progressive), and a loss to harvest
   const tax = makeTestDeps().deps;
   const stateFile = join(tmpdir(), `hermes-fixture-state-${process.pid}.json`);
@@ -247,6 +253,6 @@ export async function buildFixtures(): Promise<Record<string, string>> {
   // ids minted at runtime are replaced so the files are stable
   const text = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
   const normalise = (s: string) => s.replace(/"accountId": "[0-9a-f-]{36}"/g, '"accountId": "fixture-applecard"').replace(/"itemId": "[0-9a-f-]{36}"/g, '"itemId": "fixture-item"')
-    .replace(/"documentId": "[0-9a-f-]{36}"/g, '"documentId": "fixture-document"');
+    .replace(/"documentId": "[0-9a-f-]{36}"/g, '"documentId": "fixture-document"').replaceAll(docId, 'fixture-document');
   return Object.fromEntries(Object.entries(out).map(([k, v]) => [`${k}.json`, normalise(text(v))]));
 }

@@ -298,15 +298,21 @@ public struct ProfileReadResult: Decodable, Sendable, Equatable {
     private let documents: [ProfileReadResult]
     /// one of several pay stubs, already saved (same pay date, gross and net)
     public let saved: Bool
+    /// the kept pages of this read, to send with the saves; nil from a server before kept documents
+    public let documentId: String?
+    /// the saved record this draft updates (PATCH, or the PUT of that job, state or year); nil: a new one
+    public let recordId: String?
 
-    private enum Keys: String, CodingKey { case kind, draft, uncertain, stubs, saved }
+    private enum Keys: String, CodingKey { case kind, draft, uncertain, stubs, saved, documentId, recordId }
     private enum DraftKeys: String, CodingKey { case employer, grants }
 
-    private init(kind: ProfileKind, draft: ProfileDraft, uncertain: [String], saved: Bool) {
+    private init(kind: ProfileKind, draft: ProfileDraft, uncertain: [String], saved: Bool, documentId: String?, recordId: String?) {
         self.kind = kind
         self.draft = draft
         self.uncertain = uncertain
         self.saved = saved
+        self.documentId = documentId
+        self.recordId = recordId
         documents = []
     }
 
@@ -315,13 +321,16 @@ public struct ProfileReadResult: Decodable, Sendable, Equatable {
         kind = try c.decode(ProfileKind.self, forKey: .kind)
         (draft, uncertain) = try Self.read(c, kind)
         saved = false
+        documentId = try c.decodeIfPresent(String.self, forKey: .documentId)
+        recordId = try c.decodeIfPresent(String.self, forKey: .recordId)
         if kind == .payStub, var stubs = try? c.nestedUnkeyedContainer(forKey: .stubs) {
             var all: [ProfileReadResult] = []
             while !stubs.isAtEnd {
                 let one = try stubs.nestedContainer(keyedBy: Keys.self)
                 let (draft, uncertain) = try Self.read(one, kind)
                 let saved = try one.decodeIfPresent(Bool.self, forKey: .saved) ?? false
-                all.append(ProfileReadResult(kind: kind, draft: draft, uncertain: uncertain, saved: saved))
+                all.append(ProfileReadResult(kind: kind, draft: draft, uncertain: uncertain, saved: saved, documentId: documentId,
+                                             recordId: try one.decodeIfPresent(String.self, forKey: .recordId)))
             }
             documents = all
         } else {
@@ -346,6 +355,35 @@ public struct ProfileReadResult: Decodable, Sendable, Equatable {
 
     /// Every document to review: the stubs when there are several, else this one.
     public var reads: [ProfileReadResult] { documents.isEmpty ? [self] : documents }
+}
+
+/// What a save links its record to, in a GET /v1/documents filter: a W-4's recordId is its job id, a state form's "<job id>:<state>".
+public struct DocumentLink: Codable, Sendable, Hashable {
+    public enum RecordType: String, Codable, Sendable {
+        case taxReturn = "tax_return", taxForm = "tax_form", payStub = "pay_stub", job, w4, stateW4 = "state_w4"
+    }
+    public let recordType: RecordType
+    public let recordId: String
+    public init(recordType: RecordType, recordId: String) {
+        self.recordType = recordType
+        self.recordId = recordId
+    }
+}
+
+/// The redacted pages of one read, kept with the records saved from it; pages are fetched one by one, numbered from 1.
+public struct KeptDocument: Codable, Sendable, Equatable, Identifiable {
+    public let id: String
+    public let kind: ProfileKind
+    public let createdAt: String
+    public let pageCount: Int
+    public let links: [DocumentLink]
+}
+
+/// `body` as JSON with the read's kept document, which the server links to the saved record.
+func keeping<B: Encodable>(_ body: B, _ documentId: String?) throws -> [String: JSONValue] {
+    var out = try JSONDecoder().decode([String: JSONValue].self, from: JSONEncoder().encode(body))
+    out["documentId"] = documentId.map(JSONValue.string)
+    return out
 }
 
 /// An edit as JSON: fields the owner cleared go out as null; `keepUnchanged: false` leaves out what still matches `original`.
