@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { answer, MAX_ROUNDS, type ChatEvent } from '../src/chat/agent.ts';
-import { addUserMessage, createChat, dropFailedTail, getChat, replay, saveAssistant, startAssistant } from '../src/chat/store.ts';
+import { addUserMessage, createChat, dropFailedTail, getChat, LOCKED_NOTE, replay, saveAssistant, startAssistant } from '../src/chat/store.ts';
+import { PROFILE_TOOLS } from '../src/chat/labels.ts';
 import { runTool } from '../src/chat/tools.ts';
 import { ClaudeError, costMicros, toCents } from '../src/chat/anthropic.ts';
 import { FakeClaude, end, start, text, thinking, tool, type Ev } from './fake-claude.ts';
@@ -567,4 +568,8 @@ test('a stopped or failed answer after a document_pages round stores placeholder
     assert.doesNotMatch(json, /"image"|base64/, status);
     assert.match(json, /document pages shown earlier: d1 p\.2/, status);
   }
+});
+
+test('the lock note names every profile tool', () => {
+  for (const name of PROFILE_TOOLS) assert.match(LOCKED_NOTE, new RegExp(`\\b${name}\\b`), name);
 });

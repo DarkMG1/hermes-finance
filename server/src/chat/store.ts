@@ -194,7 +194,7 @@ function trimTurn(turn: ApiMessage[]): ApiMessage[] {
 }
 
 // the day a question was asked rides with it (not in the system prompt), so every replay of it is byte-identical; so does the profile lock
-export const LOCKED_NOTE = 'The financial profile is locked for this question: the profile, jobs, pay_stubs and tax_years tools refuse. If the question needs '
+export const LOCKED_NOTE = `The financial profile is locked for this question: the ${[...PROFILE_TOOLS].join(', ')} tools refuse. If the question needs `
   + 'them, say the profile is locked and ask the owner to unlock it, then ask again.';
 const asked = (r: Row): Block => ({ type: 'text', text: `(Asked on ${localDay(new Date(r.created_at))}, ${process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone}.)`
   + (r.profile_locked ? ` ${LOCKED_NOTE}` : '') });
