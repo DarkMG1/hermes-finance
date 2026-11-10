@@ -90,6 +90,7 @@ struct ProfileView: View {
     @State private var editingAboutMe = false
     @State private var adding: CaptureRequest?
     @State private var addingJob = false
+    @State private var documents: [DocumentLink: KeptDocument] = [:]
 
     var body: some View {
         List {
@@ -138,8 +139,9 @@ struct ProfileView: View {
                     if !jobless.isEmpty {
                         // saved before any job matched, or left when their job was deleted
                         Section("Pay stubs without a job") {
-                            ForEach(jobless) {
-                                PayStubRow(stub: $0, fields: [ProfileDraftForm.stubJobField(jobs)] + ProfileDraftForm.stubFields) { await load() }
+                            ForEach(jobless) { stub in
+                                PayStubRow(stub: stub, fields: [ProfileDraftForm.stubJobField(jobs)] + ProfileDraftForm.stubFields,
+                                           document: documents[DocumentLink(recordType: .payStub, recordId: stub.id)]) { await load() }
                             }
                         }
                     }
@@ -190,7 +192,9 @@ struct ProfileView: View {
             async let p = client.profile()
             async let j = client.jobs()
             async let s = client.unassignedPayStubs()
+            async let kept = client.documents()
             (profile, jobs, jobless) = try await (p, j, s)
+            documents = ((try? await kept) ?? []).byLink
             error = nil
         } catch {
             self.error = errorMessage(error)

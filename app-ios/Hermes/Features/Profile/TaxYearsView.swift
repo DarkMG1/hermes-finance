@@ -5,6 +5,7 @@ struct TaxYearsView: View {
     @Environment(AppModel.self) private var model
     @State private var years: [TaxYears.Year]?
     @State private var error: String?
+    @State private var documents: [DocumentLink: KeptDocument] = [:]
 
     var body: some View {
         List {
@@ -35,9 +36,11 @@ struct TaxYearsView: View {
                                 try await client.deleteTaxReturn(id: r.id, idempotencyKey: key)
                                 await load()
                             }
-                            .keptDocument(DocumentLink(recordType: .taxReturn, recordId: r.id)) { await load() }
+                            .keptDocument(documents[DocumentLink(recordType: .taxReturn, recordId: r.id)]) { await load() }
                         }
-                        ForEach(year.forms) { TaxFormRow(form: $0) { await load() } }
+                        ForEach(year.forms) { form in
+                            TaxFormRow(form: form, document: documents[DocumentLink(recordType: .taxForm, recordId: form.id)]) { await load() }
+                        }
                     }
                 }
             } else if error == nil {
@@ -54,7 +57,9 @@ struct TaxYearsView: View {
     private func load() async {
         guard let client = model.client else { return }
         do {
+            async let kept = client.documents()
             years = try await client.taxYears().years
+            documents = ((try? await kept) ?? []).byLink
             error = nil
         } catch {
             self.error = errorMessage(error)

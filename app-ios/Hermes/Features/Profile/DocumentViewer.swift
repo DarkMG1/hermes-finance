@@ -11,6 +11,7 @@ struct DocumentViewer: View {
     @State private var error: String?
     @State private var gone = false
     @State private var reading = false
+    @State private var deleting = false
     @State private var reread: ProfileReadResult?
     @State private var confirmingDelete = false
     @State private var writes = WriteGuard()
@@ -28,6 +29,7 @@ struct DocumentViewer: View {
                     Spacer()
                 }
                 InlineError(message: error)
+                if pages[index] == nil, error != nil, !gone { Button("Retry") { Task { await loadPage() } } }
                 if document.pageCount > 1 {
                     HStack {
                         Button { index -= 1 } label: { Image(systemName: "chevron.left") }
@@ -49,19 +51,19 @@ struct DocumentViewer: View {
             .navigationTitle(document.kind.title)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() }.disabled(reading || deleting) }
                 ToolbarItemGroup(placement: .bottomBar) {
-                    Button("Re-read") { Task { await readAgain() } }.disabled(reading || gone)
+                    Button("Re-read") { Task { await readAgain() } }.disabled(reading || deleting || gone)
                     Spacer()
                     Button("Delete document", role: .destructive) { confirmingDelete = true }
-                        .disabled(reading || gone)
+                        .disabled(reading || deleting || gone)
                         .confirmationDialog("Delete document?", isPresented: $confirmingDelete, titleVisibility: .visible) {
                             Button("Delete", role: .destructive) { Task { await delete() } }
                         } message: { Text("The pages are deleted. The saved numbers stay.") }
                 }
             }
         }
-        .interactiveDismissDisabled(reading)
+        .interactiveDismissDisabled(reading || deleting)
         .task(id: index) { await loadPage() }
         // the review saves each draft as an update of the record it matched; closing it closes this too, so the list behind refreshes
         .sheet(isPresented: Binding(get: { reread != nil }, set: { if !$0 { reread = nil } }), onDismiss: { dismiss() }, content: {
@@ -70,25 +72,36 @@ struct DocumentViewer: View {
     }
 
     private func loadPage() async {
-        guard pages[index] == nil, !gone, let client = model.client else { return }
+        guard !gone else { return }
+        error = nil
+        guard pages[index] == nil, let client = model.client else { return }
+        let page = index
         do {
-            let data = try await client.documentPage(id: document.id, page: index + 1)
-            if let image = UIImage(data: data) { pages[index] = image } else { error = "Couldn't show this page." }
+            let data = try await client.documentPage(id: document.id, page: page + 1)
+            if let image = UIImage(data: data) { pages[page] = image } else if !Task.isCancelled { error = "Couldn't show this page." }
         } catch {
-            show(error)
+            // paged on before it arrived
+            if !Task.isCancelled { show(error) }
         }
     }
 
     private func readAgain() async {
-        guard let client = model.client else { return }
+        guard !reading, !deleting, let client = model.client else { return }
         reading = true
         error = nil
         defer { reading = false }
-        do { reread = try await client.rereadDocument(id: document.id) } catch { show(error, RedactionPreview.readProblem(error)) }
+        do {
+            let read = try await client.rereadDocument(id: document.id)
+            if read.reads.isEmpty { error = "Couldn't read this." } else { reread = read }
+        } catch {
+            show(error, RedactionPreview.readProblem(error))
+        }
     }
 
     private func delete() async {
-        guard let client = model.client else { return }
+        guard !reading, !deleting, let client = model.client else { return }
+        deleting = true
+        defer { deleting = false }
         do {
             try await client.deleteDocument(id: document.id, idempotencyKey: writes.key)
             writes.didSucceed()
@@ -111,33 +124,30 @@ struct DocumentViewer: View {
 }
 
 extension View {
-    /// A "View document" row under this one when `link`'s record has kept pages; `onChange` runs when the viewer closes (a re-read
-    /// may have updated records, a delete removed the pages).
-    func keptDocument(_ link: DocumentLink, onChange: @escaping () async -> Void) -> some View {
-        modifier(KeptDocumentRow(link: link, onChange: onChange))
+    /// A "View document" row under this one when its record has kept pages; `onChange` runs when the viewer closes (a re-read may have
+    /// updated records, a delete removed the pages), so the screen reloads its records and documents.
+    func keptDocument(_ document: KeptDocument?, onChange: @escaping () async -> Void) -> some View {
+        modifier(KeptDocumentRow(document: document, onChange: onChange))
+    }
+}
+
+extension [KeptDocument] {
+    /// Each record's document, newest first wins; a screen fetches the list once per load.
+    var byLink: [DocumentLink: KeptDocument] {
+        Dictionary(flatMap { d in d.links.map { ($0, d) } }, uniquingKeysWith: { newer, _ in newer })
     }
 }
 
 private struct KeptDocumentRow: ViewModifier {
-    @Environment(AppModel.self) private var model
-    let link: DocumentLink
+    let document: KeptDocument?
     let onChange: () async -> Void
-    @State private var document: KeptDocument?
-    @State private var viewing = false
+    /// kept apart from `document`, so a reload behind the open viewer doesn't empty it
+    @State private var viewing: KeptDocument?
 
     func body(content: Content) -> some View {
-        content
-            .task(id: link) { await load() }
-            .sheet(isPresented: $viewing, onDismiss: { Task { await load(); await onChange() } }, content: {
-                if let document { DocumentViewer(document: document) }
-            })
-        if document != nil {
-            Button("View document") { viewing = true }
+        content.sheet(item: $viewing, onDismiss: { Task { await onChange() } }, content: DocumentViewer.init)
+        if let document {
+            Button("View document") { viewing = document }
         }
-    }
-
-    /// Without the pages (none kept, or a failed load) there's no row.
-    private func load() async {
-        document = try? await model.client?.documents(linkedTo: link).first
     }
 }

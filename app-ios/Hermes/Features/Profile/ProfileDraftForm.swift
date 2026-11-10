@@ -175,9 +175,16 @@ struct ProfileDraftForm: View {
     @State private var savedJobId: String?
     @State private var savedGrants = 0
     @State private var stub: PayStub?
-    /// the matched record as saved, fetched once so a retry sends the same patch; nil after the fetch: it's gone, so the read saves as new
-    @State private var record: Any?
-    @State private var fetched = false
+    /// nil until fetched
+    @State private var record: Record?
+
+    /// The record a read matched as saved now, fetched once so a retry sends the same patch; gone: the read saves as a new one.
+    private enum Record {
+        case form(TaxForm), stub(PayStub), job(Job), gone
+        var form: TaxForm? { if case .form(let f) = self { f } else { nil } }
+        var stub: PayStub? { if case .stub(let s) = self { s } else { nil } }
+        var job: Job? { if case .job(let j) = self { j } else { nil } }
+    }
 
     init(kind: ProfileKind, draft: ProfileDraft, uncertain: Set<String>, step: (Int, Int)? = nil, jobId: String? = nil, note: String? = nil,
          documentId: String? = nil, recordId: String? = nil, next: ((String?) -> Void)? = nil) {
@@ -316,13 +323,14 @@ struct ProfileDraftForm: View {
         jobsError = nil
         do {
             jobs = try await client.jobs()
-            // an update keeps the record's job
-            let saved: String? = switch kind {
-            case .taxForm: try? await matched(Self.formRecord)?.jobId
-            case .payStub: try? await matched(Self.stubRecord)?.jobId
-            default: nil
+            if recordId != nil, [.taxForm, .payStub].contains(kind) {
+                // an update keeps the record's job; nothing is suggested unless the record is gone (not after a failed fetch)
+                guard let found = try? await matched() else { return }
+                if found.form != nil || found.stub != nil {
+                    jobId = found.form?.jobId ?? found.stub?.jobId
+                    return
+                }
             }
-            if let saved { jobId = saved }
             if jobId == nil { jobId = Job.suggested(for: kind == .taxForm ? texts["payer"] : employer, in: jobs)?.id }
         } catch {
             jobsError = "Couldn't load your jobs: \(errorMessage(error))"
@@ -362,24 +370,27 @@ struct ProfileDraftForm: View {
         return true
     }
 
-    /// The record this read matched, as saved now; nil without one or when it's gone.
-    private func matched<B>(_ fetch: (APIClient, String) async throws -> Saved<B>?) async throws -> Saved<B>? {
-        guard let recordId, let client = model.client else { return nil }
-        if !fetched {
-            do { record = try await fetch(client, recordId) } catch ClientError.api(status: 404, _) { record = nil }
-            fetched = true
+    private func matched() async throws -> Record {
+        if let record { return record }
+        guard let recordId, let client = model.client else { return .gone }
+        let found: Record
+        do {
+            found = switch kind {
+            case .taxForm: try await client.taxYears().years.flatMap(\.forms).first { $0.id == recordId }.map(Record.form) ?? .gone
+            case .payStub: .stub(try await client.payStub(id: recordId))
+            case .offer: .job(try await client.job(id: recordId).job)
+            default: .gone
+            }
+        } catch ClientError.api(status: 404, _) {
+            found = .gone
         }
-        return record as? Saved<B>
+        record = found
+        return found
     }
-
-    private static func formRecord(_ c: APIClient, _ id: String) async throws -> TaxForm? {
-        try await c.taxYears().years.flatMap(\.forms).first { $0.id == id }
-    }
-    private static func stubRecord(_ c: APIClient, _ id: String) async throws -> PayStub? { try await c.payStub(id: id) }
 
     /// An update patches what the review changes on the record; without the document (gone) and with nothing changed, nothing is sent.
     private func writeForm(_ client: APIClient) async throws -> Bool {
-        let match = try await matched(Self.formRecord)
+        let match = try await matched().form
         guard var body = DraftField.build(Self.formFields, texts, match?.fields ?? TaxFormBody()) else { return false }
         body.jobId = jobId
         try await savingDocument(documentId, key: writes.key) { doc, key in
@@ -395,7 +406,7 @@ struct ProfileDraftForm: View {
     }
 
     private func writeStub(_ client: APIClient) async throws -> Bool {
-        let match = try await matched(Self.stubRecord)
+        let match = try await matched().stub
         guard var body = DraftField.build(Self.stubFields, texts, match?.fields ?? PayStubBody()) else { return false }
         body.jobId = jobId
         // on to the deposits it matches
@@ -420,6 +431,11 @@ struct ProfileDraftForm: View {
             _ = try await savingDocument(documentId, key: writes.key) { doc, key in
                 try await client.putStateW4(jobId: jobId, body: body, documentId: doc, idempotencyKey: key)
             }
+            // a re-read whose state code changed is a different form: the old one goes, as on an edit
+            let old = recordId.flatMap { $0.hasPrefix(jobId + ":") ? String($0.dropFirst(jobId.count + 1)) : nil }
+            if let old, old.uppercased() != body.state?.uppercased() {
+                try await client.deleteStateW4(jobId: jobId, state: old, idempotencyKey: writes.key + "-old")
+            }
         }
         return true
     }
@@ -428,7 +444,7 @@ struct ProfileDraftForm: View {
     /// first one not saved.
     private func writeOffer(_ client: APIClient) async throws -> Bool {
         if savedJobId == nil {
-            let match = try await matched { c, id in try await c.job(id: id).job }
+            let match = try await matched().job
             guard var body = DraftField.build(Self.jobFields, texts, match?.fields ?? CreateJobBody()) else { return false }
             if match == nil { body.status = "offered" }
             savedJobId = try await savingDocument(documentId, key: writes.key) { doc, key in

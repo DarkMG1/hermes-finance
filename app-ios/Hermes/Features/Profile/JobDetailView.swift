@@ -12,6 +12,7 @@ struct JobDetailView: View {
     @State private var addingGrant = false
     @State private var addingW4 = false
     @State private var addingStateW4 = false
+    @State private var documents: [DocumentLink: KeptDocument] = [:]
 
     var body: some View {
         List {
@@ -51,7 +52,7 @@ struct JobDetailView: View {
                             try await client.deleteW4(jobId: id, idempotencyKey: key)
                             await load()
                         }
-                        .keptDocument(DocumentLink(recordType: .w4, recordId: id)) { await load() }
+                        .keptDocument(documents[DocumentLink(recordType: .w4, recordId: id)]) { await load() }
                     } else {
                         Button("Add W-4") { addingW4 = true }
                     }
@@ -68,15 +69,19 @@ struct JobDetailView: View {
                             try await client.deleteStateW4(jobId: id, state: form.state ?? "", idempotencyKey: key)
                             await load()
                         }
-                        .keptDocument(DocumentLink(recordType: .stateW4, recordId: "\(id):\(form.state ?? "")")) { await load() }
+                        .keptDocument(documents[DocumentLink(recordType: .stateW4, recordId: "\(id):\(form.state ?? "")")]) { await load() }
                     }
                     Button("Add state form") { addingStateW4 = true }
                 }
                 if !detail.stubs.isEmpty {
-                    Section("Pay stubs") { ForEach(detail.stubs) { PayStubRow(stub: $0) { await load() } } }
+                    Section("Pay stubs") { ForEach(detail.stubs) { stub in
+                        PayStubRow(stub: stub, document: documents[DocumentLink(recordType: .payStub, recordId: stub.id)]) { await load() }
+                    } }
                 }
                 if !detail.forms.isEmpty {
-                    Section("W-2s and 1099s") { ForEach(detail.forms) { TaxFormRow(form: $0) { await load() } } }
+                    Section("W-2s and 1099s") { ForEach(detail.forms) { form in
+                        TaxFormRow(form: form, document: documents[DocumentLink(recordType: .taxForm, recordId: form.id)]) { await load() }
+                    } }
                 }
             } else if error == nil {
                 ProgressView().frame(maxWidth: .infinity)
@@ -148,7 +153,7 @@ struct JobDetailView: View {
     @ViewBuilder private func pay(_ job: CreateJobBody) -> some View {
         // an offer letter's pages
         LabeledContent("Status", value: ProfileView.statuses.first { $0.value == job.status }?.label ?? job.status ?? "")
-            .keptDocument(DocumentLink(recordType: .job, recordId: id)) { await load(); await onChange() }
+            .keptDocument(documents[DocumentLink(recordType: .job, recordId: id)]) { await load(); await onChange() }
         if let title = job.title { LabeledContent("Title", value: title) }
         if let start = job.startDate { LabeledContent("Start", value: DayText.display(start)) }
         if let end = job.endDate { LabeledContent("End", value: DayText.display(end)) }
@@ -166,7 +171,9 @@ struct JobDetailView: View {
     private func load() async {
         guard let client = model.client else { return }
         do {
+            async let kept = client.documents()
             detail = try await client.job(id: id)
+            documents = ((try? await kept) ?? []).byLink
             error = nil
         } catch {
             self.error = errorMessage(error)
@@ -203,6 +210,7 @@ struct JobDetailView: View {
 struct TaxFormRow: View {
     @Environment(AppModel.self) private var model
     let form: TaxForm
+    let document: KeptDocument?
     let onChange: () async -> Void
 
     var body: some View {
@@ -218,7 +226,7 @@ struct TaxFormRow: View {
             try await client.deleteTaxForm(id: form.id, idempotencyKey: key)
             await onChange()
         }
-        .keptDocument(DocumentLink(recordType: .taxForm, recordId: form.id), onChange: onChange)
+        .keptDocument(document, onChange: onChange)
     }
 }
 
@@ -227,6 +235,7 @@ struct PayStubRow: View {
     @Environment(AppModel.self) private var model
     let stub: PayStub
     var fields = ProfileDraftForm.stubFields
+    let document: KeptDocument?
     let onChange: () async -> Void
     @State private var linking = false
 
@@ -250,7 +259,7 @@ struct PayStubRow: View {
             await onChange()
         }
         .sheet(isPresented: $linking, onDismiss: { Task { await onChange() } }, content: { PayStubLinkSheet(stub: stub) })
-        .keptDocument(DocumentLink(recordType: .payStub, recordId: stub.id), onChange: onChange)
+        .keptDocument(document, onChange: onChange)
     }
 }
 
