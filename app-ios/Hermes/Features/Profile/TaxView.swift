@@ -33,7 +33,8 @@ struct TaxView: View {
                         }
                     }
                 }
-                TaxEntriesSections(year: projection.year, inputs: inputs, scenario: scenario, roth: roth) { await load() }
+                TaxEntriesSections(year: projection.year, nextYear: projection.year == projection.openYears.last,
+                                   inputs: inputs, scenario: scenario, roth: roth) { await load() }
                 Section { NavigationLink { TaxLotsView() } label: { Text("Lots and cost basis") } }
             } else if error == nil {
                 ProgressView().frame(maxWidth: .infinity)
@@ -50,8 +51,7 @@ struct TaxView: View {
         guard let client = model.client else { return }
         do {
             let p = try await client.taxProjection(year: year)
-            // the scenario is next year's: the last open one
-            async let s = p.year == p.openYears.last ? client.taxScenario(year: p.year) : nil
+            async let s = client.taxScenario(year: p.year)
             async let i = client.taxInputs(year: p.year)
             async let r = client.rothContributions(taxYear: p.year)
             async let h = client.taxHeadsUp(unlocked: true)

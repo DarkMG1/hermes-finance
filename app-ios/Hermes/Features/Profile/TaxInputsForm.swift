@@ -1,10 +1,12 @@
 import HermesKit
 import SwiftUI
 
-/// What the owner enters for the shown year: tax inputs, next year's scenario (only on next year) and Roth IRA contributions.
+/// What the owner enters for the shown year: tax inputs, the scenario (a move in any year; the rest only on next year) and Roth IRA contributions.
 struct TaxEntriesSections: View {
     @Environment(AppModel.self) private var model
     let year: Int
+    /// the last open year: the whole scenario applies, not just its move
+    let nextYear: Bool
     let inputs: TaxInputs?
     let scenario: TaxScenario?
     let roth: [RothContribution]
@@ -16,7 +18,7 @@ struct TaxEntriesSections: View {
         Section("Entered for \(String(year))") {
             if let inputs {
                 // next year's 401(k) is the scenario's
-                let fields = scenario == nil ? Self.inputFields : Self.inputFields.filter { $0.key != "k401Cents" }
+                let fields = nextYear ? Self.inputFields.filter { $0.key != "k401Cents" } : Self.inputFields
                 EditRow(title: "Tax inputs \(String(year))", fields: fields, original: inputs.fields,
                         row: ListRow(title: "Tax inputs", subtitle: Self.summary(fields, inputs.fields))) { body, key in
                     _ = try await model.client?.putTaxInputs(year: year, body, idempotencyKey: key)
@@ -24,8 +26,9 @@ struct TaxEntriesSections: View {
                 }
             }
             if let scenario {
-                EditRow(title: "Scenario \(String(year))", fields: Self.scenarioFields, original: scenario.fields,
-                        row: ListRow(title: "Scenario", subtitle: Self.summary(Self.scenarioFields, scenario.fields))) { body, key in
+                let fields = nextYear ? Self.scenarioFields : Self.scenarioFields.filter { ["moveDate", "moveTo"].contains($0.key) }
+                EditRow(title: "Scenario \(String(year))", fields: fields, original: scenario.fields,
+                        row: ListRow(title: nextYear ? "Scenario" : "Move", subtitle: Self.summary(fields, scenario.fields))) { body, key in
                     _ = try await model.client?.putTaxScenario(year: year, body, idempotencyKey: key)
                     await onChange()
                 }
