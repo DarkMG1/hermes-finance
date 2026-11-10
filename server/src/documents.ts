@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { DocumentRecordType, KeptDocument, ProfileKind } from '@hermes/shared';
+import type { DocumentRecordType, KeptDocument, ProfileKind, ProfileReadResult } from '@hermes/shared';
 import type { Db } from './db.ts';
 import { ApiError } from './errors.ts';
 
@@ -70,4 +70,43 @@ export function getDocument(db: Db, id: string): KeptDocument | null {
 /** n from 1 */
 export function documentPage(db: Db, id: string, n: number): Buffer | null {
   return (db.prepare('SELECT jpeg FROM document_pages WHERE document_id = ? AND idx = ?').pluck().get(id, n) as Buffer | undefined) ?? null;
+}
+
+/** The record each draft of a read updates when saved. A re-read: what this document is linked to (pay stubs by pay date). Otherwise one
+ *  plainly saved already: a stub by the duplicate test (pay date, gross, net; the draft's employer's job first), a form by year, kind and
+ *  payer (case and edge spaces ignored), a return by year and jurisdiction, a W-4 or state form of the only job with the draft's employer.
+ *  A fresh offer matches nothing: a second offer from an employer can be a new job. */
+export function withRecordIds(db: Db, r: ProfileReadResult, documentId?: string): ProfileReadResult {
+  const ids = (sql: string, ...args: unknown[]) => db.prepare(sql).pluck().all(...args) as string[];
+  const linked = (type: DocumentRecordType) => (documentId ? ids('SELECT record_id FROM document_links WHERE document_id = ? AND record_type = ? ORDER BY record_id', documentId, type)[0] : undefined);
+  const onlyJob = (join: string, employer: string | null, ...args: unknown[]) => {
+    const jobs = ids(`SELECT j.id FROM jobs j JOIN ${join} WHERE lower(trim(j.employer)) = lower(trim(?))`, ...args, employer);
+    return jobs.length === 1 ? jobs[0] : undefined;
+  };
+  const matched = <T extends object>(x: T, recordId: string | undefined) => (recordId ? { ...x, recordId } : x);
+  switch (r.kind) {
+    case 'pay_stub': {
+      const used = new Set<string>();
+      const free = (found: string[]) => found.find((id) => !used.has(id));
+      const stubs = r.stubs.map((s) => {
+        const d = s.draft;
+        const id = (documentId ? free(ids(`SELECT s.id FROM pay_stubs s JOIN document_links l ON l.record_type = 'pay_stub' AND l.record_id = s.id
+          WHERE l.document_id = ? AND s.pay_date = ? ORDER BY s.created_at, s.id`, documentId, d.payDate)) : undefined)
+          ?? free(ids(`SELECT s.id FROM pay_stubs s LEFT JOIN jobs j ON j.id = s.job_id WHERE s.pay_date = ? AND s.gross_cents = ? AND s.net_cents = ?
+            ORDER BY lower(trim(j.employer)) = lower(trim(?)) DESC, s.created_at, s.id`, d.payDate, d.grossCents, d.netCents, d.employer));
+        if (id) used.add(id);
+        return matched(s, id);
+      });
+      return { ...r, stubs };
+    }
+    case 'tax_form': return matched(r, linked('tax_form') ?? ids(`SELECT id FROM tax_forms WHERE year = ? AND kind = ? AND lower(trim(payer)) = lower(trim(?))
+      ORDER BY created_at, id`, r.draft.year, r.draft.kind, r.draft.payer)[0]);
+    case 'tax_return': return matched(r, linked('tax_return') ?? ids('SELECT id FROM tax_returns WHERE year = ? AND jurisdiction = ?', r.draft.year, r.draft.jurisdiction)[0]);
+    case 'w4': return matched(r, linked('w4') ?? onlyJob('w4s w ON w.job_id = j.id', r.draft.employer));
+    case 'state_w4': {
+      const job = onlyJob('state_w4s w ON w.job_id = j.id AND w.state = ?', r.draft.employer, r.draft.state);
+      return matched(r, linked('state_w4') ?? (job && `${job}:${r.draft.state}`));
+    }
+    case 'offer': return matched(r, linked('job'));
+  }
 }

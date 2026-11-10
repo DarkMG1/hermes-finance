@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { CreateJobBody, DocumentRecordType, GrantBody, LinkPayStubBody, LotEntryBody, LotMethodBody, PatchGrantBody, PatchJobBody, PatchPayStubBody, PatchRothContributionBody, PatchTaxFormBody, PayStubBody, ProfileReadBody, PutProfileBody,
-  RothContributionBody, StateW4Body, TaxFormBody, TaxInputsBody, TaxReturnBody, TaxScenarioBody, TaxWhatIfBody, W4Body } from '@hermes/shared';
+  type ProfileKind, RothContributionBody, StateW4Body, TaxFormBody, TaxInputsBody, TaxReturnBody, TaxScenarioBody, TaxWhatIfBody, W4Body } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { localDay } from '../days.ts';
-import { documentPage, getDocument, linkDocument, listDocuments, purgeUnlinked, replaceLink, saveDocument, unlinkRecord } from '../documents.ts';
+import { documentPage, getDocument, linkDocument, listDocuments, purgeUnlinked, replaceLink, saveDocument, unlinkRecord, withRecordIds } from '../documents.ts';
 import { ApiError } from '../errors.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { readProfile } from '../profile-reader.ts';
@@ -80,6 +80,17 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   app.get('/v1/profile', async () => getProfile(db));
   // lets Settings show its row without loading any profile data before Face ID
   app.get('/v1/profile/exists', async () => ({ ok: true }));
+  /** a new read keeps its pages as a new document; a re-read (documentId) reads that document's pages again */
+  const read = async (kind: ProfileKind, pages: Buffer[], documentId?: string) => {
+    const start = performance.now();
+    try {
+      const result = withRecordIds(db, await readProfile(deps, kind, pages), documentId);
+      return { ...result, documentId: documentId ?? saveDocument(db, kind, pages, deps.now()) };
+    } finally {
+      const kb = Math.round(pages.reduce((n, p) => n + p.length, 0) / 1024);
+      console.log(`[hermes] profile read kind=${kind} pages=${pages.length} kb=${kb} read_ms=${Math.round(performance.now() - start)}${documentId ? ' reread' : ''}`);
+    }
+  };
   // no idempotency key: a retried read keeps a second copy of the pages, purged unsaved like any other
   app.post('/v1/profile/read', { bodyLimit: READ_MAX_BYTES }, async (req) => {
     const body = parseBody(ProfileReadBody, req.body);
@@ -87,14 +98,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
     const bad = pages.findIndex((p) => !isJpeg(p));
     if (bad >= 0) throw new ApiError(400, 'INVALID_IMAGE', `pages.${bad}: must be a JPEG`, `pages.${bad}`);
     purgeUnlinked(db, deps.now());
-    const start = performance.now();
-    try {
-      const result = await readProfile(deps, body.kind, pages);
-      return { ...result, documentId: saveDocument(db, body.kind, pages, deps.now()) };
-    } finally {
-      const kb = Math.round(pages.reduce((n, p) => n + p.length, 0) / 1024);
-      console.log(`[hermes] profile read kind=${body.kind} pages=${pages.length} kb=${kb} read_ms=${Math.round(performance.now() - start)}`);
-    }
+    return read(body.kind, pages);
   });
 
   app.put('/v1/profile', async (req, reply) => {
@@ -128,6 +132,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       const merged = parseBody(CreateJobBody, { ...pick(current, Object.keys(CreateJobBody.shape)), ...patch });
       assertDates(merged, JOB_DATES);
       db.prepare(`UPDATE jobs SET ${assign(JOB_COLS)}, updated_at = ? WHERE id = ?`).run(...jobValues(merged), deps.now().toISOString(), current.id);
+      replaceLink(db, patch.documentId, 'job', current.id);
       return { status: 200, body: job(current.id) };
     });
     return reply.code(r.status).send(r.body);
@@ -257,6 +262,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       assertDates(merged, STUB_DATES);
       assertJob(merged.jobId);
       db.prepare(`UPDATE pay_stubs SET ${assign(STUB_COLS)} WHERE id = ?`).run(...stubValues(merged), current.id);
+      linkDocument(db, patch.documentId, 'pay_stub', current.id);
       const s = stub(current.id);
       if (s.transactionIds.length && (patch.netCents !== undefined || patch.payDate !== undefined) && !linkable(db, s, s.transactionIds)) {
         db.prepare('DELETE FROM pay_stub_deposits WHERE stub_id = ?').run(s.id);
@@ -312,6 +318,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       assertYear(merged.year);
       assertJob(merged.jobId);
       db.prepare(`UPDATE tax_forms SET ${assign(FORM_COLS)} WHERE id = ?`).run(...formValues(merged), current.id);
+      linkDocument(db, patch.documentId, 'tax_form', current.id);
       return { status: 200, body: getForm(db, current.id) };
     });
     return reply.code(r.status).send(r.body);
@@ -357,6 +364,13 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   });
   // the pages go; the numbers saved from them stay
   app.delete('/v1/documents/:id', del('documents', 'document'));
+  // drafts carry the recordId each saves into, so a re-read updates its records
+  app.post<{ Params: { id: string } }>('/v1/documents/:id/read', async (req) => {
+    purgeUnlinked(db, deps.now());
+    const d = getDocument(db, req.params.id);
+    if (!d) throw notFound('document');
+    return read(d.kind, Array.from({ length: d.pageCount }, (_, i) => documentPage(db, d.id, i + 1)!), d.id);
+  });
 
   const yearParam = (raw: string) => {
     const year = Number(raw);

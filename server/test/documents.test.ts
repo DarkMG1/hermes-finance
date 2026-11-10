@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp } from '../src/app.ts';
 import { purgeUnlinked } from '../src/documents.ts';
+import { ProfileDrafts, type ProfileKind } from '@hermes/shared';
 import { AUTH, makeTestDeps } from './helpers.ts';
+import { stubRead } from './fake-reader.ts';
 
 const page = (n: number) => Buffer.from([0xff, 0xd8, 0xff, 0xe0, n, n, n]);
 
@@ -222,4 +224,119 @@ test('the list is newest first and filters by record; DELETE drops the pages and
   assert.equal((await get(`/v1/documents/${second}/pages/1`)).statusCode, 404);
   assert.equal(deps.db.prepare('SELECT COUNT(*) FROM document_pages WHERE document_id = ?').pluck().get(second), 0);
   assert.equal((await get(`/v1/jobs/${jobId}`)).json().w4.filingStatus, 'single');
+});
+
+const rereadOf = (app: ReturnType<typeof setup>['app'], id: string) => app.inject({ method: 'POST', url: `/v1/documents/${id}/read`, headers: AUTH });
+
+test('re-reading a multi-stub document updates the stubs it saved (by pay date) and creates the rest', async () => {
+  const { app, get, send, read, docs, job, profileReader, deps } = setup();
+  const jobId = await job();
+  const saveA = { payDate: '2026-02-27', grossCents: 1000, netCents: 1000 };
+  const saveB = { payDate: '2026-03-13', grossCents: 2000, netCents: 2000 };
+  const a = { employer: 'SYNTHETIC EMPLOYER', ...saveA };
+  const b = { employer: 'SYNTHETIC EMPLOYER', ...saveB };
+  profileReader.next = stubRead([a, b]);
+  const doc = await read(2);
+  const stubA = (await send('POST', '/v1/pay-stubs', { ...saveA, jobId, documentId: doc })).json().id as string;
+
+  // the re-read corrects stub A's amounts: matched by pay date, not by the duplicate test
+  profileReader.next = stubRead([{ ...a, grossCents: 1100, netCents: 1100 }, b]);
+  const res = await rereadOf(app, doc);
+  assert.equal(res.statusCode, 200, res.body);
+  const r = res.json();
+  assert.equal(r.documentId, doc);
+  assert.deepEqual(r.stubs.map((s: { recordId?: string }) => s.recordId), [stubA, undefined]);
+  assert.deepEqual(profileReader.calls.at(-1)!.pages, [page(1), page(2)], 'the reader gets the stored pages');
+  assert.equal(deps.db.prepare('SELECT COUNT(*) FROM documents').pluck().get(), 1, 'a re-read keeps no new copy');
+
+  assert.equal((await send('PATCH', `/v1/pay-stubs/${stubA}`, { grossCents: 1100, netCents: 1100, documentId: doc })).statusCode, 200);
+  const created = await send('POST', '/v1/pay-stubs', { ...saveB, jobId, documentId: doc });
+  assert.equal(created.statusCode, 201, created.body);
+  assert.equal((await get(`/v1/pay-stubs/${stubA}`)).json().grossCents, 1100);
+  assert.deepEqual((await docs('pay_stub', created.json().id)).map((d) => d.id), [doc]);
+  assert.deepEqual((await docs('pay_stub', stubA)).map((d) => d.id), [doc]);
+
+  // a fresh read of the same stubs finds both by the duplicate test
+  profileReader.next = stubRead([{ ...a, grossCents: 1100, netCents: 1100 }, b]);
+  const fresh = (await app.inject({ method: 'POST', url: '/v1/profile/read', headers: AUTH, payload: { kind: 'pay_stub', pages: [page(1).toString('base64')] } })).json();
+  assert.deepEqual(fresh.stubs.map((s: { recordId?: string; saved: boolean }) => [s.recordId, s.saved]), [[stubA, true], [created.json().id, true]]);
+});
+
+test('reading a single-record kind returns the record it updates: the linked one on a re-read, an obvious existing one on a fresh read', async () => {
+  const { app, send, read, job, profileReader, deps } = setup();
+  const jobId = await job();
+  const single = (kind: ProfileKind, draft: object) => { profileReader.next = { kind, draft: ProfileDrafts[kind].parse(draft), uncertain: [], model: 'fake-model' } as never; };
+  const freshRead = async (kind: ProfileKind) => (await app.inject({ method: 'POST', url: '/v1/profile/read', headers: AUTH, payload: { kind, pages: [page(1).toString('base64')] } })).json();
+  const returnId = () => deps.db.prepare('SELECT id FROM tax_returns').pluck().get() as string;
+  const formId = () => deps.db.prepare('SELECT id FROM tax_forms').pluck().get() as string;
+  for (const [kind, draft, method, url, body, recordId] of [
+    ['w4', { employer: 'synthetic employer ', filingStatus: 'single' }, 'PUT', `/v1/jobs/${jobId}/w4`, { filingStatus: 'single' }, () => jobId],
+    ['state_w4', { employer: 'SYNTHETIC EMPLOYER', state: 'XA', allowances: 1 }, 'PUT', `/v1/jobs/${jobId}/state-w4/XA`, { allowances: 1 }, () => `${jobId}:XA`],
+    ['tax_return', { year: 2025, jurisdiction: 'federal' }, 'PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal' }, returnId],
+    ['tax_form', { year: 2025, kind: 'w2', payer: 'Synthetic Employer', amountCents: 100 }, 'POST', '/v1/tax-forms', { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 100 }, formId],
+  ] as const) {
+    single(kind, draft);
+    const first = await freshRead(kind);
+    assert.equal(first.recordId, undefined, `${kind}: nothing saved yet`);
+    assert.ok([200, 201].includes((await send(method, url, { ...body, documentId: first.documentId })).statusCode), kind);
+    const again = await rereadOf(app, first.documentId);
+    assert.equal(again.statusCode, 200, again.body);
+    assert.deepEqual([again.json().recordId, again.json().documentId], [recordId(), first.documentId], `${kind}: re-read`);
+    assert.equal((await freshRead(kind)).recordId, recordId(), `${kind}: fresh read finds the saved one`);
+  }
+  // a state form for another state, or a W-4 when two jobs share the employer name, isn't obvious
+  single('state_w4', { employer: 'SYNTHETIC EMPLOYER', state: 'XB' });
+  assert.equal((await freshRead('state_w4')).recordId, undefined);
+  await send('PUT', `/v1/jobs/${await job()}/w4`, { filingStatus: 'single' });
+  single('w4', { employer: 'SYNTHETIC EMPLOYER' });
+  assert.equal((await freshRead('w4')).recordId, undefined);
+
+  // an offer: the linked job on a re-read; a fresh offer from a known employer can be a new job
+  single('offer', { employer: 'SYNTHETIC EMPLOYER', baseCents: 100 });
+  const offerDoc = await read(1, 'offer');
+  assert.equal((await freshRead('offer')).recordId, undefined);
+  const offer = (await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'offered', documentId: offerDoc })).json().id as string;
+  assert.equal((await rereadOf(app, offerDoc)).json().recordId, offer);
+});
+
+test('PATCH links a document: stubs and forms add a link, a job replaces its offer document; a bad documentId saves nothing', async () => {
+  const { send, read, docs, exists, job, deps } = setup();
+  const jobId = await job();
+  const stubId = (await send('POST', '/v1/pay-stubs', { jobId, payDate: '2026-02-27', grossCents: 1000, netCents: 1000 })).json().id as string;
+  const formId = (await send('POST', '/v1/tax-forms', { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 100 })).json().id as string;
+  const offerId = (await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'offered', documentId: await read(1, 'offer') })).json().id as string;
+  const [oldOffer] = (await docs('job', offerId)).map((d) => d.id);
+  const offer = await read(1, 'offer');
+  for (const [url, recordType, recordId, documentId, body] of [
+    [`/v1/pay-stubs/${stubId}`, 'pay_stub', stubId, await read(1, 'pay_stub'), { netCents: 1000 }],
+    [`/v1/tax-forms/${formId}`, 'tax_form', formId, await read(1, 'tax_form'), { amountCents: 200 }],
+    [`/v1/jobs/${offerId}`, 'job', offerId, offer, { baseCents: 100 }],
+  ] as const) {
+    const before = deps.db.prepare('SELECT COUNT(*) FROM document_links').pluck().get();
+    for (const bad of ['nope', recordType === 'job' ? await read(1, 'w4') : await read(1, 'offer')]) {
+      const res = await send('PATCH', url, { ...body, documentId: bad });
+      assert.deepEqual([res.statusCode, res.json().field], [400, 'documentId'], url);
+    }
+    assert.equal(deps.db.prepare('SELECT COUNT(*) FROM document_links').pluck().get(), before);
+    assert.equal((await send('PATCH', url, { documentId }, `p-${recordType}`)).statusCode, 200, url);
+    assert.equal((await send('PATCH', url, { documentId }, `p-${recordType}`)).statusCode, 200, `${url}: a retried PATCH replays`);
+    assert.ok((await docs(recordType, recordId)).some((d) => d.id === documentId), url);
+  }
+  assert.equal(deps.db.prepare('SELECT amount_cents FROM tax_forms').pluck().get(), 100, 'a refused PATCH changes nothing');
+  assert.deepEqual((await docs('job', offerId)).map((d) => d.id), [offer]);
+  assert.ok(!exists(oldOffer!), 'the replaced offer document goes');
+});
+
+test('a re-read shares the reader guard; an unknown document is 404', async () => {
+  const { app, read, profileReader } = setup();
+  const doc = await read();
+  assert.equal((await rereadOf(app, 'nope')).statusCode, 404);
+  let release!: () => void;
+  profileReader.hold = new Promise<void>((r) => { release = r; });
+  const busy = app.inject({ method: 'POST', url: '/v1/profile/read', headers: AUTH, payload: { kind: 'pay_stub', pages: [page(1).toString('base64')] } });
+  while (profileReader.calls.length < 2) await new Promise((r) => setImmediate(r));
+  const res = await rereadOf(app, doc);
+  assert.deepEqual([res.statusCode, res.json().code], [409, 'READ_IN_PROGRESS']);
+  release();
+  assert.equal((await busy).statusCode, 200);
 });
