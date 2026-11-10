@@ -13,5 +13,6 @@
   },
   "uncertain": [
     "state"
-  ]
+  ],
+  "documentId": "fixture-document"
 }

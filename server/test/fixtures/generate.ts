@@ -246,6 +246,7 @@ export async function buildFixtures(): Promise<Record<string, string>> {
 
   // ids minted at runtime are replaced so the files are stable
   const text = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
-  const normalise = (s: string) => s.replace(/"accountId": "[0-9a-f-]{36}"/g, '"accountId": "fixture-applecard"').replace(/"itemId": "[0-9a-f-]{36}"/g, '"itemId": "fixture-item"');
+  const normalise = (s: string) => s.replace(/"accountId": "[0-9a-f-]{36}"/g, '"accountId": "fixture-applecard"').replace(/"itemId": "[0-9a-f-]{36}"/g, '"itemId": "fixture-item"')
+    .replace(/"documentId": "[0-9a-f-]{36}"/g, '"documentId": "fixture-document"');
   return Object.fromEntries(Object.entries(out).map(([k, v]) => [`${k}.json`, normalise(text(v))]));
 }

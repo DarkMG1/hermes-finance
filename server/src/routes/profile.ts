@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { CreateJobBody, GrantBody, LinkPayStubBody, LotEntryBody, LotMethodBody, PatchGrantBody, PatchJobBody, PatchPayStubBody, PatchRothContributionBody, PatchTaxFormBody, PayStubBody, ProfileReadBody, PutProfileBody,
+import { CreateJobBody, DocumentRecordType, GrantBody, LinkPayStubBody, LotEntryBody, LotMethodBody, PatchGrantBody, PatchJobBody, PatchPayStubBody, PatchRothContributionBody, PatchTaxFormBody, PayStubBody, ProfileReadBody, PutProfileBody,
   RothContributionBody, StateW4Body, TaxFormBody, TaxInputsBody, TaxReturnBody, TaxScenarioBody, TaxWhatIfBody, W4Body } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { localDay } from '../days.ts';
+import { documentPage, getDocument, linkDocument, listDocuments, purgeUnlinked, saveDocument, unlinkRecord } from '../documents.ts';
 import { ApiError } from '../errors.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { readProfile } from '../profile-reader.ts';
@@ -67,9 +68,10 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
     if (!s) throw notFound('pay stub');
     return s;
   };
-  const del = (table: string, what: string) => async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
+  const del = (table: string, what: string, recordType?: DocumentRecordType) => async (req: FastifyRequest<{ Params: { id: string } }>, reply: FastifyReply) => {
     const r = idempotentWrite(deps, req, () => {
       if (!db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(req.params.id).changes) throw notFound(what);
+      if (recordType) unlinkRecord(db, recordType, req.params.id);
       return { status: 200, body: { ok: true } };
     });
     return reply.code(r.status).send(r.body);
@@ -78,15 +80,17 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   app.get('/v1/profile', async () => getProfile(db));
   // lets Settings show its row without loading any profile data before Face ID
   app.get('/v1/profile/exists', async () => ({ ok: true }));
-  // no idempotency key: a read stores nothing
+  // no idempotency key: a retried read keeps a second copy of the pages, purged unsaved like any other
   app.post('/v1/profile/read', { bodyLimit: READ_MAX_BYTES }, async (req) => {
     const body = parseBody(ProfileReadBody, req.body);
     const pages = body.pages.map((p) => Buffer.from(p, 'base64'));
     const bad = pages.findIndex((p) => !isJpeg(p));
     if (bad >= 0) throw new ApiError(400, 'INVALID_IMAGE', `pages.${bad}: must be a JPEG`, `pages.${bad}`);
+    purgeUnlinked(db, deps.now());
     const start = performance.now();
     try {
-      return await readProfile(deps, body.kind, pages);
+      const result = await readProfile(deps, body.kind, pages);
+      return { ...result, documentId: saveDocument(db, body.kind, pages, deps.now()) };
     } finally {
       const kb = Math.round(pages.reduce((n, p) => n + p.length, 0) / 1024);
       console.log(`[hermes] profile read kind=${body.kind} pages=${pages.length} kb=${kb} read_ms=${Math.round(performance.now() - start)}`);
@@ -111,6 +115,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       const now = deps.now().toISOString();
       db.prepare(`INSERT INTO jobs (id, ${JOB_COLS.join(', ')}, created_at, updated_at) VALUES (?, ${JOB_COLS.map(() => '?').join(', ')}, ?, ?)`)
         .run(id, ...jobValues(body), now, now);
+      linkDocument(db, body.documentId, 'job', id);
       return { status: 201, body: job(id) };
     });
     return reply.code(r.status).send(r.body);
@@ -130,7 +135,13 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
 
   app.delete<{ Params: { id: string } }>('/v1/jobs/:id', async (req, reply) => {
     const r = idempotentWrite(deps, req, () => {
-      if (!db.prepare('DELETE FROM jobs WHERE id = ?').run(req.params.id).changes) throw notFound('job');
+      const { id } = req.params;
+      const states = db.prepare('SELECT state FROM state_w4s WHERE job_id = ?').pluck().all(id) as string[];
+      if (!db.prepare('DELETE FROM jobs WHERE id = ?').run(id).changes) throw notFound('job');
+      // its W-4 and state forms go with it
+      unlinkRecord(db, 'job', id);
+      unlinkRecord(db, 'w4', id);
+      for (const s of states) unlinkRecord(db, 'state_w4', `${id}:${s}`);
       return { status: 200, body: { ok: true } };
     });
     return reply.code(r.status).send(r.body);
@@ -182,6 +193,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
         extra_withholding_cents, exempt, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(req.params.id, w.signedOn ?? null, w.filingStatus ?? null,
         bit(w.multipleJobs), w.dependentsCents ?? null, w.otherIncomeCents ?? null, w.deductionsCents ?? null, w.extraWithholdingCents ?? null, bit(w.exempt),
         deps.now().toISOString());
+      linkDocument(db, w.documentId, 'w4', req.params.id);
       return { status: 200, body: getW4(db, req.params.id) };
     });
     return reply.code(r.status).send(r.body);
@@ -189,6 +201,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   app.delete<{ Params: { id: string } }>('/v1/jobs/:id/w4', async (req, reply) => {
     const r = idempotentWrite(deps, req, () => {
       if (!db.prepare('DELETE FROM w4s WHERE job_id = ?').run(req.params.id).changes) throw notFound('W-4');
+      unlinkRecord(db, 'w4', req.params.id);
       return { status: 200, body: { ok: true } };
     });
     return reply.code(r.status).send(r.body);
@@ -205,6 +218,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       db.prepare(`INSERT OR REPLACE INTO state_w4s (job_id, state, signed_on, filing_status, allowances, additional_allowances, extra_withholding_cents, exempt,
         updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(req.params.id, state, w.signedOn ?? null, w.filingStatus ?? null, w.allowances ?? null,
         w.additionalAllowances ?? null, w.extraWithholdingCents ?? null, w.exempt == null ? null : Number(w.exempt), deps.now().toISOString());
+      linkDocument(db, w.documentId, 'state_w4', `${req.params.id}:${state}`);
       return { status: 200, body: getStateW4(db, req.params.id, state) };
     });
     return reply.code(r.status).send(r.body);
@@ -212,6 +226,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   app.delete<{ Params: { id: string; state: string } }>('/v1/jobs/:id/state-w4/:state', async (req, reply) => {
     const r = idempotentWrite(deps, req, () => {
       if (!db.prepare('DELETE FROM state_w4s WHERE job_id = ? AND state = ?').run(req.params.id, req.params.state).changes) throw notFound('state form');
+      unlinkRecord(db, 'state_w4', `${req.params.id}:${req.params.state}`);
       return { status: 200, body: { ok: true } };
     });
     return reply.code(r.status).send(r.body);
@@ -227,6 +242,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
         .get(body.jobId ?? null, body.payDate, body.grossCents, body.netCents)) throw new ApiError(409, 'DUPLICATE_STUB', 'this pay stub is already saved');
       const id = randomUUID();
       db.prepare(`INSERT INTO pay_stubs (id, ${STUB_COLS.join(', ')}, created_at) VALUES (?, ${marks(STUB_COLS)}, ?)`).run(id, ...stubValues(body), deps.now().toISOString());
+      linkDocument(db, body.documentId, 'pay_stub', id);
       return { status: 201, body: stub(id) };
     });
     return reply.code(r.status).send(r.body);
@@ -252,7 +268,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
 
   app.get('/v1/pay-stubs/unassigned', async () => unassignedStubs(db));
   app.get<{ Params: { id: string } }>('/v1/pay-stubs/:id', async (req) => stub(req.params.id));
-  app.delete('/v1/pay-stubs/:id', del('pay_stubs', 'pay stub'));
+  app.delete('/v1/pay-stubs/:id', del('pay_stubs', 'pay stub', 'pay_stub'));
   app.get<{ Params: { id: string } }>('/v1/pay-stubs/:id/matches', async (req) => stubMatches(db, stub(req.params.id), today()));
 
   app.put<{ Params: { id: string } }>('/v1/pay-stubs/:id/link', async (req, reply) => {
@@ -281,6 +297,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       assertJob(body.jobId);
       const id = randomUUID();
       db.prepare(`INSERT INTO tax_forms (id, ${FORM_COLS.join(', ')}, created_at) VALUES (?, ${marks(FORM_COLS)}, ?)`).run(id, ...formValues(body), deps.now().toISOString());
+      linkDocument(db, body.documentId, 'tax_form', id);
       return { status: 201, body: getForm(db, id) };
     });
     return reply.code(r.status).send(r.body);
@@ -300,7 +317,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
     return reply.code(r.status).send(r.body);
   });
 
-  app.delete('/v1/tax-forms/:id', del('tax_forms', 'tax form'));
+  app.delete('/v1/tax-forms/:id', del('tax_forms', 'tax form', 'tax_form'));
   app.get('/v1/tax-years', async () => taxYears(db));
 
   app.put('/v1/tax-returns', async (req, reply) => {
@@ -311,12 +328,35 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       db.prepare(`INSERT INTO tax_returns (id, ${RETURN_COLS.join(', ')}, created_at, updated_at) VALUES (?, ${marks(RETURN_COLS)}, ?, ?)
         ON CONFLICT (year, jurisdiction) DO UPDATE SET ${RETURN_COLS.map((c) => `${c} = excluded.${c}`).join(', ')}, updated_at = excluded.updated_at`)
         .run(randomUUID(), ...returnValues({ ...getReturn(db, body.year, body.jurisdiction), ...body }), now, now);
-      return { status: 200, body: getReturn(db, body.year, body.jurisdiction) };
+      const saved = getReturn(db, body.year, body.jurisdiction)!;
+      linkDocument(db, body.documentId, 'tax_return', saved.id);
+      return { status: 200, body: saved };
     });
     return reply.code(r.status).send(r.body);
   });
 
-  app.delete('/v1/tax-returns/:id', del('tax_returns', 'tax return'));
+  app.delete('/v1/tax-returns/:id', del('tax_returns', 'tax return', 'tax_return'));
+
+  app.get<{ Querystring: { recordType?: string; recordId?: string } }>('/v1/documents', async (req) => {
+    const { recordType, recordId } = req.query;
+    if (recordType === undefined && recordId === undefined) return { documents: listDocuments(db) };
+    const type = DocumentRecordType.safeParse(recordType);
+    if (!type.success) throw new ApiError(400, 'INVALID_REQUEST', 'recordType: unknown record type', 'recordType');
+    if (!recordId) throw new ApiError(400, 'INVALID_REQUEST', 'recordId: required with recordType', 'recordId');
+    return { documents: listDocuments(db, { recordType: type.data, recordId }) };
+  });
+  app.get<{ Params: { id: string } }>('/v1/documents/:id', async (req) => {
+    const d = getDocument(db, req.params.id);
+    if (!d) throw notFound('document');
+    return d;
+  });
+  app.get<{ Params: { id: string; n: string } }>('/v1/documents/:id/pages/:n', async (req, reply) => {
+    const jpeg = /^\d+$/.test(req.params.n) ? documentPage(db, req.params.id, Number(req.params.n)) : null;
+    if (!jpeg) throw notFound('page');
+    return reply.type('image/jpeg').send(jpeg);
+  });
+  // the pages go; the numbers saved from them stay
+  app.delete('/v1/documents/:id', del('documents', 'document'));
 
   const yearParam = (raw: string) => {
     const year = Number(raw);

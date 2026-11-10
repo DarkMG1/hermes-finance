@@ -12,5 +12,6 @@
   },
   "uncertain": [
     "allowances"
-  ]
+  ],
+  "documentId": "fixture-document"
 }

@@ -2,6 +2,7 @@ import { pathToFileURL } from 'node:url';
 import { loadConfig } from './config.ts';
 import { migrate, openDb } from './db.ts';
 import { markInterruptedReads } from './inbox.ts';
+import { purgeUnlinked } from './documents.ts';
 import { createPlaidClient } from './plaid/client.ts';
 import { createTiingoClient } from './prices/tiingo.ts';
 import { createAnthropicReader } from './receipt-reader/anthropic.ts';
@@ -15,6 +16,7 @@ export async function start(env: NodeJS.ProcessEnv): Promise<{ close: () => Prom
   const db = openDb(config.dbPath);
   migrate(db);
   markInterruptedReads(db);
+  purgeUnlinked(db, new Date());
   if (!config.tiingoApiKey) console.log('[hermes] no TIINGO_API_KEY: investment prices are off');
   if (!config.anthropicApiKey) console.log('[hermes] no ANTHROPIC_API_KEY: receipt reading is off');
   const now = () => new Date();
