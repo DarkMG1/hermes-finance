@@ -86,6 +86,10 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
   let cost = 0;
   let said = false;
   let charts = 0;
+  // a tool_result carrying document pages → the same result with placeholders, which is what gets stored
+  const kept = new Map<Block, Block>();
+  const save = (t: ApiMessage[], status: 'done' | 'failed' | 'stopped', code: string | null) => saveAssistant(deps.db, assistantId,
+    t.map((m) => (m.role === 'user' && Array.isArray(m.content) ? { ...m, content: m.content.map((b) => kept.get(b) ?? b) } : m)), status, code);
   try {
     const claude = deps.claude;
     if (!claude) throw new ClaudeError('AI_NOT_CONFIGURED');
@@ -162,23 +166,26 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
           if ('profile' in res && res.profile) markProfile(deps.db, chatId, assistantId);
           // a rejected chart showed nothing, so there's no line for it
           if (!(name === 'show_chart' && res.isError)) emit({ type: 'tool', name, label: toolLabel(name, input), input });
-          return { type: 'tool_result', tool_use_id: b.id, content: res.content, is_error: res.isError };
+          const text = { type: 'text', text: res.content };
+          const result = { type: 'tool_result', tool_use_id: b.id, content: res.images ? [text, ...res.images.map((x) => x.block)] : res.content, is_error: res.isError };
+          if (res.images) kept.set(result, { ...result, content: [text, ...res.images.map((x) => x.stored)] });
+          return result;
         }),
       });
     }
   } catch (e) {
     if (signal.aborted || (e instanceof ClaudeError && e.code === 'ABORTED')) {
       const partial = content.filter((b) => b?.type === 'text' && b.text);
-      saveAssistant(deps.db, assistantId, partial.length ? [...turn, { role: 'assistant', content: partial }] : turn, 'stopped', null);
+      save(partial.length ? [...turn, { role: 'assistant', content: partial }] : turn, 'stopped', null);
       return;
     }
     const code = e instanceof ClaudeError ? e.code : 'INTERNAL';
     console.error(`[hermes] chat answer failed code=${code}`);
-    saveAssistant(deps.db, assistantId, turn, 'failed', code);
+    save(turn, 'failed', code);
     emit({ type: 'error', code });
     return;
   }
-  saveAssistant(deps.db, assistantId, turn, 'done', null);
+  save(turn, 'done', null);
   emit({ type: 'done', messageId: assistantId, costCents: toCents(cost), status: 'done' });
   // a title shows without Face ID, so it never comes from an answer in a chat that holds profile data
   const shown = chatUsesProfile(deps.db, chatId) ? ''

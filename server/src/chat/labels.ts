@@ -4,10 +4,11 @@ const LABELS: Record<string, string> = {
   search_chats: 'Past chats', read_chat: 'Past chat', show_chart: 'Chart', tax_reference: 'Tax figures', web_search: 'Web search',
   profile: 'About me', jobs: 'Jobs', pay_stubs: 'Pay stubs', tax_years: 'Tax years',
   tax_projection: 'Tax projection', tax_what_if: 'What if', investment_activity: 'Investment activity', tax_lots: 'Tax lots',
+  documents: 'Documents', document_pages: 'Document pages',
 };
 
 /** Tools that read the financial profile: behind Face ID in Ask. */
-export const PROFILE_TOOLS = new Set(['profile', 'jobs', 'pay_stubs', 'tax_years', 'tax_projection', 'tax_what_if', 'investment_activity', 'tax_lots']);
+export const PROFILE_TOOLS = new Set(['profile', 'jobs', 'pay_stubs', 'tax_years', 'tax_projection', 'tax_what_if', 'investment_activity', 'tax_lots', 'documents', 'document_pages']);
 
 export function toolLabel(name: string, input: Record<string, unknown>): string {
   if ((name === 'search_chats' || name === 'web_search') && typeof input.query === 'string') return `${LABELS[name]} · ${input.query}`;

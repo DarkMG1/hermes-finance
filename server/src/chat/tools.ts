@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ExpensesQuery, TaxWhatIfChange, ListTransactionsQuery, NetWorthQuery, PayeeHistoryQuery, SpendingQuery } from '@hermes/shared';
+import { DocumentRecordType, ExpensesQuery, ProfileKind, TaxWhatIfChange, ListTransactionsQuery, NetWorthQuery, PayeeHistoryQuery, SpendingQuery } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { ApiError } from '../errors.ts';
 import { getExpenses, getPayeeHistory, getReimbursements, getSpending } from '../cashflow.ts';
@@ -13,11 +13,16 @@ import { getHoldingHistory, getInvestments } from '../investments.ts';
 import { getJob, getProfile, listJobs, payStubs, taxYears } from '../profile.ts';
 import { openYears, project, whatIf } from '../tax/projection.ts';
 import { buildLots, lotsView } from '../tax/lots.ts';
+import { documentPage, getDocument, listDocuments } from '../documents.ts';
 import { PROFILE_TOOLS } from './labels.ts';
 import { taxReference } from './tax-reference.ts';
 import { chatUsesProfile, getChat, searchChats } from './store.ts';
 
 export type ToolDef = { name: string; description: string; input_schema: Record<string, unknown> };
+type Block = Record<string, unknown>;
+/** An image the live answer sends, and the text a stored turn keeps in its place (images are never stored or replayed). */
+export type ToolImage = { block: Block; stored: Block };
+type Pages = { content: string; images: ToolImage[] };
 export const RESULT_MAX = 20_000;
 
 /** What the tools know about the request: the conversation being answered, and whether the owner unlocked the financial profile for it. */
@@ -120,6 +125,26 @@ const ENTRIES = new Map<string, Entry>([
       const accounts = (r: Record<string, unknown>) => Object.fromEntries(Object.entries(r).filter(([id]) => !q.accountId || id === q.accountId));
       return { lots: v.lots.filter(mine), methods: accounts(v.methods), inferred: accounts(v.inferred), basisMatched: accounts(v.basisMatched), unresolved: v.unresolved.filter(mine) };
     }),
+  entry('documents', 'Kept documents (the redacted pages of pay stubs, W-2/1099s, W-4s, state withholding forms, tax returns and offers the owner scanned), newest first, each with its page count and the records saved from it; give recordType and recordId for one record\'s documents, or kind.',
+    z.object({ recordType: DocumentRecordType.optional(), recordId: z.string().min(1).optional(), kind: ProfileKind.optional() }).strict()
+      .refine((q) => !q.recordType === !q.recordId, { message: 'give recordType and recordId together', path: ['recordId'] }),
+    (d, q) => ({ documents: listDocuments(d.db, q.recordType && q.recordId ? { recordType: q.recordType, recordId: q.recordId } : undefined)
+      .filter((doc) => !q.kind || doc.kind === q.kind)
+      .map((doc) => ({ ...doc, links: doc.links.map((l) => ({ ...l, description: describe(d, l.recordType, l.recordId) })) })) })),
+  entry('document_pages', 'Shows you pages of a kept document (id from documents) as images, at most 4 per call (pages 1-based; default the first 4). Each page costs tokens: use it only when the stored numbers (pay_stubs, jobs, tax_years) don\'t answer the question.',
+    z.object({ id: z.string().min(1), pages: z.array(z.number().int().min(1)).min(1).max(4).optional() }).strict(),
+    (d, q): Pages | null => {
+      const doc = getDocument(d.db, q.id);
+      if (!doc) return null;
+      const pages = [...new Set(q.pages ?? Array.from({ length: Math.min(4, doc.pageCount) }, (_, i) => i + 1))];
+      const images = pages.map((n) => {
+        const jpeg = documentPage(d.db, doc.id, n);
+        if (!jpeg) throw new ApiError(404, 'NOT_FOUND', `page ${n}: the document has ${doc.pageCount} pages`);
+        return { block: { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: jpeg.toString('base64') } },
+          stored: { type: 'text', text: `[document pages shown earlier: ${doc.id} p.${n}]` } };
+      });
+      return { content: `Document ${doc.id} (${doc.kind}, kept ${doc.createdAt.slice(0, 10)}): pages ${pages.join(', ')} of ${doc.pageCount}.`, images };
+    }),
   entry('search_chats', "Searches the owner's own earlier conversations with you (questions and your answers) for messages containing every word of query, optionally between from and to; returns each match's chatId, title, date and a snippet with the words in [brackets]. Without query (e.g. for \"our last chat\"), lists the most recently active chats newest first, each with its first question as the snippet and that question's date (from and to then apply to that date).",
     z.object({ query: z.string().max(200).regex(/[\p{L}\p{N}]/u, 'query has no words to search for').optional(), from: Day, to: Day, limit: z.number().int().min(1).max(20).optional() }).strict(),
     (d, q, _today, ctx) => searchChats(d.db, { ...q, limit: q.limit ?? 10 }, ctx.chatId, !ctx.profileUnlocked)),
@@ -139,10 +164,21 @@ const ENTRIES = new Map<string, Entry>([
     () => ({ shown: true })),
 ]);
 
+const RECORD: Record<DocumentRecordType, string> = {
+  pay_stub: `SELECT 'Pay stub ' || s.pay_date || COALESCE(', ' || j.employer, '') FROM pay_stubs s LEFT JOIN jobs j ON j.id = s.job_id WHERE s.id = @id`,
+  tax_form: `SELECT upper(kind) || ' ' || year || ', ' || payer FROM tax_forms WHERE id = @id`,
+  tax_return: `SELECT 'Tax return ' || year || ' ' || jurisdiction FROM tax_returns WHERE id = @id`,
+  job: `SELECT 'Job, ' || employer FROM jobs WHERE id = @id`,
+  w4: `SELECT 'W-4, ' || employer FROM jobs WHERE id = @id`,
+  state_w4: `SELECT 'State W-4 ' || substr(@id, instr(@id, ':') + 1) || ', ' || employer FROM jobs WHERE id = substr(@id, 1, instr(@id, ':') - 1)`,
+};
+const describe = (d: Deps, type: DocumentRecordType, id: string): string | null =>
+  (d.db.prepare(RECORD[type]).pluck().get({ id }) as string | undefined) ?? null;
+
 export const TOOLS: ToolDef[] = [...ENTRIES.values()].map((e) => e.def);
 const LOCKED = 'the financial profile is locked; ask the owner to unlock it, then ask again';
 
-const ARRAY_KEYS = ['transactions', 'rows', 'items', 'points', 'holdings', 'history', 'messages', 'results', 'stubs', 'sales', 'lots', 'unresolved', 'assumptions', 'waysToSave', 'headsUp', 'returns'];
+const ARRAY_KEYS = ['documents', 'transactions', 'rows', 'items', 'points', 'holdings', 'history', 'messages', 'results', 'stubs', 'sales', 'lots', 'unresolved', 'assumptions', 'waysToSave', 'headsUp', 'returns'];
 const TEXT_KEYS = new Set(['notes', 'name', 'payee', 'bankDescription', 'merchantName', 'matchText']);
 
 
@@ -184,8 +220,9 @@ function fit(e: Entry, deps: Deps, input: Record<string, unknown>, today: string
   return s;
 }
 
-/** profile: the result holds financial profile data, from a profile tool or from a past chat that held it, so the asking chat now does too. */
-export function runTool(deps: Deps, name: string, input: unknown, ctx: ToolContext = {}): { content: string; isError: boolean; profile?: boolean } {
+/** profile: the result holds financial profile data, from a profile tool or from a past chat that held it, so the asking chat now does too.
+ *  images: document_pages' pages, sent after content as tool_result blocks. */
+export function runTool(deps: Deps, name: string, input: unknown, ctx: ToolContext = {}): { content: string; isError: boolean; profile?: boolean; images?: ToolImage[] } {
   const fail = (error: string) => ({ content: JSON.stringify({ error }), isError: true });
   const e = ENTRIES.get(name);
   if (!e) return fail(`unknown tool ${name}`);
@@ -196,6 +233,7 @@ export function runTool(deps: Deps, name: string, input: unknown, ctx: ToolConte
     const today = localDay(deps.now());
     const result = e.run(deps, parsed.data, today, ctx);
     if (result == null) return fail('not found');
+    if (name === 'document_pages') return { ...(result as Pages), isError: false, profile: true };
     const profile = PROFILE_TOOLS.has(name) || (name === 'read_chat' && chatUsesProfile(deps.db, (parsed.data as { id: string }).id))
       || (name === 'search_chats' && (result as { results: { chatId: string }[] }).results.some((h) => chatUsesProfile(deps.db, h.chatId)));
     return { content: fit(e, deps, parsed.data as Record<string, unknown>, today, ctx, result), isError: false, ...(profile ? { profile } : {}) };

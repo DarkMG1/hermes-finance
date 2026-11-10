@@ -503,3 +503,28 @@ test('a paused search resumes with the answer so far as the last message, and bo
   assert.deepEqual(turn.map((m) => [m.role, m.content.map((b) => b.type)]), [['assistant', ['server_tool_use', 'web_search_tool_result', 'text']]]);
   assert.equal(getChat(s.db, s.chatId)!.messages[1]!.text, 'Here they are.');
 });
+
+test('document pages go to the model as images in the live answer only; the stored turn and later replays carry placeholders', async () => {
+  const s = setup([
+    [start(), ...tool(0, 'tu1', 'document_pages', { id: 'd1', pages: [1] }), ...end('tool_use')],
+    [start(), ...tool(0, 'tu2', 'categories', {}), ...end('tool_use')],
+    [start(), ...text(0, 'Done.'), ...end('end_turn')],
+  ]);
+  const doc = 'd1';
+  s.db.prepare("INSERT INTO documents (id, kind, page_count, created_at) VALUES ('d1', 'w4', 1, ?)").run(NOW);
+  s.db.prepare("INSERT INTO document_pages (document_id, idx, jpeg) VALUES ('d1', 1, ?)").run(Buffer.from([0xff, 0xd8, 0x01]));
+  await s.run();
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: Buffer.from([0xff, 0xd8, 0x01]).toString('base64') } };
+  for (const r of [1, 2]) {
+    const sent = (bare(s.fake.requests[r]!.messages as Msg[])[2]!.content as { content: unknown[] }[])[0]!.content;
+    assert.deepEqual(sent.slice(1), [image], `round ${r + 1} resends the page`);
+  }
+  const stored = s.db.prepare('SELECT content_json FROM chat_messages WHERE id = ?').pluck().get(s.assistantId) as string;
+  assert.doesNotMatch(stored, /"image"|base64/);
+  const placeholder = { type: 'text', text: `[document pages shown earlier: ${doc} p.1]` };
+  const result = (replay(s.db, s.chatId)[2]!.content as { type: string; content: unknown[] }[])[0]!;
+  assert.equal(result.type, 'tool_result');
+  assert.deepEqual(result.content.slice(1), [placeholder]);
+  assert.match((result.content[0] as { text: string }).text, new RegExp(doc));
+  assert.deepEqual(getChat(s.db, s.chatId)!.messages[1]!.tools.map((t) => t.label), ['Document pages', 'Categories']);
+});

@@ -14,6 +14,7 @@ import { getPerson, listPeople } from '../src/people.ts';
 import { getJob, getProfile, listJobs, taxYears } from '../src/profile.ts';
 import { project, whatIf } from '../src/tax/projection.ts';
 import { buildLots, lotsView } from '../src/tax/lots.ts';
+import { linkDocument, saveDocument } from '../src/documents.ts';
 import { makeTestDeps, seedAccount, seedCategory, seedPerson, seedTxn } from './helpers.ts';
 
 function setup() {
@@ -333,4 +334,55 @@ test('tax_projection without a year uses the first open year', () => {
   assert.equal(call(deps, 'tax_projection', {}, UNLOCKED).year, 2025);
   deps.now = () => new Date('2026-06-10T12:00:00Z');
   assert.equal(call(deps, 'tax_projection', {}, UNLOCKED).year, 2026);
+});
+
+function withDocument() {
+  const s = setup();
+  const { db } = s;
+  db.prepare("INSERT INTO jobs (id, employer, status, created_at, updated_at) VALUES ('j1', 'SYNTHETIC EMPLOYER', 'current', 'x', 'x')").run();
+  db.prepare(`INSERT INTO pay_stubs (id, job_id, pay_date, gross_cents, federal_cents, state_cents, social_security_cents, medicare_cents,
+    retirement_cents, other_deductions_cents, net_cents, created_at) VALUES ('s1', 'j1', '2026-03-15', 100, 10, 5, 6, 2, 5, 2, 70, 'x')`).run();
+  db.prepare("INSERT INTO state_w4s (job_id, state, updated_at) VALUES ('j1', 'XA', 'x')").run();
+  const pages = [1, 2, 3, 4, 5].map((n) => Buffer.from([0xff, 0xd8, n]));
+  const stubDoc = saveDocument(db, 'pay_stub', pages, new Date('2026-03-16T12:00:00Z'));
+  linkDocument(db, stubDoc, 'pay_stub', 's1');
+  const formDoc = saveDocument(db, 'state_w4', pages.slice(0, 1), new Date('2026-03-17T12:00:00Z'));
+  linkDocument(db, formDoc, 'state_w4', 'j1:XA');
+  return { ...s, stubDoc, formDoc, pages };
+}
+
+test('documents lists kept documents with a short description of each linked record, filtered by record or kind', () => {
+  const { deps, stubDoc, formDoc } = withDocument();
+  const all = call(deps, 'documents', {}, UNLOCKED);
+  assert.deepEqual(all.documents.map((d: { id: string }) => d.id), [formDoc, stubDoc]);
+  assert.deepEqual(all.documents[1].links, [{ recordType: 'pay_stub', recordId: 's1', description: 'Pay stub 2026-03-15, SYNTHETIC EMPLOYER' }]);
+  assert.deepEqual(all.documents[0].links, [{ recordType: 'state_w4', recordId: 'j1:XA', description: 'State W-4 XA, SYNTHETIC EMPLOYER' }]);
+  assert.deepEqual(call(deps, 'documents', { recordType: 'pay_stub', recordId: 's1' }, UNLOCKED).documents.map((d: { id: string }) => d.id), [stubDoc]);
+  assert.deepEqual(call(deps, 'documents', { kind: 'state_w4' }, UNLOCKED).documents.map((d: { id: string }) => d.id), [formDoc]);
+  assert.equal(runTool(deps, 'documents', { recordType: 'pay_stub' }, UNLOCKED).isError, true);
+  assert.deepEqual([toolLabel('documents', {}), toolLabel('document_pages', { id: stubDoc })], ['Documents', 'Document pages']);
+});
+
+test('document_pages returns JPEG image blocks and a stored form with placeholders; at most 4 pages', () => {
+  const { deps, stubDoc, pages } = withDocument();
+  const r = runTool(deps, 'document_pages', { id: stubDoc, pages: [2, 5] }, UNLOCKED);
+  assert.equal(r.isError, false);
+  assert.equal(r.profile, true);
+  assert.match(r.content, new RegExp(`${stubDoc}.*pages 2, 5 of 5`));
+  assert.deepEqual(r.images!.map((i) => i.block), [2, 5].map((n) => ({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: pages[n - 1]!.toString('base64') } })));
+  assert.deepEqual(r.images!.map((i) => i.stored), [2, 5].map((n) => ({ type: 'text', text: `[document pages shown earlier: ${stubDoc} p.${n}]` })));
+  assert.equal(runTool(deps, 'document_pages', { id: stubDoc }, UNLOCKED).images!.length, 4, 'no pages: the first 4');
+  const five = runTool(deps, 'document_pages', { id: stubDoc, pages: [1, 2, 3, 4, 5] }, UNLOCKED);
+  assert.deepEqual([five.isError, five.images], [true, undefined]);
+  const missing = runTool(deps, 'document_pages', { id: stubDoc, pages: [6] }, UNLOCKED);
+  assert.deepEqual([missing.isError, /6/.test(missing.content)], [true, true]);
+  assert.equal(runTool(deps, 'document_pages', { id: 'nope' }, UNLOCKED).isError, true);
+});
+
+test('document tools refuse while the profile is locked', () => {
+  const { deps, stubDoc } = withDocument();
+  for (const [name, input] of [['documents', {}], ['document_pages', { id: stubDoc }]] as const) {
+    const r = runTool(deps, name, input);
+    assert.deepEqual([r.isError, /financial profile is locked/.test(r.content), r.images], [true, true, undefined]);
+  }
 });

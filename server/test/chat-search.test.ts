@@ -135,8 +135,8 @@ test('read_chat cuts an oversized message and keeps the newest ones', () => {
   assert.equal(cut.messages.at(-1).role, 'assistant');
 });
 
-test('past-chat tool descriptions say nothing about cents', () => {
-  for (const t of TOOLS) assert.equal(/integer cents/.test(t.description), !['search_chats', 'read_chat'].includes(t.name), t.name);
+test('past-chat and document tool descriptions say nothing about cents', () => {
+  for (const t of TOOLS) assert.equal(/integer cents/.test(t.description), !['search_chats', 'read_chat', 'documents', 'document_pages'].includes(t.name), t.name);
 });
 
 test('search_chats without query lists recent chats newest first with their first question, leaving out the current one and empty chats', () => {
