@@ -22,19 +22,32 @@ export function purgeUnlinked(db: Db, now: Date): number {
     .run(new Date(now.getTime() - DAY_MS).toISOString()).changes;
 }
 
-/** Links a save to the document it was read from; no documentId is a no-op. Call inside the save's transaction. */
+const recordTypeOf = (kind: ProfileKind): DocumentRecordType => (kind === 'offer' ? 'job' : kind);
+const orphan = (db: Db, id: string) => db.prepare('DELETE FROM documents WHERE id = ? AND NOT EXISTS (SELECT 1 FROM document_links WHERE document_id = ?)').run(id, id);
+
+/** Links a save to the document it was read from (of the record's kind); no documentId is a no-op. Call inside the save's transaction. */
 export function linkDocument(db: Db, documentId: string | undefined, recordType: DocumentRecordType, recordId: string): void {
   if (documentId === undefined) return;
-  if (!db.prepare('SELECT 1 FROM documents WHERE id = ?').get(documentId)) throw new ApiError(400, 'INVALID_REQUEST', 'documentId: unknown document', 'documentId');
+  const kind = db.prepare('SELECT kind FROM documents WHERE id = ?').pluck().get(documentId) as ProfileKind | undefined;
+  if (!kind) throw new ApiError(400, 'INVALID_REQUEST', 'documentId: unknown document', 'documentId');
+  if (recordTypeOf(kind) !== recordType) throw new ApiError(400, 'INVALID_REQUEST', `documentId: a ${kind} document can't be linked to a ${recordType}`, 'documentId');
   db.prepare('INSERT OR IGNORE INTO document_links (document_id, record_type, record_id) VALUES (?, ?, ?)').run(documentId, recordType, recordId);
+}
+
+/** A record that only the latest form applies to (W-4, state form, tax return): a new document replaces its link; one left with no links goes. */
+export function replaceLink(db: Db, documentId: string | undefined, recordType: DocumentRecordType, recordId: string): void {
+  if (documentId === undefined) return;
+  linkDocument(db, documentId, recordType, recordId);
+  const old = db.prepare('SELECT document_id FROM document_links WHERE record_type = ? AND record_id = ? AND document_id <> ?').pluck().all(recordType, recordId, documentId) as string[];
+  db.prepare('DELETE FROM document_links WHERE record_type = ? AND record_id = ? AND document_id <> ?').run(recordType, recordId, documentId);
+  for (const id of old) orphan(db, id);
 }
 
 /** A deleted record drops its links; a document it was the last link of goes too. Call inside the delete's transaction. */
 export function unlinkRecord(db: Db, recordType: DocumentRecordType, recordId: string): void {
   const ids = db.prepare('SELECT document_id FROM document_links WHERE record_type = ? AND record_id = ?').pluck().all(recordType, recordId) as string[];
   db.prepare('DELETE FROM document_links WHERE record_type = ? AND record_id = ?').run(recordType, recordId);
-  const orphan = db.prepare('DELETE FROM documents WHERE id = ? AND NOT EXISTS (SELECT 1 FROM document_links WHERE document_id = ?)');
-  for (const id of ids) orphan.run(id, id);
+  for (const id of ids) orphan(db, id);
 }
 
 const DOC = 'SELECT id, kind, created_at AS createdAt, page_count AS pageCount FROM documents';

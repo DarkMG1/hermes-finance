@@ -1,6 +1,5 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ProfileDrafts } from '@hermes/shared';
 import { buildApp } from '../src/app.ts';
 import { purgeUnlinked } from '../src/documents.ts';
 import { AUTH, makeTestDeps } from './helpers.ts';
@@ -53,7 +52,7 @@ test('a failed read keeps nothing', async () => {
 });
 
 test('every save route links its document; an unknown documentId is a 400 that saves nothing', async () => {
-  const { send, read, docs, job, profileReader, deps } = setup();
+  const { send, read, docs, job, deps } = setup();
   const count = (table: string) => deps.db.prepare(`SELECT COUNT(*) FROM ${table}`).pluck().get();
   const jobId = await job();
 
@@ -63,7 +62,6 @@ test('every save route links its document; an unknown documentId is a 400 that s
   assert.deepEqual((await docs('pay_stub', a)).map((d) => d.id), [stubs]);
   assert.deepEqual((await docs('pay_stub', b)).map((d) => d.id), [stubs]);
 
-  profileReader.next = { kind: 'tax_form', model: 'fake-model', uncertain: [], draft: ProfileDrafts.tax_form.parse({}) };
   const formDoc = await read(1, 'tax_form');
   const form = (await send('POST', '/v1/tax-forms', { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 100, documentId: formDoc })).json().id as string;
   assert.deepEqual((await docs('tax_form', form)).map((d) => d.id), [formDoc]);
@@ -113,13 +111,13 @@ test('deleting a record keeps a document still linked elsewhere; the last link t
   assert.ok(!exists(doc));
 
   // the other record deletes, each the last link of its document
-  const formDoc = await read();
+  const formDoc = await read(1, 'tax_form');
   const form = (await send('POST', '/v1/tax-forms', { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 100, documentId: formDoc })).json().id as string;
-  const returnDoc = await read();
+  const returnDoc = await read(1, 'tax_return');
   const ret = (await send('PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal', documentId: returnDoc })).json().id as string;
-  const w4Doc = await read();
+  const w4Doc = await read(1, 'w4');
   await send('PUT', `/v1/jobs/${jobId}/w4`, { filingStatus: 'single', documentId: w4Doc });
-  const stateDoc = await read();
+  const stateDoc = await read(1, 'state_w4');
   await send('PUT', `/v1/jobs/${jobId}/state-w4/XA`, { allowances: 1, documentId: stateDoc });
   await send('DELETE', `/v1/tax-forms/${form}`);
   await send('DELETE', `/v1/tax-returns/${ret}`);
@@ -127,26 +125,74 @@ test('deleting a record keeps a document still linked elsewhere; the last link t
   await send('DELETE', `/v1/jobs/${jobId}/state-w4/XA`);
   assert.deepEqual([formDoc, returnDoc, w4Doc, stateDoc].map(exists), [false, false, false, false]);
 
-  // a job's delete takes its W-4 and state forms with it, and their documents
-  const offerDoc = await read();
+  // a job's delete takes its W-4 and state forms with it, and their documents; its pay stubs stay (unassigned), and so does their document
+  const offerDoc = await read(1, 'offer');
   const offer = (await send('POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'offered', documentId: offerDoc })).json().id as string;
-  const w4b = await read();
+  const w4b = await read(1, 'w4');
   await send('PUT', `/v1/jobs/${offer}/w4`, { filingStatus: 'single', documentId: w4b });
-  const stateB = await read();
+  const stateB = await read(1, 'state_w4');
   await send('PUT', `/v1/jobs/${offer}/state-w4/XB`, { allowances: 1, documentId: stateB });
-  const shared = await read();
-  await send('PUT', `/v1/jobs/${offer}/state-w4/XA`, { allowances: 1, documentId: shared });
-  await send('POST', '/v1/tax-forms', { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 100, documentId: shared });
+  const stubs = await read(2);
+  for (const payDate of ['2026-02-27', '2026-03-13']) await send('POST', '/v1/pay-stubs', { jobId: offer, payDate, grossCents: 2000, netCents: 2000, documentId: stubs });
   assert.equal((await send('DELETE', `/v1/jobs/${offer}`)).statusCode, 200);
-  assert.deepEqual([offerDoc, w4b, stateB, shared].map(exists), [false, false, false, true]);
-  assert.deepEqual((await get(`/v1/documents/${shared}`)).json().links.map((l: { recordType: string }) => l.recordType), ['tax_form']);
+  assert.deepEqual([offerDoc, w4b, stateB, stubs].map(exists), [false, false, false, true]);
+  assert.deepEqual((await get(`/v1/documents/${stubs}`)).json().links.map((l: { recordType: string }) => l.recordType), ['pay_stub', 'pay_stub']);
+});
+
+test('re-saving a W-4, state form or tax return with a new document replaces its link; the same document re-sent stays', async () => {
+  const { send, read, exists, job, docs, deps } = setup();
+  const jobId = await job();
+  for (const [kind, url, body, recordId] of [
+    ['w4', `/v1/jobs/${jobId}/w4`, { filingStatus: 'single' }, () => jobId],
+    ['state_w4', `/v1/jobs/${jobId}/state-w4/XA`, { allowances: 1 }, () => `${jobId}:XA`],
+    ['tax_return', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal' }, () => deps.db.prepare("SELECT id FROM tax_returns WHERE year = 2025").pluck().get() as string],
+  ] as const) {
+    const first = await read(1, kind);
+    assert.equal((await send('PUT', url, { ...body, documentId: first })).statusCode, 200, kind);
+    assert.equal((await send('PUT', url, { ...body, documentId: first })).statusCode, 200, kind);
+    assert.deepEqual((await docs(kind, recordId())).map((d) => d.id), [first], `${kind}: the same document re-sent keeps its link`);
+    const second = await read(1, kind);
+    await send('PUT', url, { ...body, documentId: second });
+    assert.deepEqual((await docs(kind, recordId())).map((d) => d.id), [second], kind);
+    assert.ok(!exists(first), `${kind}: the replaced document, linked nowhere else, goes`);
+  }
+  // a replaced document still linked to another record stays
+  const other = await job();
+  const shared = await read(1, 'w4');
+  await send('PUT', `/v1/jobs/${jobId}/w4`, { filingStatus: 'single', documentId: shared });
+  await send('PUT', `/v1/jobs/${other}/w4`, { filingStatus: 'single', documentId: shared });
+  await send('PUT', `/v1/jobs/${jobId}/w4`, { filingStatus: 'single', documentId: await read(1, 'w4') });
+  assert.deepEqual((await docs('w4', other)).map((d) => d.id), [shared]);
+  assert.equal((await docs('w4', jobId)).length, 1);
+});
+
+test('a document of another kind is a 400 that saves nothing', async () => {
+  const { send, read, job, deps } = setup();
+  const count = (table: string) => deps.db.prepare(`SELECT COUNT(*) FROM ${table}`).pluck().get();
+  const jobId = await job();
+  const stub = await read(1, 'pay_stub');
+  const offer = await read(1, 'offer');
+  const before = ['tax_forms', 'tax_returns', 'jobs', 'w4s', 'state_w4s', 'pay_stubs', 'document_links'].map(count);
+  for (const [method, url, body, documentId] of [
+    ['POST', '/v1/tax-forms', { year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER', amountCents: 100 }, stub],
+    ['PUT', '/v1/tax-returns', { year: 2025, jurisdiction: 'federal' }, stub],
+    ['POST', '/v1/jobs', { employer: 'SYNTHETIC EMPLOYER', status: 'offered' }, stub],
+    ['PUT', `/v1/jobs/${jobId}/w4`, { filingStatus: 'single' }, offer],
+    ['PUT', `/v1/jobs/${jobId}/state-w4/XA`, { allowances: 1 }, stub],
+    ['POST', '/v1/pay-stubs', { payDate: '2026-01-02', grossCents: 1000, netCents: 1000 }, offer],
+  ] as const) {
+    const res = await send(method, url, { ...body, documentId });
+    assert.equal(res.statusCode, 400, url);
+    assert.equal(res.json().field, 'documentId', url);
+  }
+  assert.deepEqual(['tax_forms', 'tax_returns', 'jobs', 'w4s', 'state_w4s', 'pay_stubs', 'document_links'].map(count), before);
 });
 
 test('unlinked documents older than 24 hours are purged on each read and at startup; linked ones stay', async () => {
   const { deps, send, read, exists, job } = setup();
   const t0 = Date.parse('2026-03-15T12:00:00Z');
   const old = await read();
-  const kept = await read();
+  const kept = await read(1, 'w4');
   await send('PUT', `/v1/jobs/${await job()}/w4`, { filingStatus: 'single', documentId: kept });
   deps.now = () => new Date(t0 + 24 * 3_600_000);
   const young = await read();
@@ -163,7 +209,7 @@ test('the list is newest first and filters by record; DELETE drops the pages and
   const jobId = await job();
   const first = await read();
   deps.now = () => new Date('2026-03-15T13:00:00Z');
-  const second = await read(2);
+  const second = await read(2, 'w4');
   await send('PUT', `/v1/jobs/${jobId}/w4`, { filingStatus: 'single', documentId: second });
   const all = (await get('/v1/documents')).json().documents as { id: string; pageCount: number; links: unknown[] }[];
   assert.deepEqual(all.map((d) => [d.id, d.pageCount, d.links]), [[second, 2, [{ recordType: 'w4', recordId: jobId }]], [first, 1, []]]);

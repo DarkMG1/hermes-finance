@@ -4,7 +4,7 @@ import { CreateJobBody, DocumentRecordType, GrantBody, LinkPayStubBody, LotEntry
   RothContributionBody, StateW4Body, TaxFormBody, TaxInputsBody, TaxReturnBody, TaxScenarioBody, TaxWhatIfBody, W4Body } from '@hermes/shared';
 import type { Deps } from '../deps.ts';
 import { localDay } from '../days.ts';
-import { documentPage, getDocument, linkDocument, listDocuments, purgeUnlinked, saveDocument, unlinkRecord } from '../documents.ts';
+import { documentPage, getDocument, linkDocument, listDocuments, purgeUnlinked, replaceLink, saveDocument, unlinkRecord } from '../documents.ts';
 import { ApiError } from '../errors.ts';
 import { idempotentWrite } from '../idempotency.ts';
 import { readProfile } from '../profile-reader.ts';
@@ -193,7 +193,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
         extra_withholding_cents, exempt, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(req.params.id, w.signedOn ?? null, w.filingStatus ?? null,
         bit(w.multipleJobs), w.dependentsCents ?? null, w.otherIncomeCents ?? null, w.deductionsCents ?? null, w.extraWithholdingCents ?? null, bit(w.exempt),
         deps.now().toISOString());
-      linkDocument(db, w.documentId, 'w4', req.params.id);
+      replaceLink(db, w.documentId, 'w4', req.params.id);
       return { status: 200, body: getW4(db, req.params.id) };
     });
     return reply.code(r.status).send(r.body);
@@ -218,7 +218,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       db.prepare(`INSERT OR REPLACE INTO state_w4s (job_id, state, signed_on, filing_status, allowances, additional_allowances, extra_withholding_cents, exempt,
         updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(req.params.id, state, w.signedOn ?? null, w.filingStatus ?? null, w.allowances ?? null,
         w.additionalAllowances ?? null, w.extraWithholdingCents ?? null, w.exempt == null ? null : Number(w.exempt), deps.now().toISOString());
-      linkDocument(db, w.documentId, 'state_w4', `${req.params.id}:${state}`);
+      replaceLink(db, w.documentId, 'state_w4', `${req.params.id}:${state}`);
       return { status: 200, body: getStateW4(db, req.params.id, state) };
     });
     return reply.code(r.status).send(r.body);
@@ -329,7 +329,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
         ON CONFLICT (year, jurisdiction) DO UPDATE SET ${RETURN_COLS.map((c) => `${c} = excluded.${c}`).join(', ')}, updated_at = excluded.updated_at`)
         .run(randomUUID(), ...returnValues({ ...getReturn(db, body.year, body.jurisdiction), ...body }), now, now);
       const saved = getReturn(db, body.year, body.jurisdiction)!;
-      linkDocument(db, body.documentId, 'tax_return', saved.id);
+      replaceLink(db, body.documentId, 'tax_return', saved.id);
       return { status: 200, body: saved };
     });
     return reply.code(r.status).send(r.body);
