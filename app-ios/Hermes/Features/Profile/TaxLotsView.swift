@@ -12,12 +12,15 @@ struct TaxLotsView: View {
         List {
             InlineError(message: error)
             if let lots {
-                let accounts = Array(Set(lots.lots.map(\.accountId)).union(lots.methods.keys)).sorted { model.accountName($0) < model.accountName($1) }
+                let accounts = Array(Set(lots.lots.map(\.accountId)).union(lots.methods.keys).union(lots.unresolved.map(\.accountId)))
+                    .sorted { model.accountName($0) < model.accountName($1) }
                 if accounts.isEmpty { Text("No investment lots").textStyle(.subhead, color: Palette.secondaryText) }
                 ForEach(accounts, id: \.self) { account in
                     Section(model.accountName(account)) {
-                        LotMethodRow(accountId: account, method: lots.methods[account], inferred: lots.inferred[account] ?? true) { await load() }
+                        LotMethodRow(accountId: account, method: lots.methods[account], inferred: lots.inferred[account] ?? true,
+                                     matched: lots.basisMatched[account] ?? true) { await load() }
                         ForEach(lots.lots.filter { $0.accountId == account }) { LotRow(lot: $0) { await load() } }
+                        ForEach(lots.unresolved.filter { $0.accountId == account }, id: \.securityId) { UnresolvedRow(shares: $0) { await load() } }
                     }
                 }
             } else if error == nil {
@@ -48,6 +51,8 @@ private struct LotMethodRow: View {
     let accountId: String
     let method: String?
     let inferred: Bool
+    /// false: no method matched the cost basis, so FIFO is the default
+    let matched: Bool
     let onChange: () async -> Void
     @State private var writes = WriteGuard()
     /// the method of a write whose outcome is unknown: a retry of it reuses its key
@@ -62,7 +67,8 @@ private struct LotMethodRow: View {
             }
             if let method {
                 let label = Self.methods.first { $0.value == method }?.label ?? method
-                Text(inferred ? "\(label), inferred from the cost basis" : "\(label), set by you").textStyle(.caption, color: Palette.secondaryText)
+                let how = !inferred ? "set by you" : matched ? "inferred from the cost basis" : "the default: the cost basis matches no method"
+                Text("\(label), \(how)").textStyle(.caption, color: Palette.secondaryText)
             }
             InlineError(message: error)
         }
@@ -91,7 +97,6 @@ private struct LotMethodRow: View {
 
 /// A lot; an unverified one offers "Enter date and cost", and one the owner entered swipes to delete.
 private struct LotRow: View {
-    @Environment(AppModel.self) private var model
     let lot: TaxLot
     let onChange: () async -> Void
     @State private var entering = false
@@ -108,12 +113,7 @@ private struct LotRow: View {
         }
         .listRowBackground(unverified ? Palette.loss.opacity(0.15) : nil)
         .sheet(isPresented: $entering) {
-            EditForm(title: "Enter date and cost", fields: Self.fields, original: LotDraft(quantity: lot.quantity)) { draft, key in
-                guard let date = draft.acquiredOn, let quantity = draft.quantity, let cost = draft.costCents else { return }
-                try await model.client?.addTaxLot(TaxLotBody(accountId: lot.accountId, securityId: lot.securityId, acquiredOn: date,
-                                                             quantity: quantity, costCents: cost), idempotencyKey: key)
-                await onChange()
-            }
+            EnterLotForm(accountId: lot.accountId, securityId: lot.securityId, quantity: lot.quantity, onChange: onChange)
         }
         // entered lots carry their own id; the seeded unverified lot and lots from the history can't be deleted
         if lot.status != "known", !lot.id.hasPrefix("unverified:") {
@@ -123,6 +123,43 @@ private struct LotRow: View {
             }
         } else {
             row
+        }
+    }
+}
+
+/// Shares past sales took from before the history: entering their date and cost settles those sales' cost.
+private struct UnresolvedRow: View {
+    let shares: TaxUnresolvedShares
+    let onChange: () async -> Void
+    @State private var entering = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.xs) {
+            ListRow(title: "\(shares.ticker ?? "Security") · \(shares.quantity.formatted()) shares sold", subtitle: "Date and cost unknown")
+            Button("Enter date and cost") { entering = true }
+            Text("Held before the history: those sales' cost is unknown").textStyle(.caption, color: Palette.loss)
+        }
+        .listRowBackground(Palette.loss.opacity(0.15))
+        .sheet(isPresented: $entering) {
+            EnterLotForm(accountId: shares.accountId, securityId: shares.securityId, quantity: shares.quantity, onChange: onChange)
+        }
+    }
+}
+
+/// A lot for shares held before the history.
+private struct EnterLotForm: View {
+    @Environment(AppModel.self) private var model
+    let accountId: String
+    let securityId: String
+    let quantity: Double
+    let onChange: () async -> Void
+
+    var body: some View {
+        EditForm(title: "Enter date and cost", fields: Self.fields, original: LotDraft(quantity: quantity)) { draft, key in
+            guard let date = draft.acquiredOn, let quantity = draft.quantity, let cost = draft.costCents else { return }
+            try await model.client?.addTaxLot(TaxLotBody(accountId: accountId, securityId: securityId, acquiredOn: date,
+                                                         quantity: quantity, costCents: cost), idempotencyKey: key)
+            await onChange()
         }
     }
 
