@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { answer, MAX_PAUSES, MAX_ROUNDS, type ChatEvent } from '../src/chat/agent.ts';
+import { answer, MAX_ANSWER_MICROS, MAX_PAUSES, MAX_ROUNDS, type ChatEvent } from '../src/chat/agent.ts';
 import { addUserMessage, createChat, dropFailedTail, getChat, replay, saveAssistant, startAssistant } from '../src/chat/store.ts';
 import { runTool } from '../src/chat/tools.ts';
 import { toolLabel } from '../src/chat/labels.ts';
@@ -613,4 +613,22 @@ test('replayed blocks the API dropped are logged from message_start and message_
   try { await s.run(); } finally { console.warn = warn; }
   const change = '[hermes] chat history changed: thinking_dropped/prefix_binding_mismatch at messages.1.content.0';
   assert.deepEqual(lines, [change, '[hermes] chat tool input was not JSON name=categories', change]);
+});
+
+test('an answer past the cost cap makes its next call the last one and saves what it wrote; a pause past the cap does not resume', async () => {
+  // priced as Opus: $4 per million input tokens, so this round alone passes the cap
+  const pricey = { type: 'message_start', message: { usage: { input_tokens: Math.ceil(MAX_ANSWER_MICROS / 4) + 1 } } };
+  const s = setup([[pricey, ...tool(0, 'tu1', 'categories', {}), ...end('tool_use')], [start(), ...text(0, 'What I found.'), ...end('end_turn')]]);
+  await s.run();
+  assert.equal(s.fake.requests.length, 2);
+  assert.equal(s.fake.requests[0]!.tool_choice, undefined);
+  assert.deepEqual(s.fake.requests[1]!.tool_choice, { type: 'none' });
+  assert.deepEqual((lastMessage(s.fake.requests[1]!).content as unknown[]).at(-1), { type: 'text', text: 'Answer now with what you have; no more tools.' });
+  const msg = getChat(s.db, s.chatId)!.messages[1]!;
+  assert.deepEqual([msg.status, msg.text], ['done', 'What I found.']);
+
+  const p = setup([[pricey, ...text(0, 'So far.'), ...search(1, 'srv1', 'SYNTHETIC QUERY'), ...end('pause_turn')], [start(), ...text(0, 'More.'), ...end('end_turn')]]);
+  await p.run();
+  assert.equal(p.fake.requests.length, 1);
+  assert.equal(getChat(p.db, p.chatId)!.messages[1]!.text, 'So far.');
 });

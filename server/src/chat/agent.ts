@@ -10,6 +10,8 @@ export type ChatEvent = { type: 'tool'; name: string; label: string; input: Reco
 export const MAX_ROUNDS = 20;
 /** Continuations of a long server-side search or code run (pause_turn): counted apart so they don't use up the tool rounds. */
 export const MAX_PAUSES = 10;
+/** Past this an answer starts no new tool round or resumed search: its next call is the last, so it writes up what it has ($5). */
+export const MAX_ANSWER_MICROS = 5_000_000;
 const MAX_CHARTS = 2;
 
 type Block = Record<string, unknown>;
@@ -103,7 +105,7 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
     const claude = deps.claude;
     if (!claude) throw new ClaudeError('AI_NOT_CONFIGURED');
     for (let rounds = 0, pauses = 0; ;) {
-      const last = rounds === MAX_ROUNDS - 1;
+      const last = rounds === MAX_ROUNDS - 1 || cost > MAX_ANSWER_MICROS;
       // tools stay on the last call (history holds tool_use blocks and the cache prefix starts with tools); tool_choice none forbids new calls.
       // The nudge joins the stored tool results (roles keep alternating, and later requests resend exactly what this one sent); after a
       // paused search the request ends with that answer so the server resumes it, and there's no tool result to join.
@@ -176,7 +178,7 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
       content = [];
       // the server paused a long search: send the answer so far back and it carries on (on the last call too: tool_choice none stays)
       if (stop === 'pause_turn') {
-        if (++pauses <= MAX_PAUSES) continue;
+        if (++pauses <= MAX_PAUSES && cost <= MAX_ANSWER_MICROS) continue;
         if (!turn.some((m) => m.role === 'assistant' && (m.content as Block[]).some((b) => b.type === 'text'))) throw new ClaudeError('INCOMPLETE');
         break;
       }
