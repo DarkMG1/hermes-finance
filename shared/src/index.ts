@@ -481,10 +481,13 @@ const JobFields = z.object({
 const datesInOrder = (j: { startDate?: string | null; endDate?: string | null }) => !j.startDate || !j.endDate || j.startDate <= j.endDate;
 export const Job = JobFields.extend({ id: Id, createdAt: z.string(), updatedAt: z.string() });
 export type Job = z.infer<typeof Job>;
-export const CreateJobBody = JobFields.partial().required({ employer: true, status: true }).strict()
+/** documentId: the kept document this record was read from (POST /v1/profile/read returns it); the save links them */
+const DocRef = { documentId: Id.optional() };
+export const CreateJobBody = JobFields.partial().required({ employer: true, status: true }).extend(DocRef).strict()
   .refine(datesInOrder, { message: 'must be on or after startDate', path: ['endDate'] });
 export type CreateJobBody = z.infer<typeof CreateJobBody>;
-export const PatchJobBody = JobFields.partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+/** documentId: a re-read's document, replacing the job's offer document */
+export const PatchJobBody = JobFields.partial().extend(DocRef).strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
 export type PatchJobBody = z.infer<typeof PatchJobBody>;
 
 const GrantFields = z.object({
@@ -527,7 +530,7 @@ const STUB_PARTS = ['federalCents', 'stateCents', 'socialSecurityCents', 'medica
 export const stubNet = (s: Partial<Record<(typeof STUB_PARTS)[number], number | null>> & { grossCents: number }) =>
   STUB_PARTS.reduce((n, k) => (k === 'otherPayCents' ? n + (s[k] ?? 0) : n - (s[k] ?? 0)), s.grossCents);
 /** Left-out deduction lines and other pay are 0; gross minus every line plus other pay must equal net within a cent. PATCH checks the merged stub. */
-export const PayStubBody = PayStubFields.partial().required({ payDate: true, grossCents: true, netCents: true }).strict()
+export const PayStubBody = PayStubFields.partial().required({ payDate: true, grossCents: true, netCents: true }).extend(DocRef).strict()
   .refine((s) => Math.abs(stubNet(s) - s.netCents) <= 1, { message: 'gross minus deductions plus other pay must equal net', path: ['netCents'] })
   .refine((s) => s.ytdGrossCents == null || s.ytdGrossCents >= s.grossCents, { message: 'must be at least grossCents', path: ['ytdGrossCents'] })
   .refine((s) => !s.periodStart || !s.periodEnd || s.periodStart <= s.periodEnd, { message: 'must be on or after periodStart', path: ['periodEnd'] });
@@ -535,7 +538,7 @@ export type PayStubBody = z.infer<typeof PayStubBody>;
 /** a cleared deduction line (null) is 0, as when a create leaves it out */
 export const PatchPayStubBody = PayStubFields.partial()
   .extend(Object.fromEntries(STUB_PARTS.map((k) => [k, Money.nullable().transform((v) => v ?? 0).optional()])) as { [K in typeof STUB_PARTS[number]]: z.ZodOptional<z.ZodPipe<z.ZodNullable<typeof Money>, z.ZodTransform<number, number | null>>> })
-  .strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+  .extend(DocRef).strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
 export type PatchPayStubBody = z.infer<typeof PatchPayStubBody>;
 /** The stub's deposits, replacing any linked before; they add up to its net exactly. Empty unlinks. */
 export const LinkPayStubBody = z.object({ transactionIds: z.array(Id).max(10) }).strict();
@@ -555,9 +558,9 @@ const TaxFormFields = z.object({
 export const TaxForm = TaxFormFields.extend({ id: Id, createdAt: z.string() });
 export type TaxForm = z.infer<typeof TaxForm>;
 /** year runs from 2000 to the owner's next year */
-export const TaxFormBody = TaxFormFields.partial().required({ year: true, kind: true, payer: true, amountCents: true }).strict();
+export const TaxFormBody = TaxFormFields.partial().required({ year: true, kind: true, payer: true, amountCents: true }).extend(DocRef).strict();
 export type TaxFormBody = z.infer<typeof TaxFormBody>;
-export const PatchTaxFormBody = TaxFormFields.partial().strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
+export const PatchTaxFormBody = TaxFormFields.partial().extend(DocRef).strict().refine((b) => Object.keys(b).length > 0, { message: 'at least one field is required' });
 export type PatchTaxFormBody = z.infer<typeof PatchTaxFormBody>;
 
 const TaxReturnFields = z.object({
@@ -575,7 +578,7 @@ const TaxReturnFields = z.object({
 export const TaxReturn = TaxReturnFields.extend({ id: Id, createdAt: z.string(), updatedAt: z.string() });
 export type TaxReturn = z.infer<typeof TaxReturn>;
 /** Upserts by year + jurisdiction: left-out fields keep their value; null clears. */
-export const TaxReturnBody = TaxReturnFields.partial().required({ year: true, jurisdiction: true }).strict();
+export const TaxReturnBody = TaxReturnFields.partial().required({ year: true, jurisdiction: true }).extend(DocRef).strict();
 export type TaxReturnBody = z.infer<typeof TaxReturnBody>;
 /** Newest year first; effectiveRate is the federal return's totalTax / totalIncome (4 places), null without one. */
 export const TaxYears = z.object({
@@ -681,7 +684,7 @@ const W4Fields = z.object({
 export const W4 = W4Fields.extend({ jobId: Id, updatedAt: z.string() });
 export type W4 = z.infer<typeof W4>;
 /** Replaces the job's W-4: a left-out field is null. */
-export const W4Body = W4Fields.partial().strict();
+export const W4Body = W4Fields.partial().extend(DocRef).strict();
 export type W4Body = z.infer<typeof W4Body>;
 
 /** A job's state withholding certificate (California's DE-4 and the like), one per state: allowances rather than the W-4's steps. */
@@ -694,7 +697,7 @@ const StateW4Fields = z.object({
 export const StateW4 = StateW4Fields.extend({ jobId: Id, updatedAt: z.string() });
 export type StateW4 = z.infer<typeof StateW4>;
 /** Replaces the job's form for that state: a left-out field is null. */
-export const StateW4Body = StateW4Fields.omit({ state: true }).partial().strict();
+export const StateW4Body = StateW4Fields.omit({ state: true }).partial().extend(DocRef).strict();
 export type StateW4Body = z.infer<typeof StateW4Body>;
 
 export const JobDetail = Job.extend({
@@ -723,16 +726,30 @@ export const ProfileReadBody = z.object({ kind: ProfileKind, pages: z.array(z.st
 export type ProfileReadBody = z.infer<typeof ProfileReadBody>;
 /** field names Claude is unsure of */
 export const ProfileUncertain = z.array(z.string().max(100)).max(100).default([]).catch([]);
+/** documentId: the kept pages of this read (older servers keep none). recordId: the saved record this draft updates (PATCH, or the PUT of a
+ *  W-4, state form or tax return; a W-4's is its job id, a state form's "<job id>:<state>"); absent means a new one. */
+const Matched = { ...DocRef, recordId: z.string().optional() };
 export const ProfileReadResult = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('tax_return'), draft: ProfileDrafts.tax_return, uncertain: ProfileUncertain }),
-  z.object({ kind: z.literal('tax_form'), draft: ProfileDrafts.tax_form, uncertain: ProfileUncertain }),
+  z.object({ kind: z.literal('tax_return'), draft: ProfileDrafts.tax_return, uncertain: ProfileUncertain, ...Matched }),
+  z.object({ kind: z.literal('tax_form'), draft: ProfileDrafts.tax_form, uncertain: ProfileUncertain, ...Matched }),
   /** stubs: every pay stub in the pages, in order; draft and uncertain are the first one's (what servers before 2.2.1 sent alone) */
   z.object({ kind: z.literal('pay_stub'), draft: ProfileDrafts.pay_stub, uncertain: ProfileUncertain,
     stubs: z.array(z.object({ draft: ProfileDrafts.pay_stub, uncertain: ProfileUncertain,
       /** a stub with this pay date, gross and net is already saved */
-      saved: z.boolean() })).min(1) }),
-  z.object({ kind: z.literal('offer'), draft: ProfileDrafts.offer, uncertain: ProfileUncertain }),
-  z.object({ kind: z.literal('w4'), draft: ProfileDrafts.w4, uncertain: ProfileUncertain }),
-  z.object({ kind: z.literal('state_w4'), draft: ProfileDrafts.state_w4, uncertain: ProfileUncertain }),
+      saved: z.boolean(), recordId: Matched.recordId })).min(1), ...DocRef }),
+  z.object({ kind: z.literal('offer'), draft: ProfileDrafts.offer, uncertain: ProfileUncertain, ...Matched }),
+  z.object({ kind: z.literal('w4'), draft: ProfileDrafts.w4, uncertain: ProfileUncertain, ...Matched }),
+  z.object({ kind: z.literal('state_w4'), draft: ProfileDrafts.state_w4, uncertain: ProfileUncertain, ...Matched }),
 ]);
 export type ProfileReadResult = z.infer<typeof ProfileReadResult>;
+/** a W-4's recordId is its job id; a state form's is "<job id>:<state>" */
+export const DocumentRecordType = z.enum(['tax_return', 'tax_form', 'pay_stub', 'job', 'w4', 'state_w4']);
+export type DocumentRecordType = z.infer<typeof DocumentRecordType>;
+export const DocumentLink = z.object({ recordType: DocumentRecordType, recordId: z.string() });
+export type DocumentLink = z.infer<typeof DocumentLink>;
+/** The redacted pages of one read, served one by one at /v1/documents/:id/pages/:n (n from 1). */
+export const KeptDocument = z.object({ id: Id, kind: ProfileKind, createdAt: z.string(), pageCount: z.number().int(), links: z.array(DocumentLink) });
+export type KeptDocument = z.infer<typeof KeptDocument>;
+/** newest first */
+export const KeptDocuments = z.object({ documents: z.array(KeptDocument) });
+export type KeptDocuments = z.infer<typeof KeptDocuments>;

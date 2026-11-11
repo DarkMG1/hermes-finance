@@ -193,12 +193,18 @@ struct RedactionPreview: View {
         } catch {
             let code = if case .api(_, let body) = error as? ClientError { body.code } else { "" }
             canRetry = !["AI_CREDITS_EXHAUSTED", "READER_NOT_CONFIGURED"].contains(code)
-            self.error = switch code {
-            case "UNREADABLE", "READ_FAILED": "Couldn't read this."
-            case "READ_IN_PROGRESS": "Another read is running."
-            case "READER_NOT_CONFIGURED": "Reading isn't set up on the server."
-            default: errorMessage(error)
-            }
+            self.error = Self.readProblem(error)
+        }
+    }
+
+    /// What a failed read tells the owner.
+    static func readProblem(_ error: Error) -> String {
+        let code = if case .api(_, let body) = error as? ClientError { body.code } else { "" }
+        return switch code {
+        case "UNREADABLE", "READ_FAILED": "Couldn't read this."
+        case "READ_IN_PROGRESS": "Another read is running."
+        case "READER_NOT_CONFIGURED": "Reading isn't set up on the server."
+        default: errorMessage(error)
         }
     }
 }
@@ -247,54 +253,5 @@ private struct PageCanvas: View {
         let x0 = clamp(min(a.x, b.x), size.width), x1 = clamp(max(a.x, b.x), size.width)
         let y0 = clamp(min(a.y, b.y), size.height), y1 = clamp(max(a.y, b.y), size.height)
         return Box(x: x0, y: y0, w: x1 - x0, h: y1 - y0)
-    }
-}
-
-/// Pinch to zoom up to 5×, two fingers to move; one finger stays with the content. Back to 1× on a new `page`.
-private struct ZoomView<Content: View>: UIViewRepresentable {
-    let page: Int
-    @ViewBuilder let content: Content
-
-    final class Scroll: UIScrollView, UIScrollViewDelegate {
-        let host: UIHostingController<Content>
-        var page = 0
-
-        init(content: Content) {
-            host = UIHostingController(rootView: content)
-            super.init(frame: .zero)
-            host.view.backgroundColor = .clear
-            // the scroll view is already inside the safe area; insets here would shift the page off its boxes
-            host.safeAreaRegions = []
-            addSubview(host.view)
-            delegate = self
-            minimumZoomScale = 1
-            maximumZoomScale = 5
-            showsHorizontalScrollIndicator = false
-            showsVerticalScrollIndicator = false
-            panGestureRecognizer.minimumNumberOfTouches = 2
-        }
-
-        @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
-
-        override func layoutSubviews() {
-            super.layoutSubviews()
-            // at 1× the page fills the view; zooming scales it from there
-            if zoomScale == 1, host.view.frame.size != bounds.size {
-                host.view.frame = CGRect(origin: .zero, size: bounds.size)
-                contentSize = bounds.size
-            }
-        }
-
-        func viewForZooming(in scrollView: UIScrollView) -> UIView? { host.view }
-    }
-
-    func makeUIView(context: Context) -> Scroll { Scroll(content: content) }
-
-    func updateUIView(_ view: Scroll, context: Context) {
-        view.host.rootView = content
-        if view.page != page {
-            view.page = page
-            view.setZoomScale(1, animated: false)
-        }
     }
 }

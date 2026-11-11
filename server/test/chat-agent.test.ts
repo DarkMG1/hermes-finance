@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { answer, MAX_ANSWER_MICROS, MAX_PAUSES, MAX_ROUNDS, type ChatEvent } from '../src/chat/agent.ts';
-import { addUserMessage, createChat, dropFailedTail, getChat, replay, saveAssistant, startAssistant } from '../src/chat/store.ts';
+import { addUserMessage, createChat, dropFailedTail, getChat, LOCKED_NOTE, replay, saveAssistant, startAssistant } from '../src/chat/store.ts';
+import { PROFILE_TOOLS } from '../src/chat/labels.ts';
 import { runTool } from '../src/chat/tools.ts';
 import { toolLabel } from '../src/chat/labels.ts';
 import { ClaudeError, costMicros, toCents } from '../src/chat/anthropic.ts';
@@ -517,6 +518,80 @@ test('a paused search resumes with the answer so far as the last message, and bo
   const turn = JSON.parse(s.db.prepare('SELECT content_json FROM chat_messages WHERE id = ?').pluck().get(s.assistantId) as string) as { role: string; content: { type: string }[] }[];
   assert.deepEqual(turn.map((m) => [m.role, m.content.map((b) => b.type)]), [['assistant', ['server_tool_use', 'web_search_tool_result', 'text']]]);
   assert.equal(getChat(s.db, s.chatId)!.messages[1]!.text, 'Here they are.');
+});
+
+test('document pages go to the model as images in the live answer only; the stored turn and later replays carry placeholders', async () => {
+  const s = setup([
+    [start(), ...tool(0, 'tu1', 'document_pages', { id: 'd1', pages: [1] }), ...end('tool_use')],
+    [start(), ...tool(0, 'tu2', 'categories', {}), ...end('tool_use')],
+    [start(), ...text(0, 'Done.'), ...end('end_turn')],
+  ]);
+  const doc = 'd1';
+  s.db.prepare("INSERT INTO documents (id, kind, page_count, created_at) VALUES ('d1', 'w4', 1, ?)").run(NOW);
+  s.db.prepare("INSERT INTO document_links (document_id, record_type, record_id) VALUES ('d1', 'w4', 'j1')").run();
+  s.db.prepare("INSERT INTO document_pages (document_id, idx, jpeg) VALUES ('d1', 1, ?)").run(Buffer.from([0xff, 0xd8, 0x01]));
+  await s.run();
+  const image = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: Buffer.from([0xff, 0xd8, 0x01]).toString('base64') } };
+  for (const r of [1, 2]) {
+    const sent = (bare(s.fake.requests[r]!.messages as Msg[])[2]!.content as { content: unknown[] }[])[0]!.content;
+    assert.deepEqual(sent.slice(1), [image], `round ${r + 1} resends the page`);
+  }
+  const stored = s.db.prepare('SELECT content_json FROM chat_messages WHERE id = ?').pluck().get(s.assistantId) as string;
+  assert.doesNotMatch(stored, /"image"|base64/);
+  const placeholder = { type: 'text', text: `[document pages shown earlier: ${doc} p.1]` };
+  const result = (replay(s.db, s.chatId)[2]!.content as { type: string; content: unknown[] }[])[0]!;
+  assert.equal(result.type, 'tool_result');
+  assert.deepEqual(result.content.slice(1), [placeholder]);
+  assert.match((result.content[0] as { text: string }).text, new RegExp(doc));
+  assert.deepEqual(getChat(s.db, s.chatId)!.messages[1]!.tools.map((t) => t.label), ['Document pages', 'Categories']);
+});
+
+const seedPages = (s: ReturnType<typeof setup>, n: number) => {
+  s.db.prepare("INSERT INTO documents (id, kind, page_count, created_at) VALUES ('d1', 'pay_stub', ?, ?)").run(n, NOW);
+  s.db.prepare("INSERT INTO document_links (document_id, record_type, record_id) VALUES ('d1', 'pay_stub', 's1')").run();
+  for (let i = 1; i <= n; i++) s.db.prepare("INSERT INTO document_pages (document_id, idx, jpeg) VALUES ('d1', ?, ?)").run(i, Buffer.from([0xff, 0xd8, i]));
+};
+const storedJson = (s: ReturnType<typeof setup>) => s.db.prepare('SELECT content_json FROM chat_messages WHERE id = ?').pluck().get(s.assistantId) as string;
+
+test('an answer sees at most 8 document pages; a call past that reads nothing, is an error result naming the pages left, and gets no tool line', async () => {
+  const s = setup([
+    [start(), ...tool(0, 'tu1', 'document_pages', { id: 'd1', pages: [1, 2, 3] }), ...end('tool_use')],
+    [start(), ...tool(0, 'tu2', 'document_pages', { id: 'd1', pages: [1, 2, 3, 4] }), ...end('tool_use')],
+    // page 9 doesn't exist: a call that read pages before the cap would fail as not found instead
+    [start(), ...tool(0, 'tu3', 'document_pages', { id: 'd1', pages: [4, 9] }), ...end('tool_use')],
+    [start(), ...tool(0, 'tu4', 'document_pages', { id: 'd1', pages: [5] }), ...end('tool_use')],
+    [start(), ...text(0, 'Done.'), ...end('end_turn')],
+  ]);
+  seedPages(s, 5);
+  await s.run();
+  const result = (r: number) => (lastMessage(s.fake.requests[r]!).content as { content: unknown; is_error: boolean }[])[0]!;
+  assert.deepEqual(result(3), { type: 'tool_result', tool_use_id: 'tu3', content: JSON.stringify({ error: 'at most 8 document pages per answer; 1 left' }), is_error: true });
+  assert.equal(result(4).is_error, false);
+  assert.equal((result(4).content as unknown[]).length, 2);
+  assert.equal(s.events.filter((e) => e.type === 'tool').length, 3, 'live: no line for the refused call');
+  assert.equal(getChat(s.db, s.chatId)!.messages[1]!.tools.length, 3, 'stored: no line for it either');
+});
+
+test('a stopped or failed answer after a document_pages round stores placeholders, never the images', async () => {
+  const rounds = () => [[start(), ...tool(0, 'tu1', 'document_pages', { id: 'd1' }), ...end('tool_use')], [start(), ...text(0, 'never'), ...end('end_turn')]];
+  const stopped = setup(rounds());
+  seedPages(stopped, 2);
+  const ctl = new AbortController();
+  await answer(stopped.deps, stopped.chatId, stopped.assistantId, (e) => { if (e.type === 'tool') ctl.abort(); }, ctl.signal);
+  const failed = setup(rounds());
+  seedPages(failed, 2);
+  failed.fake.fail = { round: 1, code: 'STREAM_overloaded_error' };
+  await failed.run();
+  for (const [s, status] of [[stopped, 'stopped'], [failed, 'failed']] as const) {
+    assert.equal(getChat(s.db, s.chatId)!.messages[1]!.status, status);
+    const json = storedJson(s);
+    assert.doesNotMatch(json, /"image"|base64/, status);
+    assert.match(json, /document pages shown earlier: d1 p\.2/, status);
+  }
+});
+
+test('the lock note names every profile tool', () => {
+  for (const name of PROFILE_TOOLS) assert.match(LOCKED_NOTE, new RegExp(`\\b${name}\\b`), name);
 });
 
 test('the next round resends every block of the last one exactly as streamed: thinking, code runs and the searches they made, and tool inputs', async () => {

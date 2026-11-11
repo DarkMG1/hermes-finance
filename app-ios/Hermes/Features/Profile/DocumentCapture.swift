@@ -135,7 +135,7 @@ private struct DocumentCapture: ViewModifier {
             }
             .alert(unreadable ?? "", isPresented: Binding(get: { unreadable != nil }, set: { if !$0 { unreadable = nil } })) {}
             // every way out, a swipe included, refreshes: something may have been saved
-            .sheet(item: $capture, onDismiss: { Task { await onSaved() } }, content: ProfileCaptureFlow.init)
+            .sheet(item: $capture, onDismiss: { Task { await onSaved() } }, content: ProfileCaptureFlow.init(capture:))
     }
 
     private func open(_ wanted: CaptureRequest) {
@@ -179,10 +179,12 @@ extension View {
 }
 
 /// Preview and read, then the review form, once per pay stub when the pages hold several; by hand goes straight to an empty form.
-private struct ProfileCaptureFlow: View {
+/// A re-read of a kept document starts at the review, every stub included: each saves as an update of the record it matched.
+struct ProfileCaptureFlow: View {
+    @Environment(AppModel.self) private var model
     @Environment(\.profileDrafting) private var drafting
     @Environment(\.dismiss) private var dismiss
-    let capture: Capture
+    private let capture: Capture
     /// what's left to review: pay stubs already saved are skipped
     @State private var reads: [ProfileReadResult] = []
     @State private var skipped: Int?
@@ -190,13 +192,35 @@ private struct ProfileCaptureFlow: View {
     /// the job picked on the stub before, offered on the next
     @State private var jobId: String?
     @State private var byHand = false
+    /// stubs skipped as already saved whose pages aren't attached yet, each with its own key so a retry isn't applied twice
+    @State private var attach: [(read: ProfileReadResult, key: String)] = []
+    @State private var attaching = false
+    private let reread: Bool
+    private let onSaved: (() -> Void)?
+
+    fileprivate init(capture: Capture) {
+        self.capture = capture
+        reread = false
+        onSaved = nil
+    }
+
+    init(reread: ProfileReadResult, onSaved: @escaping () -> Void) {
+        capture = Capture(kind: reread.kind, pages: [], dropped: 0)
+        _reads = State(initialValue: reread.reads)
+        _skipped = State(initialValue: 0)
+        self.reread = true
+        self.onSaved = onSaved
+    }
 
     var body: some View {
         Group {
-            if at < reads.count {
+            if !attach.isEmpty {
+                attachView
+            } else if at < reads.count {
                 let read = reads[at]
                 ProfileDraftForm(kind: capture.kind, draft: read.draft, uncertain: Set(read.uncertain), step: reads.count > 1 ? (at + 1, reads.count) : nil,
-                                 jobId: jobId, note: at == 0 ? skippedNote : nil, next: at + 1 < reads.count ? { jobId = $0; at += 1 } : nil)
+                                 jobId: jobId, note: at == 0 ? skippedNote : nil, documentId: read.documentId, recordId: read.recordId,
+                                 reread: reread, onSaved: onSaved, next: at + 1 < reads.count ? { jobId = $0; at += 1 } : nil)
                     .id(at)
             } else if let skipped {
                 NavigationStack {
@@ -211,11 +235,51 @@ private struct ProfileCaptureFlow: View {
                                  onRead: { read in
                                      reads = read.reads.filter { !$0.saved }
                                      skipped = read.reads.count - reads.count
+                                     attach = read.reads.filter(\.saved).map { ($0, UUID().uuidString) }
+                                     // the spinner from the first frame, not a flash of the failure
+                                     attaching = !attach.isEmpty
+                                     Task { await keep() }
                                  }, onByHand: { byHand = true })
             }
         }
         .onAppear { drafting.wrappedValue = true }
         .onDisappear { drafting.wrappedValue = false }
+    }
+
+    /// Waits on the pages going to the stubs skipped as already saved, so what's shown next is true and the screen behind refreshes after.
+    private var attachView: some View {
+        NavigationStack {
+            VStack(spacing: Space.m) {
+                if attaching {
+                    ProgressView("Attaching the pages…")
+                } else {
+                    InlineError(message: attach.count == 1 ? "The pages weren't attached to 1 saved pay stub."
+                        : "The pages weren't attached to \(attach.count) saved pay stubs.")
+                    Button("Retry") { Task { await keep() } }
+                }
+            }
+            .padding(Space.l)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Skip") { attach = [] }.disabled(attaching) } }
+        }
+    }
+
+    /// Stubs skipped as already saved still get these pages, as a re-scan of any other record does when saved.
+    private func keep() async {
+        attaching = true
+        defer { attaching = false }
+        guard let client = model.client else { return }
+        var failed: [(read: ProfileReadResult, key: String)] = []
+        for item in attach {
+            guard let id = item.read.recordId, let documentId = item.read.documentId, case .payStub(let body, _) = item.read.draft else { continue }
+            do {
+                _ = try await client.patchPayStub(id: id, body: body, from: body, documentId: documentId, idempotencyKey: item.key)
+            } catch ClientError.api(status: 404, _) {
+                // deleted meanwhile: nothing to attach to
+            } catch {
+                failed.append(item)
+            }
+        }
+        attach = failed
     }
 
     private var skippedNote: String? {

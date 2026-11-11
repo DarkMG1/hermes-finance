@@ -246,3 +246,87 @@ import Testing
     let old = try JSONDecoder().decode(Profile.self, from: JSONSerialization.data(withJSONObject: json))
     #expect(old.fullTimeStudent == nil && old.claimedAsDependent == nil)
 }
+
+@Test func readsCarryTheirDocumentAndRecordAndAnOlderServerHasNeither() throws {
+    let reread = try decode(ProfileReadResult.self, "document-reread")
+    #expect(reread.documentId == "fixture-document" && reread.reads.map(\.recordId) == ["stub-1", nil])
+    #expect(reread.reads.map(\.documentId) == ["fixture-document", "fixture-document"])
+    #expect(try decode(ProfileReadResult.self, "profile-read-w4").recordId == "job-1")
+    #expect(try decode(ProfileReadResult.self, "profile-read-state-w4").recordId == "job-1:CA")
+    #expect(try decode(ProfileReadResult.self, "profile-read-offer").recordId == nil)
+    var json = try #require(JSONSerialization.jsonObject(with: fixture("document-reread")) as? [String: Any])
+    json.removeValue(forKey: "documentId")
+    json["stubs"] = try #require(json["stubs"] as? [[String: Any]]).map { var s = $0; s.removeValue(forKey: "recordId"); return s }
+    let old = try JSONDecoder().decode(ProfileReadResult.self, from: JSONSerialization.data(withJSONObject: json))
+    #expect(old.documentId == nil && old.reads.map(\.recordId) == [nil, nil] && old.reads.map(\.documentId) == [nil, nil])
+}
+
+@Test func keptDocumentsListGetPageDeleteAndReread() async throws {
+    let list = try fixture("documents")
+    let one = try JSONSerialization.data(withJSONObject: try #require((JSONSerialization.jsonObject(with: list) as? [String: [Any]])?["documents"]?.first))
+    let transport = FakeTransport([.success(HTTPResponse(status: 200, body: list)), .success(HTTPResponse(status: 200, body: one)),
+        .success(HTTPResponse(status: 200, body: Data([0xff, 0xd8]))), FakeTransport.json(404, #"{"code":"NOT_FOUND","message":"not found"}"#),
+        .success(HTTPResponse(status: 200, body: try fixture("document-reread"))),
+        FakeTransport.json(404, #"{"code":"NOT_FOUND","message":"not found"}"#)])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    let docs = try await client.documents(linkedTo: DocumentLink(recordType: .payStub, recordId: "stub-1"))
+    #expect(docs.map(\.id) == ["fixture-document"] && docs.first?.kind == .payStub && docs.first?.pageCount == 1)
+    #expect(docs.first?.links == [DocumentLink(recordType: .payStub, recordId: "stub-1")])
+    #expect(try await client.document(id: "d-1").createdAt == "2026-03-15T12:00:00.000Z")
+    #expect(try await client.documentPage(id: "d-1", page: 1) == Data([0xff, 0xd8]))
+    try await client.deleteDocument(id: "d-1", idempotencyKey: "k-1") // already gone: done
+    #expect(try await client.rereadDocument(id: "d-1").documentId == "fixture-document")
+    #expect(try await client.documents().isEmpty, "an older server keeps no documents")
+    let r = transport.requests
+    #expect(r.map(\.method) == ["GET", "GET", "GET", "DELETE", "POST", "GET"])
+    #expect(r.map(\.url.path) == ["/v1/documents", "/v1/documents/d-1", "/v1/documents/d-1/pages/1",
+        "/v1/documents/d-1", "/v1/documents/d-1/read", "/v1/documents"])
+    #expect(r[0].url.query == "recordType=pay_stub&recordId=stub-1" && r[5].url.query == nil)
+    #expect(r[3].headers["Idempotency-Key"] == "k-1" && r[4].headers["Idempotency-Key"] == nil && r[4].timeout == 120 && r[4].body == nil)
+}
+
+@Test func savesKeepTheReadsDocument() async throws {
+    let stub = try JSONSerialization.data(withJSONObject: try #require(
+        (JSONSerialization.jsonObject(with: fixture("job")) as? [String: Any])?["stubs"].flatMap { ($0 as? [Any])?.first }))
+    let ok = HTTPResponse(status: 200, body: Data(#"{"jobId":"job-1","state":"CA"}"#.utf8))
+    let transport = FakeTransport([.success(HTTPResponse(status: 201, body: stub)), .success(HTTPResponse(status: 200, body: stub)), .success(ok)])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    var body = PayStubBody()
+    body.payDate = "2026-03-13"
+    _ = try await client.createPayStub(body, documentId: "d-1", idempotencyKey: "k-1")
+    _ = try await client.patchPayStub(id: "stub-1", body: body, from: body, documentId: "d-1", idempotencyKey: "k-2")
+    var form = StateW4Body()
+    form.state = "CA"
+    _ = try await client.putStateW4(jobId: "job-1", body: form, documentId: "d-1", idempotencyKey: "k-3")
+    #expect(transport.requests.map { String(data: $0.body ?? Data(), encoding: .utf8) }
+        == [#"{"documentId":"d-1","payDate":"2026-03-13"}"#, #"{"documentId":"d-1"}"#, #"{"documentId":"d-1"}"#])
+}
+
+@Test func saveRetriesOnceWithoutAGoneDocument() async throws {
+    let gone = ClientError.api(status: 400, body: APIErrorBody(code: "INVALID_REQUEST", message: "unknown", field: "documentId"))
+    var calls: [String] = []
+    let saved = try await savingDocument("d-1", key: "k") { doc, key in
+        calls.append("\(doc ?? "none") \(key)")
+        if doc != nil { throw gone }
+        return 1
+    }
+    #expect(saved == 1 && calls == ["d-1 k", "none k-nodoc"])
+    let other = ClientError.api(status: 400, body: APIErrorBody(code: "INVALID_REQUEST", message: "bad", field: "payDate"))
+    await #expect(throws: other) { try await savingDocument("d-1", key: "k") { _, _ in throw other } }
+    calls = []
+    await #expect(throws: gone) { try await savingDocument(nil, key: "k") { _, key in calls.append(key); throw gone } }
+    #expect(calls == ["k"], "no document: no retry")
+}
+
+@Test func noDocumentLeavesACreateBodyAsIsAndAGoneStateFormDeleteIsDone() async throws {
+    let stub = try JSONSerialization.data(withJSONObject: try #require(
+        (JSONSerialization.jsonObject(with: fixture("job")) as? [String: Any])?["stubs"].flatMap { ($0 as? [Any])?.first }))
+    let transport = FakeTransport([.success(HTTPResponse(status: 201, body: stub)), FakeTransport.json(404, #"{"code":"NOT_FOUND","message":"not found"}"#)])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    var body = PayStubBody()
+    body.payDate = "2026-03-13"
+    _ = try await client.createPayStub(body, documentId: nil, idempotencyKey: "k-1")
+    try await client.deleteStateW4(jobId: "job-1", state: "XA", idempotencyKey: "k-2")
+    #expect(String(data: transport.requests[0].body ?? Data(), encoding: .utf8) == #"{"payDate":"2026-03-13"}"#)
+    #expect(transport.requests.map(\.method) == ["POST", "DELETE"])
+}

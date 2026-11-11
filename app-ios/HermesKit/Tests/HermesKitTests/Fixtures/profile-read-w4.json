@@ -13,5 +13,7 @@
   },
   "uncertain": [
     "multipleJobs"
-  ]
+  ],
+  "recordId": "job-1",
+  "documentId": "fixture-document"
 }

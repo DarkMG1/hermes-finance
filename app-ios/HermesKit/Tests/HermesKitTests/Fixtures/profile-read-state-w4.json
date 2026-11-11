@@ -12,5 +12,7 @@
   },
   "uncertain": [
     "allowances"
-  ]
+  ],
+  "recordId": "job-1:CA",
+  "documentId": "fixture-document"
 }

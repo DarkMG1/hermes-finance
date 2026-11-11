@@ -1,7 +1,7 @@
 import type { Deps } from '../deps.ts';
 import { ClaudeError, toCents, type Claude, type Usage } from './anthropic.ts';
-import { TOOLS, runTool } from './tools.ts';
-import { toolLabel } from './labels.ts';
+import { TOOLS, pagesWanted, runTool } from './tools.ts';
+import { SILENT_FAILS, toolLabel } from './labels.ts';
 import { chatUsesProfile, markProfile, replay, saveAssistant, type ApiMessage } from './store.ts';
 
 export type ChatEvent = { type: 'tool'; name: string; label: string; input: Record<string, unknown> } | { type: 'text'; text: string }
@@ -13,6 +13,7 @@ export const MAX_PAUSES = 10;
 /** Past this an answer starts no new tool round or resumed search: its next call is the last, so it writes up what it has ($5). */
 export const MAX_ANSWER_MICROS = 5_000_000;
 const MAX_CHARTS = 2;
+const MAX_PAGES = 8;
 
 type Block = Record<string, unknown>;
 const EPHEMERAL = { type: 'ephemeral' };
@@ -101,6 +102,11 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
   let cost = 0;
   let said = false;
   let charts = 0;
+  let pages = 0;
+  // a tool_result carrying document pages → the same result with placeholders, which is what gets stored
+  const kept = new Map<Block, Block>();
+  const save = (t: ApiMessage[], status: 'done' | 'failed' | 'stopped', code: string | null) => saveAssistant(deps.db, assistantId,
+    t.map((m) => (m.role === 'user' && Array.isArray(m.content) ? { ...m, content: m.content.map((b) => kept.get(b) ?? b) } : m)), status, code);
   try {
     const claude = deps.claude;
     if (!claude) throw new ClaudeError('AI_NOT_CONFIGURED');
@@ -189,29 +195,34 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
         content: uses.map((b) => {
           const name = b.name as string;
           const input = b.input as Record<string, unknown>;
-          const res = name === 'show_chart' && charts >= MAX_CHARTS
-            ? { content: JSON.stringify({ error: `at most ${MAX_CHARTS} charts per answer` }), isError: true } : runTool(deps, name, input, { chatId, profileUnlocked });
+          const capped = name === 'show_chart' ? charts >= MAX_CHARTS && `at most ${MAX_CHARTS} charts per answer`
+            : name === 'document_pages' && profileUnlocked && pages + pagesWanted(deps, input) > MAX_PAGES && `at most ${MAX_PAGES} document pages per answer; ${MAX_PAGES - pages} left`;
+          const res: ReturnType<typeof runTool> = capped ? { content: JSON.stringify({ error: capped }), isError: true } : runTool(deps, name, input, { chatId, profileUnlocked });
+          pages += res.images?.length ?? 0;
           if (name === 'show_chart' && !res.isError) charts++;
           if ('profile' in res && res.profile) markProfile(deps.db, chatId, assistantId);
-          // a rejected chart showed nothing, so there's no line for it
-          if (!(name === 'show_chart' && res.isError)) emit({ type: 'tool', name, label: toolLabel(name, input), input });
-          return { type: 'tool_result', tool_use_id: b.id, content: res.content, is_error: res.isError };
+          // a rejected chart or page call showed nothing, so there's no line for it
+          if (!(SILENT_FAILS.has(name) && res.isError)) emit({ type: 'tool', name, label: toolLabel(name, input), input });
+          const text = { type: 'text', text: res.content };
+          const result = { type: 'tool_result', tool_use_id: b.id, content: res.images ? [text, ...res.images.map((x) => x.block)] : res.content, is_error: res.isError };
+          if (res.images) kept.set(result, { ...result, content: [text, ...res.images.map((x) => x.stored)] });
+          return result;
         }),
       });
     }
   } catch (e) {
     if (signal.aborted || (e instanceof ClaudeError && e.code === 'ABORTED')) {
       const partial = content.filter((b) => b?.type === 'text' && b.text);
-      saveAssistant(deps.db, assistantId, partial.length ? [...turn, { role: 'assistant', content: partial }] : turn, 'stopped', null);
+      save(partial.length ? [...turn, { role: 'assistant', content: partial }] : turn, 'stopped', null);
       return;
     }
     const code = e instanceof ClaudeError ? e.code : 'INTERNAL';
     console.error(`[hermes] chat answer failed code=${code}`);
-    saveAssistant(deps.db, assistantId, turn, 'failed', code);
+    save(turn, 'failed', code);
     emit({ type: 'error', code });
     return;
   }
-  saveAssistant(deps.db, assistantId, turn, 'done', null);
+  save(turn, 'done', null);
   emit({ type: 'done', messageId: assistantId, costCents: toCents(cost), status: 'done' });
   // a title shows without Face ID, so it never comes from an answer in a chat that holds profile data
   const shown = chatUsesProfile(deps.db, chatId) ? ''

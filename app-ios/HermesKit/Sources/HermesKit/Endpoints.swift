@@ -192,13 +192,15 @@ extension APIClient {
     public func jobs() async throws -> [Job] { try decode(try await getData("/v1/jobs")) }
     public func job(id: String) async throws -> JobDetail { try decode(try await getData("/v1/jobs/\(id)")) }
 
-    public func createJob(_ body: CreateJobBody, idempotencyKey: String) async throws -> JobDetail {
-        try await write("POST", "/v1/jobs", body: body, key: idempotencyKey)
+    public func createJob(_ body: CreateJobBody, documentId: String? = nil, idempotencyKey: String) async throws -> JobDetail {
+        try await write("POST", "/v1/jobs", body: keeping(body, documentId), key: idempotencyKey)
     }
 
-    // Patches send only what changed from `original` (a cleared field as null); skip the call when nothing did, the server needs a field.
-    public func patchJob(id: String, body: CreateJobBody, from original: CreateJobBody, idempotencyKey: String) async throws -> JobDetail {
-        try await write("PATCH", "/v1/jobs/\(id)", body: edit(body, from: original, keepUnchanged: false), key: idempotencyKey)
+    // Patches send only what changed from `original` (a cleared field as null); skip the call when nothing did, the server needs a field
+    // (a documentId alone counts). Saves take the documentId of the read they came from: the server keeps its pages with the record.
+    public func patchJob(id: String, body: CreateJobBody, from original: CreateJobBody,
+                         documentId: String? = nil, idempotencyKey: String) async throws -> JobDetail {
+        try await write("PATCH", "/v1/jobs/\(id)", body: keeping(edit(body, from: original, keepUnchanged: false), documentId), key: idempotencyKey)
     }
 
     /// Also deletes its grants; its pay stubs and forms stay, without a job.
@@ -218,13 +220,14 @@ extension APIClient {
         try await send("DELETE", "/v1/jobs/\(jobId)/grants/\(id)", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
     }
 
-    public func createPayStub(_ body: PayStubBody, idempotencyKey: String) async throws -> PayStub {
-        try await write("POST", "/v1/pay-stubs", body: body, key: idempotencyKey)
+    public func createPayStub(_ body: PayStubBody, documentId: String? = nil, idempotencyKey: String) async throws -> PayStub {
+        try await write("POST", "/v1/pay-stubs", body: keeping(body, documentId), key: idempotencyKey)
     }
 
     /// A new net or pay date that the linked deposits no longer match drops the links.
-    public func patchPayStub(id: String, body: PayStubBody, from original: PayStubBody, idempotencyKey: String) async throws -> PayStub {
-        try await write("PATCH", "/v1/pay-stubs/\(id)", body: edit(body, from: original, keepUnchanged: false), key: idempotencyKey)
+    public func patchPayStub(id: String, body: PayStubBody, from original: PayStubBody,
+                             documentId: String? = nil, idempotencyKey: String) async throws -> PayStub {
+        try await write("PATCH", "/v1/pay-stubs/\(id)", body: keeping(edit(body, from: original, keepUnchanged: false), documentId), key: idempotencyKey)
     }
 
     public func payStub(id: String) async throws -> PayStub { try decode(try await getData("/v1/pay-stubs/\(id)")) }
@@ -244,8 +247,8 @@ extension APIClient {
     }
 
     /// Replaces the job's W-4: what `body` leaves out is null.
-    public func putW4(jobId: String, body: W4Body, idempotencyKey: String) async throws -> W4Body {
-        try await write("PUT", "/v1/jobs/\(jobId)/w4", body: body, key: idempotencyKey)
+    public func putW4(jobId: String, body: W4Body, documentId: String? = nil, idempotencyKey: String) async throws -> W4Body {
+        try await write("PUT", "/v1/jobs/\(jobId)/w4", body: keeping(body, documentId), key: idempotencyKey)
     }
 
     public func deleteW4(jobId: String, idempotencyKey: String) async throws {
@@ -253,22 +256,26 @@ extension APIClient {
     }
 
     /// Replaces the job's form for `body.state`: what `body` leaves out is null.
-    public func putStateW4(jobId: String, body: StateW4Body, idempotencyKey: String) async throws -> StateW4Body {
-        var fields = try JSONDecoder().decode([String: JSONValue].self, from: JSONEncoder().encode(body))
+    public func putStateW4(jobId: String, body: StateW4Body, documentId: String? = nil, idempotencyKey: String) async throws -> StateW4Body {
+        var fields = try keeping(body, documentId)
         fields.removeValue(forKey: "state")
         return try await write("PUT", "/v1/jobs/\(jobId)/state-w4/\(body.state ?? "")", body: fields, key: idempotencyKey)
     }
 
+    /// Already gone (deleted on another device) is done, so a save that replaces the form can finish.
     public func deleteStateW4(jobId: String, state: String, idempotencyKey: String) async throws {
-        try await send("DELETE", "/v1/jobs/\(jobId)/state-w4/\(state)", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
+        do {
+            try await send("DELETE", "/v1/jobs/\(jobId)/state-w4/\(state)", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
+        } catch ClientError.api(status: 404, _) {}
     }
 
-    public func createTaxForm(_ body: TaxFormBody, idempotencyKey: String) async throws -> TaxForm {
-        try await write("POST", "/v1/tax-forms", body: body, key: idempotencyKey)
+    public func createTaxForm(_ body: TaxFormBody, documentId: String? = nil, idempotencyKey: String) async throws -> TaxForm {
+        try await write("POST", "/v1/tax-forms", body: keeping(body, documentId), key: idempotencyKey)
     }
 
-    public func patchTaxForm(id: String, body: TaxFormBody, from original: TaxFormBody, idempotencyKey: String) async throws -> TaxForm {
-        try await write("PATCH", "/v1/tax-forms/\(id)", body: edit(body, from: original, keepUnchanged: false), key: idempotencyKey)
+    public func patchTaxForm(id: String, body: TaxFormBody, from original: TaxFormBody,
+                             documentId: String? = nil, idempotencyKey: String) async throws -> TaxForm {
+        try await write("PATCH", "/v1/tax-forms/\(id)", body: keeping(edit(body, from: original, keepUnchanged: false), documentId), key: idempotencyKey)
     }
 
     public func deleteTaxForm(id: String, idempotencyKey: String) async throws {
@@ -279,11 +286,36 @@ extension APIClient {
 
     /// Upserts by year + jurisdiction: left-out fields keep the saved return's values, so pass the return being edited as `original`
     /// to clear what the owner cleared. Without one (a document read) every blank field goes out as null: the return becomes what was reviewed.
-    public func putTaxReturn(_ body: TaxReturnBody, from original: TaxReturnBody?, idempotencyKey: String) async throws -> TaxReturn {
-        try await write("PUT", "/v1/tax-returns", body: edit(body, from: original, keepUnchanged: true), key: idempotencyKey)
+    public func putTaxReturn(_ body: TaxReturnBody, from original: TaxReturnBody?,
+                             documentId: String? = nil, idempotencyKey: String) async throws -> TaxReturn {
+        try await write("PUT", "/v1/tax-returns", body: keeping(edit(body, from: original, keepUnchanged: true), documentId), key: idempotencyKey)
     }
 
     public func deleteTaxReturn(id: String, idempotencyKey: String) async throws {
         try await send("DELETE", "/v1/tax-returns/\(id)", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
+    }
+
+    /// Newest first; only those linked to `record` when given. An older server keeps none.
+    public func documents(linkedTo record: DocumentLink? = nil) async throws -> [KeptDocument] {
+        let query = record.map { [URLQueryItem(name: "recordType", value: $0.recordType.rawValue), URLQueryItem(name: "recordId", value: $0.recordId)] } ?? []
+        do {
+            let list: [String: [KeptDocument]] = try decode(try await getData("/v1/documents", query: query))
+            return list["documents"] ?? []
+        } catch ClientError.api(status: 404, _) { return [] }
+    }
+
+    public func document(id: String) async throws -> KeptDocument { try decode(try await getData("/v1/documents/\(id)")) }
+
+    /// A JPEG; `page` from 1 to the document's pageCount.
+    public func documentPage(id: String, page: Int) async throws -> Data { try await getData("/v1/documents/\(id)/pages/\(page)") }
+
+    /// The pages go; the records saved from them stay.
+    public func deleteDocument(id: String, idempotencyKey: String) async throws {
+        do { try await send("DELETE", "/v1/documents/\(id)", body: nil, idempotencyKey: idempotencyKey, timeout: 30) } catch ClientError.api(status: 404, _) {}
+    }
+
+    /// Claude reads the kept pages again; each draft's recordId is the linked record to update. Keeps no new copy, so no idempotency key.
+    public func rereadDocument(id: String) async throws -> ProfileReadResult {
+        try decode(try await send("POST", "/v1/documents/\(id)/read", body: nil, idempotencyKey: nil, timeout: 120).body)
     }
 }

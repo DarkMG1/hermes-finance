@@ -21,7 +21,7 @@ function setup() {
 const counts = (db: ReturnType<typeof setup>['deps']['db']) => Object.fromEntries((db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").pluck().all() as string[])
   .map((t) => [t, db.prepare(`SELECT COUNT(*) FROM "${t}"`).pluck().get()]));
 
-test('a read returns the draft with identifiers blanked and stores nothing', async () => {
+test('a read returns the draft with identifiers blanked and keeps only its pages', async () => {
   const { deps, read, profileReader } = setup();
   profileReader.next = { kind: 'tax_form', model: 'fake-model', uncertain: ['stateWithheldCents', 'not a field', '000-00-0000'],
     draft: ProfileDrafts.tax_form.parse({ year: 2025, kind: 'w2', payer: 'SYNTHETIC EMPLOYER 00-0000000', amountCents: 6500000, state: 'CA' }) };
@@ -34,7 +34,7 @@ test('a read returns the draft with identifiers blanked and stores nothing', asy
       ['tax_form', null, 6500000, 'CA', null, ['stateWithheldCents']]);
     assert.equal(body.model, undefined);
   }
-  assert.deepEqual(counts(deps.db), before);
+  assert.deepEqual(counts(deps.db), { ...before, documents: 2, document_pages: 4 });
   assert.equal(profileReader.calls.length, 2);
   assert.deepEqual(profileReader.calls[0], { kind: 'tax_form', pages: [JPEG, JPEG] });
 });

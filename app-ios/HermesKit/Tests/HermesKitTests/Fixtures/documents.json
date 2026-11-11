@@ -1,0 +1,16 @@
+{
+  "documents": [
+    {
+      "id": "fixture-document",
+      "kind": "pay_stub",
+      "createdAt": "2026-03-15T12:00:00.000Z",
+      "pageCount": 1,
+      "links": [
+        {
+          "recordType": "pay_stub",
+          "recordId": "stub-1"
+        }
+      ]
+    }
+  ]
+}

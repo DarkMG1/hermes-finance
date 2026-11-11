@@ -22,5 +22,7 @@
   },
   "uncertain": [
     "agiCents"
-  ]
+  ],
+  "recordId": "return-1",
+  "documentId": "fixture-document"
 }

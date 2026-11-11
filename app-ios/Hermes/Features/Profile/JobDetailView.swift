@@ -12,6 +12,7 @@ struct JobDetailView: View {
     @State private var addingGrant = false
     @State private var addingW4 = false
     @State private var addingStateW4 = false
+    @State private var documents: [DocumentLink: KeptDocument] = [:]
 
     var body: some View {
         List {
@@ -51,14 +52,19 @@ struct JobDetailView: View {
                             try await client.deleteW4(jobId: id, idempotencyKey: key)
                             await load()
                         }
+                        .keptDocument(documents[DocumentLink(recordType: .w4, recordId: id)]) { await load() }
                     } else {
                         Button("Add W-4") { addingW4 = true }
                     }
                     ForEach(detail.stateW4s, id: \.state) { form in
+                        let document = documents[DocumentLink(recordType: .stateW4, recordId: "\(id):\(form.state ?? "")")]
                         EditRow(title: "State form", fields: ProfileDraftForm.stateW4Fields, original: form,
                                 row: ListRow(title: "\(form.state ?? "State") form", subtitle: Self.stateW4Detail(form))) { body, key in
                             guard let client = model.client else { return }
-                            _ = try await client.putStateW4(jobId: id, body: body, idempotencyKey: key)
+                            // its document moves with it, so deleting the old state below doesn't take the pages
+                            _ = try await savingDocument(document?.id, key: key) { doc, key in
+                                try await client.putStateW4(jobId: id, body: body, documentId: doc, idempotencyKey: key)
+                            }
                             // a changed state code is a different form: the old one goes
                             if let old = form.state, old != body.state { try await client.deleteStateW4(jobId: id, state: old, idempotencyKey: key + "-old") }
                             await load()
@@ -67,14 +73,19 @@ struct JobDetailView: View {
                             try await client.deleteStateW4(jobId: id, state: form.state ?? "", idempotencyKey: key)
                             await load()
                         }
+                        .keptDocument(document) { await load() }
                     }
                     Button("Add state form") { addingStateW4 = true }
                 }
                 if !detail.stubs.isEmpty {
-                    Section("Pay stubs") { ForEach(detail.stubs) { PayStubRow(stub: $0) { await load() } } }
+                    Section("Pay stubs") { ForEach(detail.stubs) { stub in
+                        PayStubRow(stub: stub, document: documents[DocumentLink(recordType: .payStub, recordId: stub.id)]) { await load() }
+                    } }
                 }
                 if !detail.forms.isEmpty {
-                    Section("W-2s and 1099s") { ForEach(detail.forms) { TaxFormRow(form: $0) { await load() } } }
+                    Section("W-2s and 1099s") { ForEach(detail.forms) { form in
+                        TaxFormRow(form: form, document: documents[DocumentLink(recordType: .taxForm, recordId: form.id)]) { await load() }
+                    } }
                 }
             } else if error == nil {
                 ProgressView().frame(maxWidth: .infinity)
@@ -144,7 +155,9 @@ struct JobDetailView: View {
     }
 
     @ViewBuilder private func pay(_ job: CreateJobBody) -> some View {
+        // an offer letter's pages
         LabeledContent("Status", value: ProfileView.statuses.first { $0.value == job.status }?.label ?? job.status ?? "")
+            .keptDocument(documents[DocumentLink(recordType: .job, recordId: id)]) { await load(); await onChange() }
         if let title = job.title { LabeledContent("Title", value: title) }
         if let start = job.startDate { LabeledContent("Start", value: DayText.display(start)) }
         if let end = job.endDate { LabeledContent("End", value: DayText.display(end)) }
@@ -162,7 +175,9 @@ struct JobDetailView: View {
     private func load() async {
         guard let client = model.client else { return }
         do {
+            async let kept = client.documents()
             detail = try await client.job(id: id)
+            documents = ((try? await kept) ?? []).byLink
             error = nil
         } catch {
             self.error = errorMessage(error)
@@ -199,6 +214,7 @@ struct JobDetailView: View {
 struct TaxFormRow: View {
     @Environment(AppModel.self) private var model
     let form: TaxForm
+    let document: KeptDocument?
     let onChange: () async -> Void
 
     var body: some View {
@@ -214,6 +230,7 @@ struct TaxFormRow: View {
             try await client.deleteTaxForm(id: form.id, idempotencyKey: key)
             await onChange()
         }
+        .keptDocument(document, onChange: onChange)
     }
 }
 
@@ -222,6 +239,7 @@ struct PayStubRow: View {
     @Environment(AppModel.self) private var model
     let stub: PayStub
     var fields = ProfileDraftForm.stubFields
+    let document: KeptDocument?
     let onChange: () async -> Void
     @State private var linking = false
 
@@ -245,6 +263,7 @@ struct PayStubRow: View {
             await onChange()
         }
         .sheet(isPresented: $linking, onDismiss: { Task { await onChange() } }, content: { PayStubLinkSheet(stub: stub) })
+        .keptDocument(document, onChange: onChange)
     }
 }
 
@@ -276,6 +295,93 @@ private struct UnlinkButton: View {
         } catch {
             writes.didFail(error)
             self.error = writes.unresolved ? "Couldn't confirm the unlink. Unlink again to retry; it won't be applied twice." : errorMessage(error)
+        }
+    }
+}
+
+/// The deposits a saved pay stub can link: one, or several that add up to its net (a paycheck split across accounts); linking closes it.
+struct PayStubLinkSheet: View {
+    @Environment(AppModel.self) private var model
+    @Environment(\.dismiss) private var dismiss
+    let stub: PayStub
+    var header = "Which deposits are this paycheck?"
+    /// instead of closing the sheet, as when more stubs read off the same file come next
+    var onClose: (() -> Void)?
+    @State private var matches: PayStubMatches?
+    @State private var matchesError: String?
+    @State private var selected: Set<String> = []
+    @State private var writes = WriteGuard()
+    @State private var busy = false
+    @State private var error: String?
+
+    var body: some View {
+        let net = stub.netCents ?? 0
+        let total = matches?.deposits.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.amountCents } ?? 0
+        Sheet(title: "Link deposit", saveTitle: "Link", canSave: !busy && !selected.isEmpty && total == net, busy: busy, unresolved: writes.unresolved,
+              dirty: false, onCancel: { close() }, onSave: { Task { await link() } }) { // swiftlint:disable:this multiple_closures_with_trailing_closure
+            Section {
+                if let matches {
+                    if matches.deposits.isEmpty {
+                        Text("No deposit within 3 days of the pay date yet. You can link it later.").textStyle(.subhead, color: Palette.secondaryText)
+                    }
+                    ForEach(matches.deposits) { t in
+                        Button {
+                            if selected.contains(t.id) { selected.remove(t.id) } else { selected.insert(t.id) }
+                        } label: {
+                            HStack {
+                                Image(systemName: selected.contains(t.id) ? "checkmark.circle.fill" : "circle").foregroundStyle(Palette.accent)
+                                TransactionRow(transaction: t)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        // after an unconfirmed link only the same deposits may be retried
+                        .disabled(busy || writes.unresolved)
+                        .accessibilityAddTraits(selected.contains(t.id) ? .isSelected : [])
+                    }
+                } else if let matchesError {
+                    InlineError(message: matchesError)
+                    Button("Try again") { Task { await loadMatches() } }
+                } else {
+                    ProgressView().frame(maxWidth: .infinity)
+                }
+            } header: { Text(header) } footer: {
+                if matches?.deposits.isEmpty == false {
+                    Text("Selected \(Money.format(total)) of \(Money.format(net)) net")
+                        .textStyle(.caption, color: total == net ? Palette.secondaryText : Palette.loss)
+                }
+            }
+            if let error { Section { InlineError(message: error) } }
+        }
+        .task { await loadMatches() }
+    }
+
+    private func close() { if let onClose { onClose() } else { dismiss() } }
+
+    private func loadMatches() async {
+        guard matches == nil, let client = model.client else { return }
+        matchesError = nil
+        do {
+            let m = try await client.payStubMatches(id: stub.id)
+            matches = m
+            selected = Set(stub.transactionIds.isEmpty ? m.suggestions.first ?? [] : stub.transactionIds)
+        } catch {
+            matchesError = errorMessage(error)
+        }
+    }
+
+    private func link() async {
+        guard let client = model.client else { return }
+        busy = true
+        defer { busy = false }
+        error = nil
+        do {
+            let ids = matches?.deposits.map(\.id).filter(selected.contains) ?? []
+            _ = try await client.linkPayStub(id: stub.id, transactionIds: ids, idempotencyKey: writes.key)
+            writes.didSucceed()
+            close()
+        } catch {
+            writes.didFail(error)
+            self.error = writes.unresolved ? "Couldn't confirm the link. Tap Link to retry; it won't be applied twice." : errorMessage(error)
         }
     }
 }

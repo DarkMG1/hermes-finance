@@ -204,7 +204,7 @@ test('028 keeps AI usage rows, lets the profile reader record, and allows one pr
   const ins = db.prepare("INSERT INTO ai_usage (at, month, key, feature, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_microdollars) VALUES ('x', '2026-03', 'main', ?, 'm', 1, 1, 0, 0, 7)");
   ins.run('receipt');
   ins.run('chat');
-  assert.equal(migrate(db), 35);
+  assert.equal(migrate(db), 36);
   assert.deepEqual(db.prepare('SELECT id, feature, cost_microdollars AS c FROM ai_usage ORDER BY id').all(), [{ id: 1, feature: 'receipt', c: 7 }, { id: 2, feature: 'chat', c: 7 }]);
   ins.run('profile');
   assert.throws(() => ins.run('other'), /CHECK/);
