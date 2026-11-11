@@ -19,8 +19,7 @@ export function openYears(today: string): number[] {
   return today.slice(5) <= '04-15' ? [y - 1, y, y + 1] : [y, y + 1];
 }
 
-// Plaid's subtype word for a payout is on the personal-data denylist, so no source line spells it (as with the Zelle phrase)
-const PAYOUT = ['divi', 'dend'].join('');
+const PAYOUT = 'dividend';
 const sum = <T>(xs: T[], f: (x: T) => number) => xs.reduce((a, x) => a + f(x), 0);
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 /** What a year's returns cost after refundable credits: savings compare this, so a withholding change can't look like a saving. */
