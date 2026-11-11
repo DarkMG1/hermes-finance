@@ -176,10 +176,10 @@ export function dropFailedTail(db: Db, chatId: string): void {
 }
 
 /** A stored turn for replay: drops thinking (its signature binds it to the system prompt and tools it was written under, and only the turn
- * being answered needs it) and empty text, then trailing messages until one is an assistant message with text, minus its unanswered tool_use. */
+ * being answered needs it) and blank text, then trailing messages until one is an assistant message with text, minus its unanswered tool_use. */
 function trimTurn(turn: ApiMessage[]): ApiMessage[] {
   const out = turn.map((m) => (m.role === 'assistant'
-    ? { ...m, content: blocks(m).filter((b) => (b.type !== 'text' || b.text) && b.type !== 'thinking' && b.type !== 'redacted_thinking') } : m));
+    ? { ...m, content: blocks(m).filter((b) => (b.type !== 'text' || (b.text as string).trim()) && b.type !== 'thinking' && b.type !== 'redacted_thinking') } : m));
   while (out.length) {
     const last = out.at(-1)!;
     if (last.role === 'assistant') {

@@ -1,6 +1,6 @@
 import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ClaudeError, costMicros, createClaude, usage as monthUsage } from '../src/chat/anthropic.ts';
@@ -284,5 +284,28 @@ test('betas go in the anthropic-beta header, not the body; the thinking-mismatch
   assert.deepEqual(lines, ['[hermes] claude thinking prefix mismatch: kind=blocks_modified; pattern=tool_use_rewritten']);
   const captured = readFileSync(join(dir, 'chat.jsonl'), 'utf8').trim().split('\n');
   assert.deepEqual(captured, [sent[0]!.body, JSON.stringify(BODY)]);
+  assert.equal(statSync(join(dir, 'chat.jsonl')).mode & 0o777, 0o600);
   rmSync(dir, { recursive: true });
+});
+
+test('HERMES_CHAT_CAPTURE never writes receipt or document reads, and a failed write logs once without failing the call', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hermes-capture-'));
+  const lines: string[] = [];
+  const { warn } = console;
+  console.warn = (...a: unknown[]) => { lines.push(a.join(' ')); };
+  try {
+    process.env.HERMES_CHAT_CAPTURE = dir;
+    const s = setup([OK, OK, OK, OK]);
+    await s.claude.messages('receipt', BODY);
+    await s.claude.messages('profile', BODY);
+    assert.deepEqual(readdirSync(dir), []);
+    process.env.HERMES_CHAT_CAPTURE = join(dir, 'missing');
+    await s.claude.messages('chat', BODY);
+    await s.claude.messages('chat', BODY);
+  } finally {
+    console.warn = warn;
+    delete process.env.HERMES_CHAT_CAPTURE;
+    rmSync(dir, { recursive: true });
+  }
+  assert.deepEqual(lines, ['[hermes] chat capture failed ENOENT']);
 });

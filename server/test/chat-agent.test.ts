@@ -66,15 +66,23 @@ test('tool round then answer', async () => {
   assert.equal((s.events.at(-1) as { costCents: number }).costCents, toCents(2 * costMicros('fake-chat-model', { input_tokens: 1000, output_tokens: 50 })));
 });
 
-test('an empty text block is never sent back on the next round', async () => {
-  const s = setup([
-    [start(), ...text(0), ...tool(1, 'tu1', 'spending', { period: 'month', date: '2026-03' }), ...end('tool_use')],
-    [start(), ...text(0, 'Done.'), ...end('end_turn')],
-  ]);
-  await s.run();
-  assert.equal(s.fake.requests.length, 2);
-  assert.deepEqual((bare(s.fake.requests[1]!.messages as Msg[]).at(-2)!.content as { type: string }[]).map((b) => b.type), ['tool_use']);
-  assert.equal(s.events.at(-1)!.type, 'done');
+test('an empty or blank text block is never sent back, on the next round or on replay', async () => {
+  for (const parts of [[], ['\n\n', ' ']]) {
+    const s = setup([
+      [start(), ...text(0, ...parts), ...tool(1, 'tu1', 'spending', { period: 'month', date: '2026-03' }), ...end('tool_use')],
+      [start(), ...text(0, 'Done.'), ...end('end_turn')],
+    ]);
+    await s.run();
+    assert.equal(s.fake.requests.length, 2);
+    assert.deepEqual((bare(s.fake.requests[1]!.messages as Msg[]).at(-2)!.content as { type: string }[]).map((b) => b.type), ['tool_use']);
+    assert.equal(s.events.at(-1)!.type, 'done');
+  }
+  // a blank block stored by an older build stays out of the replay too
+  const { deps } = makeTestDeps();
+  const chat = createChat(deps.db, NOW);
+  addUserMessage(deps.db, chat.id, 'c1', 'Q', NOW);
+  saveAssistant(deps.db, startAssistant(deps.db, chat.id, NOW), [{ role: 'assistant', content: [{ type: 'text', text: '\n\n' }, { type: 'text', text: 'A.' }] }], 'done', null);
+  assert.deepEqual(replay(deps.db, chat.id)[1]!.content, [{ type: 'text', text: 'A.' }]);
 });
 
 test('round cap', async () => {
@@ -314,6 +322,9 @@ test('the first answer names the chat with the title model after done; later ans
   assert.equal(call!.body.model, 'fake-title-model');
   // only fields the Haiku 5.5 docs list (effort: all five levels on Haiku 5.5)
   assert.deepEqual(Object.keys(call!.body).sort(), ['max_tokens', 'messages', 'model', 'output_config', 'system']);
+  // the title model gets no thinking binding and no beta
+  assert.equal(call!.body.thinking, undefined);
+  assert.equal(call!.body.betas, undefined);
   assert.deepEqual(call!.body.output_config, { effort: 'low' });
   assert.match(JSON.stringify(call!.body.messages), /How much did I spend at SYNTHETIC GROCER\?.*You spent \$12\.34/);
   addUserMessage(s.db, s.chatId, 'c2', 'And then?', NOW);
@@ -550,7 +561,9 @@ test('a stored answer cut before a code run finished replays without that run or
   saveAssistant(deps.db, id, [{ role: 'assistant', content: [{ type: 'text', text: 'Looking.' },
     { type: 'server_tool_use', id: 'srv-code', name: 'code_execution', input: { code: 'x' } },
     { type: 'server_tool_use', id: 'srv-search', name: 'web_search', input: { query: 'q' }, caller },
-    { type: 'web_search_tool_result', tool_use_id: 'srv-search', caller, content: [] }] }], 'stopped', null);
+    { type: 'web_search_tool_result', tool_use_id: 'srv-search', caller, content: [] },
+    // a plain search cut before its result
+    { type: 'server_tool_use', id: 'srv-plain', name: 'web_search', input: { query: 'q' } }] }], 'stopped', null);
   addUserMessage(deps.db, chat.id, 'c2', 'Next', NOW);
   assert.deepEqual((replay(deps.db, chat.id)[1]!.content as { type: string }[]).map((b) => b.type), ['text']);
 });
@@ -564,8 +577,40 @@ test('resumed searches (pause_turn) have their own cap and leave the tool rounds
   for (const body of s.fake.requests) assert.equal(body.tool_choice, undefined);
   assert.equal(getChat(s.db, s.chatId)!.messages[1]!.text, 'Done.');
 
+  // past the cap: an answer with no text failed, one with text is kept
   const over = setup(Array.from({ length: MAX_PAUSES + 3 }, (_, r) => paused(r)));
   await over.run();
   assert.equal(over.fake.requests.length, MAX_PAUSES + 1);
-  assert.equal(over.events.at(-1)!.type, 'done');
+  assert.deepEqual(over.events.at(-1), { type: 'error', code: 'INCOMPLETE' });
+  assert.equal(getChat(over.db, over.chatId)!.messages[1]!.status, 'failed');
+  const said = setup([[start(), ...text(0, 'So far.'), ...search(1, 'srv0', 'SYNTHETIC QUERY'), ...end('pause_turn')],
+    ...Array.from({ length: MAX_PAUSES + 2 }, (_, r) => paused(r + 1))]);
+  await said.run();
+  assert.equal(said.fake.requests.length, MAX_PAUSES + 1);
+  assert.equal(said.events.at(-1)!.type, 'done');
+  assert.equal(getChat(said.db, said.chatId)!.messages[1]!.text, 'So far.');
+
+  // a pause on the last call resumes, still without tools
+  const late = setup([...Array.from({ length: MAX_ROUNDS - 1 }, (_, r) => [start(), ...tool(0, `tu${r}`, 'categories', {}), ...end('tool_use')]),
+    paused(0), [start(), ...text(0, 'Final.'), ...end('end_turn')]]);
+  await late.run();
+  assert.equal(late.fake.requests.length, MAX_ROUNDS + 1);
+  for (const body of late.fake.requests.slice(-2)) assert.deepEqual(body.tool_choice, { type: 'none' });
+  assert.equal(getChat(late.db, late.chatId)!.messages[1]!.text, 'Final.');
+});
+
+test('replayed blocks the API dropped are logged from message_start and message_delta; a tool input that is not JSON is logged', async () => {
+  const dropped = [{ type: 'thinking_dropped', reason: 'prefix_binding_mismatch', path: 'messages.1.content.0' }];
+  const s = setup([[{ type: 'message_start', message: { usage: { input_tokens: 1000 }, input_transformations: dropped } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu1', name: 'categories', input: {} } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"bad' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 50 }, input_transformations: dropped }, { type: 'message_stop' }],
+  [start(), ...text(0, 'Done.'), ...end('end_turn')]]);
+  const lines: string[] = [];
+  const { warn } = console;
+  console.warn = (...a: unknown[]) => { lines.push(a.join(' ')); };
+  try { await s.run(); } finally { console.warn = warn; }
+  const change = '[hermes] chat history changed: thinking_dropped/prefix_binding_mismatch at messages.1.content.0';
+  assert.deepEqual(lines, [change, '[hermes] chat tool input was not JSON name=categories', change]);
 });

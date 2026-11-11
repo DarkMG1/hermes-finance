@@ -13,7 +13,7 @@ export type Config = {
   anthropicModel: string;
   /** ANTHROPIC_API_KEY_BACKUP: used automatically for the rest of a month once the main key's credit runs out. */
   anthropicBackupKey: string | null;
-  /** HERMES_CHAT_MODEL: the Ask chat's model. */
+  /** HERMES_CHAT_MODEL: the Ask chat's model. It must accept adaptive thinking with thinking.block_binding (as claude-opus-5-5 does): every chat request sends both. */
   chatModel: string;
   /** HERMES_TITLE_MODEL: names a chat after its first answer. */
   titleModel: string;

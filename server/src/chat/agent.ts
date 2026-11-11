@@ -40,6 +40,13 @@ const SYSTEM = [{ type: 'text', text: SYSTEM_PROMPT, cache_control: EPHEMERAL }]
 const THINKING = { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } };
 const BETAS = ['thinking-binding-controls-2026-08-01'];
 const STOP_CODES: Record<string, string> = { max_tokens: 'MAX_TOKENS', refusal: 'REFUSED' };
+type Transformation = { type?: string; reason?: string; path?: string };
+/** Logs the replayed blocks the API dropped or flagged (message_start carries them; message_delta does again after a server-side fallback). */
+const logChanges = (list?: Transformation[]) => {
+  if (list?.length) console.warn(`[hermes] chat history changed: ${list.map((t) => `${t.type}/${t.reason} at ${t.path}`).join(' ')}`);
+};
+// blank text: the API's thinking check skips it, and an answer never needs it back
+const blank = (b: Block) => b.type === 'text' && !(b.text as string | undefined)?.trim();
 
 const mark = (m: ApiMessage): ApiMessage => {
   const blocks = m.content as Block[];
@@ -115,14 +122,16 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
         for await (const e of events) {
           const i = e.index as number;
           if (e.type === 'message_start') {
-            const m = e.message as { usage?: Usage; input_transformations?: { type?: string; reason?: string; path?: string }[] };
+            const m = e.message as { usage?: Usage; input_transformations?: Transformation[] };
             Object.assign(usage, m.usage);
-            if (m.input_transformations?.length) console.warn(`[hermes] chat history changed: ${m.input_transformations.map((t) => `${t.type}/${t.reason}@${t.path}`).join(' ')}`);
+            logChanges(m.input_transformations);
           }
           else if (e.type === 'message_stop') complete = true;
           else if (e.type === 'message_delta') {
             Object.assign(usage, e.usage);
-            stop = (e.delta as { stop_reason?: string }).stop_reason ?? stop;
+            const d = e.delta as { stop_reason?: string; input_transformations?: Transformation[] };
+            stop = d.stop_reason ?? stop;
+            logChanges((e.input_transformations as Transformation[] | undefined) ?? d.input_transformations);
           } else if (e.type === 'content_block_start') content[i] = { ...(e.content_block as Block) };
           else if (e.type === 'content_block_delta') {
             const b = content[i]!;
@@ -140,7 +149,13 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
             else if (d.type === 'citations_delta') ((b.citations ??= []) as unknown[]).push((e.delta as { citation: unknown }).citation);
           } else if (e.type === 'content_block_stop' && (content[i]?.type === 'tool_use' || content[i]?.type === 'server_tool_use')) {
             // a call made from code execution arrives whole in its start block, with no deltas
-            if (json.has(i)) try { content[i]!.input = JSON.parse(json.get(i) || '{}'); } catch { content[i]!.input = {}; }
+            if (json.has(i)) {
+              try { content[i]!.input = JSON.parse(json.get(i) || '{}'); } catch {
+                // replaying the rewritten input drops the thinking after it (drop_block); the bad JSON never reaches a tool
+                console.warn(`[hermes] chat tool input was not JSON name=${String(content[i]!.name)}`);
+                content[i]!.input = {};
+              }
+            }
             const b = content[i]!;
             if (b.type === 'server_tool_use' && b.name === 'web_search') {
               emit({ type: 'tool', name: 'web_search', label: toolLabel('web_search', b.input as Record<string, unknown>), input: b.input as Record<string, unknown> });
@@ -153,14 +168,18 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
       } finally {
         cost += claude.record('chat', model, key, usage);
       }
-      const got = content.filter((b) => b && !(b.type === 'text' && !b.text));
+      const got = content.filter((b) => b && !blank(b));
       // a resumed paused search continues the same answer: one assistant message, so roles keep alternating
       if (turn.at(-1)?.role === 'assistant') (turn.at(-1)!.content as Block[]).push(...got);
       else turn.push({ role: 'assistant', content: got });
       const uses = content.filter((b) => b?.type === 'tool_use');
       content = [];
-      // the server paused a long search: send the answer so far back and it carries on
-      if (stop === 'pause_turn' && !last && ++pauses <= MAX_PAUSES) continue;
+      // the server paused a long search: send the answer so far back and it carries on (on the last call too: tool_choice none stays)
+      if (stop === 'pause_turn') {
+        if (++pauses <= MAX_PAUSES) continue;
+        if (!turn.some((m) => m.role === 'assistant' && (m.content as Block[]).some((b) => b.type === 'text'))) throw new ClaudeError('INCOMPLETE');
+        break;
+      }
       if (stop !== 'tool_use' || last || !uses.length) break;
       rounds++;
       turn.push({

@@ -105,14 +105,20 @@ export function createClaude(deps: { db: Db; config: Config; now: () => Date }, 
   const mainKey = config.anthropicApiKey;
   if (!mainKey) return null;
   const month = () => localDay(deps.now()).slice(0, 7);
+  let captureFailed = false;
 
   // Falls back to the backup key only on the initial HTTP status, before any of the reply is used. body.betas goes in the anthropic-beta header.
   async function post(feature: Feature, { betas, ...body }: Record<string, unknown>, signal?: AbortSignal): Promise<{ res: Response; key: Key; timer: Timer }> {
     const m = month();
     let key: Key = backupActive(db, m) && config.anthropicBackupKey ? 'backup' : 'main';
     const json = JSON.stringify(body);
-    // debugging only: each request body as sent, one per line (holds the owner's data; never the key)
-    if (process.env.HERMES_CHAT_CAPTURE) appendFileSync(`${process.env.HERMES_CHAT_CAPTURE}/${feature}.jsonl`, `${json}\n`);
+    // debugging only: each chat request body as sent, one per line (holds the owner's data; never the key). Receipts and documents stay out.
+    if (process.env.HERMES_CHAT_CAPTURE && feature === 'chat') {
+      try { appendFileSync(`${process.env.HERMES_CHAT_CAPTURE}/chat.jsonl`, `${json}\n`, { mode: 0o600 }); } catch (e) {
+        if (!captureFailed) console.warn(`[hermes] chat capture failed ${(e as NodeJS.ErrnoException).code ?? (e as Error).name}`);
+        captureFailed = true;
+      }
+    }
     for (;;) {
       // the profile reader's 8 pages can take as long as a chat answer; the app waits 120 s for both
       const timer = idleTimer(feature === 'receipt' ? 60_000 : 120_000);
