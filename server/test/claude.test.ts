@@ -1,5 +1,8 @@
 import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ClaudeError, costMicros, createClaude, usage as monthUsage } from '../src/chat/anthropic.ts';
 import { makeTestDeps } from './helpers.ts';
 
@@ -259,4 +262,27 @@ test('the request timeout covers the wait for headers: chat and profile reads 12
     assert.equal(settled, false);
     assert.equal(await drive(p, 30_000), 'TIMEOUT');
   }
+});
+
+test('betas go in the anthropic-beta header, not the body; the thinking-mismatch note is logged; HERMES_CHAT_CAPTURE writes each body as sent', async () => {
+  const sent: RequestInit[] = [];
+  const lines: string[] = [];
+  const { warn } = console;
+  console.warn = (...a: unknown[]) => { lines.push(a.join(' ')); };
+  const dir = mkdtempSync(join(tmpdir(), 'hermes-capture-'));
+  process.env.HERMES_CHAT_CAPTURE = dir;
+  try {
+    const s = setup([(init) => { sent.push(init); return new Response(OK().body, { status: 200, headers: { 'anthropic-thinking-prefix-mismatch': 'kind=blocks_modified; pattern=tool_use_rewritten' } }); }, OK]);
+    await s.claude.messages('chat', { ...BODY, betas: ['thinking-binding-controls-2026-08-01'] });
+    await s.claude.messages('chat', BODY);
+  } finally {
+    console.warn = warn;
+    delete process.env.HERMES_CHAT_CAPTURE;
+  }
+  assert.equal((sent[0]!.headers as Record<string, string>)['anthropic-beta'], 'thinking-binding-controls-2026-08-01');
+  assert.equal(JSON.parse(sent[0]!.body as string).betas, undefined);
+  assert.deepEqual(lines, ['[hermes] claude thinking prefix mismatch: kind=blocks_modified; pattern=tool_use_rewritten']);
+  const captured = readFileSync(join(dir, 'chat.jsonl'), 'utf8').trim().split('\n');
+  assert.deepEqual(captured, [sent[0]!.body, JSON.stringify(BODY)]);
+  rmSync(dir, { recursive: true });
 });

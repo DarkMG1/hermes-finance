@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { answer, MAX_ROUNDS, type ChatEvent } from '../src/chat/agent.ts';
+import { answer, MAX_PAUSES, MAX_ROUNDS, type ChatEvent } from '../src/chat/agent.ts';
 import { addUserMessage, createChat, dropFailedTail, getChat, replay, saveAssistant, startAssistant } from '../src/chat/store.ts';
 import { runTool } from '../src/chat/tools.ts';
+import { toolLabel } from '../src/chat/labels.ts';
 import { ClaudeError, costMicros, toCents } from '../src/chat/anthropic.ts';
 import { FakeClaude, end, start, text, thinking, tool, type Ev } from './fake-claude.ts';
 import { makeTestDeps, seedAccount, seedTxn } from './helpers.ts';
@@ -385,7 +386,10 @@ test('system prompt, last tool and the newest message block carry cache_control;
   assert.equal(tools.filter((t) => t.cache_control).length, 1);
   assert.equal(body.model, 'fake-chat-model');
   assert.equal(body.stream, true);
-  assert.equal(body.max_tokens, 16_000);
+  assert.equal(body.max_tokens, 64_000);
+  // a replayed thinking block that no longer matches is dropped, not a failed answer
+  assert.deepEqual(body.thinking, { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } });
+  assert.deepEqual(body.betas, ['thinking-binding-controls-2026-08-01']);
 });
 
 test('a first answer stopped (with or without text) leaves the auto title, so the next done answer names the chat', async () => {
@@ -502,4 +506,66 @@ test('a paused search resumes with the answer so far as the last message, and bo
   const turn = JSON.parse(s.db.prepare('SELECT content_json FROM chat_messages WHERE id = ?').pluck().get(s.assistantId) as string) as { role: string; content: { type: string }[] }[];
   assert.deepEqual(turn.map((m) => [m.role, m.content.map((b) => b.type)]), [['assistant', ['server_tool_use', 'web_search_tool_result', 'text']]]);
   assert.equal(getChat(s.db, s.chatId)!.messages[1]!.text, 'Here they are.');
+});
+
+test('the next round resends every block of the last one exactly as streamed: thinking, code runs and the searches they made, and tool inputs', async () => {
+  const caller = { type: 'code_execution_20260120', tool_id: 'srv-code' };
+  const raw = '{"note":"say \\"hi\\" \\/ caf\\u00e9\\\\n","n":1}';
+  const result = { type: 'web_search_tool_result', tool_use_id: 'srv-search', caller, content: [{ type: 'web_search_result', url: 'https://example.com/a', title: 'A', encrypted_content: 'enc' }] };
+  const ran = { type: 'code_execution_tool_result', tool_use_id: 'srv-code', content: { type: 'encrypted_code_execution_result', encrypted_stdout: 'enc' } };
+  const startOnly = (i: number, block: Record<string, unknown>): Ev[] => [{ type: 'content_block_start', index: i, content_block: block }, { type: 'content_block_stop', index: i }];
+  const s = setup([[start(), ...thinking(0, '', 'sig-1'), ...text(1),
+    { type: 'content_block_start', index: 2, content_block: { type: 'server_tool_use', id: 'srv-code', name: 'code_execution', input: {} } },
+    { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '{"code":"print(' } },
+    { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '1)"}' } },
+    { type: 'content_block_stop', index: 2 },
+    // a search made from code arrives whole, with no deltas
+    ...startOnly(3, { type: 'server_tool_use', id: 'srv-search', name: 'web_search', input: { query: 'SYNTHETIC QUERY' }, caller }),
+    ...startOnly(4, result), ...startOnly(5, ran), ...thinking(6, '', 'sig-2'),
+    { type: 'content_block_start', index: 7, content_block: { type: 'tool_use', id: 'tu1', name: 'categories', input: {}, caller: { type: 'direct' } } },
+    { type: 'content_block_delta', index: 7, delta: { type: 'input_json_delta', partial_json: raw.slice(0, 9) } },
+    { type: 'content_block_delta', index: 7, delta: { type: 'input_json_delta', partial_json: raw.slice(9) } },
+    { type: 'content_block_stop', index: 7 }, ...end('tool_use')],
+  [start(), ...text(0, 'Done.'), ...end('end_turn')]]);
+  await s.run();
+  const sent = bare(s.fake.requests[1]!.messages as Msg[]).at(-2)!;
+  // the empty text block stays out: the API rejects empty text, and its thinking check skips blank text blocks
+  assert.equal(JSON.stringify(sent), JSON.stringify({ role: 'assistant', content: [{ type: 'thinking', thinking: '', signature: 'sig-1' },
+    { type: 'server_tool_use', id: 'srv-code', name: 'code_execution', input: { code: 'print(1)' } },
+    { type: 'server_tool_use', id: 'srv-search', name: 'web_search', input: { query: 'SYNTHETIC QUERY' }, caller }, result, ran,
+    { type: 'thinking', thinking: '', signature: 'sig-2' }, { type: 'tool_use', id: 'tu1', name: 'categories', input: JSON.parse(raw), caller: { type: 'direct' } }] }));
+  assert.deepEqual(s.events.filter((e) => e.type === 'tool').map((e) => (e as { label: string }).label), ['Web search · SYNTHETIC QUERY', toolLabel('categories', JSON.parse(raw))]);
+  // a follow-up replays the answer with the code run its search and result point back at
+  addUserMessage(s.db, s.chatId, 'c2', 'Next', NOW);
+  const replayed = replay(s.db, s.chatId)[1]!.content as { type: string; id?: string }[];
+  assert.deepEqual(replayed.map((b) => b.id ?? b.type), ['srv-code', 'srv-search', 'web_search_tool_result', 'code_execution_tool_result', 'tu1']);
+});
+
+test('a stored answer cut before a code run finished replays without that run or the searches it made', () => {
+  const { deps } = makeTestDeps();
+  const chat = createChat(deps.db, NOW);
+  addUserMessage(deps.db, chat.id, 'c1', 'Research it', NOW);
+  const id = startAssistant(deps.db, chat.id, NOW);
+  const caller = { type: 'code_execution_20260120', tool_id: 'srv-code' };
+  saveAssistant(deps.db, id, [{ role: 'assistant', content: [{ type: 'text', text: 'Looking.' },
+    { type: 'server_tool_use', id: 'srv-code', name: 'code_execution', input: { code: 'x' } },
+    { type: 'server_tool_use', id: 'srv-search', name: 'web_search', input: { query: 'q' }, caller },
+    { type: 'web_search_tool_result', tool_use_id: 'srv-search', caller, content: [] }] }], 'stopped', null);
+  addUserMessage(deps.db, chat.id, 'c2', 'Next', NOW);
+  assert.deepEqual((replay(deps.db, chat.id)[1]!.content as { type: string }[]).map((b) => b.type), ['text']);
+});
+
+test('resumed searches (pause_turn) have their own cap and leave the tool rounds and the last-call nudge alone', async () => {
+  const paused = (r: number) => [start(), ...search(0, `srv${r}`, 'SYNTHETIC QUERY'), ...end('pause_turn')];
+  const s = setup([...Array.from({ length: MAX_PAUSES }, (_, r) => paused(r)), [start(), ...tool(0, 'tu1', 'categories', {}), ...end('tool_use')],
+    [start(), ...text(0, 'Done.'), ...end('end_turn')]]);
+  await s.run();
+  assert.equal(s.fake.requests.length, MAX_PAUSES + 2);
+  for (const body of s.fake.requests) assert.equal(body.tool_choice, undefined);
+  assert.equal(getChat(s.db, s.chatId)!.messages[1]!.text, 'Done.');
+
+  const over = setup(Array.from({ length: MAX_PAUSES + 3 }, (_, r) => paused(r)));
+  await over.run();
+  assert.equal(over.fake.requests.length, MAX_PAUSES + 1);
+  assert.equal(over.events.at(-1)!.type, 'done');
 });

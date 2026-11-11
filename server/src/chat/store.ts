@@ -183,9 +183,11 @@ function trimTurn(turn: ApiMessage[]): ApiMessage[] {
   while (out.length) {
     const last = out.at(-1)!;
     if (last.role === 'assistant') {
-      // and a web search the answer stopped before the result of
-      const searched = new Set(blocks(last).filter((b) => b.type === 'web_search_tool_result').map((b) => b.tool_use_id));
-      last.content = blocks(last).filter((b) => b.type !== 'tool_use' && !(b.type === 'server_tool_use' && !searched.has(b.id)));
+      // and a server tool call (search, code run) the answer stopped before the result of, with the searches that code run made; one with a
+      // result stays, since its result and its searches point back at it
+      const answered = new Set(blocks(last).map((b) => b.tool_use_id));
+      const cut = new Set(blocks(last).filter((b) => b.type === 'server_tool_use' && !answered.has(b.id)).map((b) => b.id));
+      last.content = blocks(last).filter((b) => b.type !== 'tool_use' && !cut.has(b.id) && !cut.has((b.caller as { tool_id?: string } | undefined)?.tool_id));
       if (last.content.some((b) => b.type === 'text')) break;
     }
     out.pop();
