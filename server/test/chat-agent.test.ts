@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { answer, MAX_ROUNDS, type ChatEvent } from '../src/chat/agent.ts';
+import { answer, MAX_ANSWER_MICROS, MAX_PAUSES, MAX_ROUNDS, type ChatEvent } from '../src/chat/agent.ts';
 import { addUserMessage, createChat, dropFailedTail, getChat, replay, saveAssistant, startAssistant } from '../src/chat/store.ts';
 import { runTool } from '../src/chat/tools.ts';
+import { toolLabel } from '../src/chat/labels.ts';
 import { ClaudeError, costMicros, toCents } from '../src/chat/anthropic.ts';
 import { FakeClaude, end, start, text, thinking, tool, type Ev } from './fake-claude.ts';
 import { makeTestDeps, seedAccount, seedTxn } from './helpers.ts';
@@ -65,15 +66,23 @@ test('tool round then answer', async () => {
   assert.equal((s.events.at(-1) as { costCents: number }).costCents, toCents(2 * costMicros('fake-chat-model', { input_tokens: 1000, output_tokens: 50 })));
 });
 
-test('an empty text block is never sent back on the next round', async () => {
-  const s = setup([
-    [start(), ...text(0), ...tool(1, 'tu1', 'spending', { period: 'month', date: '2026-03' }), ...end('tool_use')],
-    [start(), ...text(0, 'Done.'), ...end('end_turn')],
-  ]);
-  await s.run();
-  assert.equal(s.fake.requests.length, 2);
-  assert.deepEqual((bare(s.fake.requests[1]!.messages as Msg[]).at(-2)!.content as { type: string }[]).map((b) => b.type), ['tool_use']);
-  assert.equal(s.events.at(-1)!.type, 'done');
+test('an empty or blank text block is never sent back, on the next round or on replay', async () => {
+  for (const parts of [[], ['\n\n', ' ']]) {
+    const s = setup([
+      [start(), ...text(0, ...parts), ...tool(1, 'tu1', 'spending', { period: 'month', date: '2026-03' }), ...end('tool_use')],
+      [start(), ...text(0, 'Done.'), ...end('end_turn')],
+    ]);
+    await s.run();
+    assert.equal(s.fake.requests.length, 2);
+    assert.deepEqual((bare(s.fake.requests[1]!.messages as Msg[]).at(-2)!.content as { type: string }[]).map((b) => b.type), ['tool_use']);
+    assert.equal(s.events.at(-1)!.type, 'done');
+  }
+  // a blank block stored by an older build stays out of the replay too
+  const { deps } = makeTestDeps();
+  const chat = createChat(deps.db, NOW);
+  addUserMessage(deps.db, chat.id, 'c1', 'Q', NOW);
+  saveAssistant(deps.db, startAssistant(deps.db, chat.id, NOW), [{ role: 'assistant', content: [{ type: 'text', text: '\n\n' }, { type: 'text', text: 'A.' }] }], 'done', null);
+  assert.deepEqual(replay(deps.db, chat.id)[1]!.content, [{ type: 'text', text: 'A.' }]);
 });
 
 test('round cap', async () => {
@@ -313,6 +322,9 @@ test('the first answer names the chat with the title model after done; later ans
   assert.equal(call!.body.model, 'fake-title-model');
   // only fields the Haiku 5.5 docs list (effort: all five levels on Haiku 5.5)
   assert.deepEqual(Object.keys(call!.body).sort(), ['max_tokens', 'messages', 'model', 'output_config', 'system']);
+  // the title model gets no thinking binding and no beta
+  assert.equal(call!.body.thinking, undefined);
+  assert.equal(call!.body.betas, undefined);
   assert.deepEqual(call!.body.output_config, { effort: 'low' });
   assert.match(JSON.stringify(call!.body.messages), /How much did I spend at SYNTHETIC GROCER\?.*You spent \$12\.34/);
   addUserMessage(s.db, s.chatId, 'c2', 'And then?', NOW);
@@ -385,7 +397,10 @@ test('system prompt, last tool and the newest message block carry cache_control;
   assert.equal(tools.filter((t) => t.cache_control).length, 1);
   assert.equal(body.model, 'fake-chat-model');
   assert.equal(body.stream, true);
-  assert.equal(body.max_tokens, 16_000);
+  assert.equal(body.max_tokens, 64_000);
+  // a replayed thinking block that no longer matches is dropped, not a failed answer
+  assert.deepEqual(body.thinking, { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } });
+  assert.deepEqual(body.betas, ['thinking-binding-controls-2026-08-01']);
 });
 
 test('a first answer stopped (with or without text) leaves the auto title, so the next done answer names the chat', async () => {
@@ -502,4 +517,118 @@ test('a paused search resumes with the answer so far as the last message, and bo
   const turn = JSON.parse(s.db.prepare('SELECT content_json FROM chat_messages WHERE id = ?').pluck().get(s.assistantId) as string) as { role: string; content: { type: string }[] }[];
   assert.deepEqual(turn.map((m) => [m.role, m.content.map((b) => b.type)]), [['assistant', ['server_tool_use', 'web_search_tool_result', 'text']]]);
   assert.equal(getChat(s.db, s.chatId)!.messages[1]!.text, 'Here they are.');
+});
+
+test('the next round resends every block of the last one exactly as streamed: thinking, code runs and the searches they made, and tool inputs', async () => {
+  const caller = { type: 'code_execution_20260120', tool_id: 'srv-code' };
+  const raw = '{"note":"say \\"hi\\" \\/ caf\\u00e9\\\\n","n":1}';
+  const result = { type: 'web_search_tool_result', tool_use_id: 'srv-search', caller, content: [{ type: 'web_search_result', url: 'https://example.com/a', title: 'A', encrypted_content: 'enc' }] };
+  const ran = { type: 'code_execution_tool_result', tool_use_id: 'srv-code', content: { type: 'encrypted_code_execution_result', encrypted_stdout: 'enc' } };
+  const startOnly = (i: number, block: Record<string, unknown>): Ev[] => [{ type: 'content_block_start', index: i, content_block: block }, { type: 'content_block_stop', index: i }];
+  const s = setup([[start(), ...thinking(0, '', 'sig-1'), ...text(1),
+    { type: 'content_block_start', index: 2, content_block: { type: 'server_tool_use', id: 'srv-code', name: 'code_execution', input: {} } },
+    { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '{"code":"print(' } },
+    { type: 'content_block_delta', index: 2, delta: { type: 'input_json_delta', partial_json: '1)"}' } },
+    { type: 'content_block_stop', index: 2 },
+    // a search made from code arrives whole, with no deltas
+    ...startOnly(3, { type: 'server_tool_use', id: 'srv-search', name: 'web_search', input: { query: 'SYNTHETIC QUERY' }, caller }),
+    ...startOnly(4, result), ...startOnly(5, ran), ...thinking(6, '', 'sig-2'),
+    { type: 'content_block_start', index: 7, content_block: { type: 'tool_use', id: 'tu1', name: 'categories', input: {}, caller: { type: 'direct' } } },
+    { type: 'content_block_delta', index: 7, delta: { type: 'input_json_delta', partial_json: raw.slice(0, 9) } },
+    { type: 'content_block_delta', index: 7, delta: { type: 'input_json_delta', partial_json: raw.slice(9) } },
+    { type: 'content_block_stop', index: 7 }, ...end('tool_use')],
+  [start(), ...text(0, 'Done.'), ...end('end_turn')]]);
+  await s.run();
+  const sent = bare(s.fake.requests[1]!.messages as Msg[]).at(-2)!;
+  // the empty text block stays out: the API rejects empty text, and its thinking check skips blank text blocks
+  assert.equal(JSON.stringify(sent), JSON.stringify({ role: 'assistant', content: [{ type: 'thinking', thinking: '', signature: 'sig-1' },
+    { type: 'server_tool_use', id: 'srv-code', name: 'code_execution', input: { code: 'print(1)' } },
+    { type: 'server_tool_use', id: 'srv-search', name: 'web_search', input: { query: 'SYNTHETIC QUERY' }, caller }, result, ran,
+    { type: 'thinking', thinking: '', signature: 'sig-2' }, { type: 'tool_use', id: 'tu1', name: 'categories', input: JSON.parse(raw), caller: { type: 'direct' } }] }));
+  assert.deepEqual(s.events.filter((e) => e.type === 'tool').map((e) => (e as { label: string }).label), ['Web search · SYNTHETIC QUERY', toolLabel('categories', JSON.parse(raw))]);
+  // a follow-up replays the answer with the code run its search and result point back at
+  addUserMessage(s.db, s.chatId, 'c2', 'Next', NOW);
+  const replayed = replay(s.db, s.chatId)[1]!.content as { type: string; id?: string }[];
+  assert.deepEqual(replayed.map((b) => b.id ?? b.type), ['srv-code', 'srv-search', 'web_search_tool_result', 'code_execution_tool_result', 'tu1']);
+});
+
+test('a stored answer cut before a code run finished replays without that run or the searches it made', () => {
+  const { deps } = makeTestDeps();
+  const chat = createChat(deps.db, NOW);
+  addUserMessage(deps.db, chat.id, 'c1', 'Research it', NOW);
+  const id = startAssistant(deps.db, chat.id, NOW);
+  const caller = { type: 'code_execution_20260120', tool_id: 'srv-code' };
+  saveAssistant(deps.db, id, [{ role: 'assistant', content: [{ type: 'text', text: 'Looking.' },
+    { type: 'server_tool_use', id: 'srv-code', name: 'code_execution', input: { code: 'x' } },
+    { type: 'server_tool_use', id: 'srv-search', name: 'web_search', input: { query: 'q' }, caller },
+    { type: 'web_search_tool_result', tool_use_id: 'srv-search', caller, content: [] },
+    // a plain search cut before its result
+    { type: 'server_tool_use', id: 'srv-plain', name: 'web_search', input: { query: 'q' } }] }], 'stopped', null);
+  addUserMessage(deps.db, chat.id, 'c2', 'Next', NOW);
+  assert.deepEqual((replay(deps.db, chat.id)[1]!.content as { type: string }[]).map((b) => b.type), ['text']);
+});
+
+test('resumed searches (pause_turn) have their own cap and leave the tool rounds and the last-call nudge alone', async () => {
+  const paused = (r: number) => [start(), ...search(0, `srv${r}`, 'SYNTHETIC QUERY'), ...end('pause_turn')];
+  const s = setup([...Array.from({ length: MAX_PAUSES }, (_, r) => paused(r)), [start(), ...tool(0, 'tu1', 'categories', {}), ...end('tool_use')],
+    [start(), ...text(0, 'Done.'), ...end('end_turn')]]);
+  await s.run();
+  assert.equal(s.fake.requests.length, MAX_PAUSES + 2);
+  for (const body of s.fake.requests) assert.equal(body.tool_choice, undefined);
+  assert.equal(getChat(s.db, s.chatId)!.messages[1]!.text, 'Done.');
+
+  // past the cap: an answer with no text failed, one with text is kept
+  const over = setup(Array.from({ length: MAX_PAUSES + 3 }, (_, r) => paused(r)));
+  await over.run();
+  assert.equal(over.fake.requests.length, MAX_PAUSES + 1);
+  assert.deepEqual(over.events.at(-1), { type: 'error', code: 'INCOMPLETE' });
+  assert.equal(getChat(over.db, over.chatId)!.messages[1]!.status, 'failed');
+  const said = setup([[start(), ...text(0, 'So far.'), ...search(1, 'srv0', 'SYNTHETIC QUERY'), ...end('pause_turn')],
+    ...Array.from({ length: MAX_PAUSES + 2 }, (_, r) => paused(r + 1))]);
+  await said.run();
+  assert.equal(said.fake.requests.length, MAX_PAUSES + 1);
+  assert.equal(said.events.at(-1)!.type, 'done');
+  assert.equal(getChat(said.db, said.chatId)!.messages[1]!.text, 'So far.');
+
+  // a pause on the last call resumes, still without tools
+  const late = setup([...Array.from({ length: MAX_ROUNDS - 1 }, (_, r) => [start(), ...tool(0, `tu${r}`, 'categories', {}), ...end('tool_use')]),
+    paused(0), [start(), ...text(0, 'Final.'), ...end('end_turn')]]);
+  await late.run();
+  assert.equal(late.fake.requests.length, MAX_ROUNDS + 1);
+  for (const body of late.fake.requests.slice(-2)) assert.deepEqual(body.tool_choice, { type: 'none' });
+  assert.equal(getChat(late.db, late.chatId)!.messages[1]!.text, 'Final.');
+});
+
+test('replayed blocks the API dropped are logged from message_start and message_delta; a tool input that is not JSON is logged', async () => {
+  const dropped = [{ type: 'thinking_dropped', reason: 'prefix_binding_mismatch', path: 'messages.1.content.0' }];
+  const s = setup([[{ type: 'message_start', message: { usage: { input_tokens: 1000 }, input_transformations: dropped } },
+    { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 'tu1', name: 'categories', input: {} } },
+    { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"bad' } },
+    { type: 'content_block_stop', index: 0 },
+    { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 50 }, input_transformations: dropped }, { type: 'message_stop' }],
+  [start(), ...text(0, 'Done.'), ...end('end_turn')]]);
+  const lines: string[] = [];
+  const { warn } = console;
+  console.warn = (...a: unknown[]) => { lines.push(a.join(' ')); };
+  try { await s.run(); } finally { console.warn = warn; }
+  const change = '[hermes] chat history changed: thinking_dropped/prefix_binding_mismatch at messages.1.content.0';
+  assert.deepEqual(lines, [change, '[hermes] chat tool input was not JSON name=categories', change]);
+});
+
+test('an answer past the cost cap makes its next call the last one and saves what it wrote; a pause past the cap does not resume', async () => {
+  // priced as Opus: $4 per million input tokens, so this round alone passes the cap
+  const pricey = { type: 'message_start', message: { usage: { input_tokens: Math.ceil(MAX_ANSWER_MICROS / 4) + 1 } } };
+  const s = setup([[pricey, ...tool(0, 'tu1', 'categories', {}), ...end('tool_use')], [start(), ...text(0, 'What I found.'), ...end('end_turn')]]);
+  await s.run();
+  assert.equal(s.fake.requests.length, 2);
+  assert.equal(s.fake.requests[0]!.tool_choice, undefined);
+  assert.deepEqual(s.fake.requests[1]!.tool_choice, { type: 'none' });
+  assert.deepEqual((lastMessage(s.fake.requests[1]!).content as unknown[]).at(-1), { type: 'text', text: 'Answer now with what you have; no more tools.' });
+  const msg = getChat(s.db, s.chatId)!.messages[1]!;
+  assert.deepEqual([msg.status, msg.text], ['done', 'What I found.']);
+
+  const p = setup([[pricey, ...text(0, 'So far.'), ...search(1, 'srv1', 'SYNTHETIC QUERY'), ...end('pause_turn')], [start(), ...text(0, 'More.'), ...end('end_turn')]]);
+  await p.run();
+  assert.equal(p.fake.requests.length, 1);
+  assert.equal(getChat(p.db, p.chatId)!.messages[1]!.text, 'So far.');
 });

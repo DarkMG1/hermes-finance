@@ -6,7 +6,12 @@ import { chatUsesProfile, markProfile, replay, saveAssistant, type ApiMessage } 
 
 export type ChatEvent = { type: 'tool'; name: string; label: string; input: Record<string, unknown> } | { type: 'text'; text: string }
   | { type: 'done'; messageId: string; costCents: number; status: 'done' | 'stopped' } | { type: 'error'; code: string };
-export const MAX_ROUNDS = 10;
+/** Model calls that can end in client tool calls; a research answer reads several tools between searches. */
+export const MAX_ROUNDS = 20;
+/** Continuations of a long server-side search or code run (pause_turn): counted apart so they don't use up the tool rounds. */
+export const MAX_PAUSES = 10;
+/** Past this an answer starts no new tool round or resumed search: its next call is the last, so it writes up what it has ($5). */
+export const MAX_ANSWER_MICROS = 5_000_000;
 const MAX_CHARTS = 2;
 
 type Block = Record<string, unknown>;
@@ -33,7 +38,17 @@ const SYSTEM_PROMPT = `You are the owner's personal finance assistant inside Her
 - Use show_chart when a comparison or trend of 3 or more values helps (categories, months, net worth over time); every value must come from a tool result in this conversation; at most 2 charts per answer; still state the key numbers in text.
 - Write short paragraphs and lists; start list items with "-". Use a short heading only when an answer has distinct parts, and a simple table only when it compares a few items side by side.`;
 const SYSTEM = [{ type: 'text', text: SYSTEM_PROMPT, cache_control: EPHEMERAL }];
+// a replayed block that no longer matches what it was written under is dropped instead of failing the answer
+const THINKING = { type: 'adaptive', block_binding: { prefix_mismatch_behavior: 'drop_block' } };
+const BETAS = ['thinking-binding-controls-2026-08-01'];
 const STOP_CODES: Record<string, string> = { max_tokens: 'MAX_TOKENS', refusal: 'REFUSED' };
+type Transformation = { type?: string; reason?: string; path?: string };
+/** Logs the replayed blocks the API dropped or flagged (message_start carries them; message_delta does again after a server-side fallback). */
+const logChanges = (list?: Transformation[]) => {
+  if (list?.length) console.warn(`[hermes] chat history changed: ${list.map((t) => `${t.type}/${t.reason} at ${t.path}`).join(' ')}`);
+};
+// blank text: the API's thinking check skips it, and an answer never needs it back
+const blank = (b: Block) => b.type === 'text' && !(b.text as string | undefined)?.trim();
 
 const mark = (m: ApiMessage): ApiMessage => {
   const blocks = m.content as Block[];
@@ -74,7 +89,7 @@ async function autoTitle(deps: Deps, claude: Claude, chatId: string, question: s
   }
 }
 
-/** Streams one answer: up to MAX_ROUNDS model calls, running tools between them, and saves the turn as done, stopped or failed. */
+/** Streams one answer: up to MAX_ROUNDS tool rounds (plus MAX_PAUSES resumed searches), running tools between them, and saves the turn as done, stopped or failed. */
 export async function answer(deps: Deps, chatId: string, assistantId: string, emit: (e: ChatEvent) => void, signal: AbortSignal): Promise<void> {
   const model = deps.config.chatModel;
   const history = replay(deps.db, chatId, assistantId);
@@ -89,15 +104,15 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
   try {
     const claude = deps.claude;
     if (!claude) throw new ClaudeError('AI_NOT_CONFIGURED');
-    for (let r = 0; r < MAX_ROUNDS; r++) {
-      const last = r === MAX_ROUNDS - 1;
+    for (let rounds = 0, pauses = 0; ;) {
+      const last = rounds === MAX_ROUNDS - 1 || cost > MAX_ANSWER_MICROS;
       // tools stay on the last call (history holds tool_use blocks and the cache prefix starts with tools); tool_choice none forbids new calls.
       // The nudge joins the stored tool results (roles keep alternating, and later requests resend exactly what this one sent); after a
       // paused search the request ends with that answer so the server resumes it, and there's no tool result to join.
       if (last && turn.at(-1)?.role === 'user') (turn.at(-1)!.content as Block[]).push({ type: 'text', text: LAST_CALL });
       // max_tokens covers thinking too
       const { events, key } = await claude.stream('chat', {
-        model, max_tokens: 16_000, stream: true, system: SYSTEM, tools: CACHED_TOOLS, ...(last ? { tool_choice: { type: 'none' } } : {}),
+        model, max_tokens: 64_000, stream: true, thinking: THINKING, betas: BETAS, system: SYSTEM, tools: CACHED_TOOLS, ...(last ? { tool_choice: { type: 'none' } } : {}),
         messages: cached(history, turn),
       }, signal);
       const usage: Usage = {};
@@ -108,11 +123,17 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
         // tools run only after the stream ends: the stream has an idle timeout between chunks
         for await (const e of events) {
           const i = e.index as number;
-          if (e.type === 'message_start') Object.assign(usage, (e.message as { usage?: Usage }).usage);
+          if (e.type === 'message_start') {
+            const m = e.message as { usage?: Usage; input_transformations?: Transformation[] };
+            Object.assign(usage, m.usage);
+            logChanges(m.input_transformations);
+          }
           else if (e.type === 'message_stop') complete = true;
           else if (e.type === 'message_delta') {
             Object.assign(usage, e.usage);
-            stop = (e.delta as { stop_reason?: string }).stop_reason ?? stop;
+            const d = e.delta as { stop_reason?: string; input_transformations?: Transformation[] };
+            stop = d.stop_reason ?? stop;
+            logChanges((e.input_transformations as Transformation[] | undefined) ?? d.input_transformations);
           } else if (e.type === 'content_block_start') content[i] = { ...(e.content_block as Block) };
           else if (e.type === 'content_block_delta') {
             const b = content[i]!;
@@ -129,7 +150,14 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
             // a web search's sources, kept so the text block goes back as it came
             else if (d.type === 'citations_delta') ((b.citations ??= []) as unknown[]).push((e.delta as { citation: unknown }).citation);
           } else if (e.type === 'content_block_stop' && (content[i]?.type === 'tool_use' || content[i]?.type === 'server_tool_use')) {
-            try { content[i]!.input = JSON.parse(json.get(i) || '{}'); } catch { content[i]!.input = {}; }
+            // a call made from code execution arrives whole in its start block, with no deltas
+            if (json.has(i)) {
+              try { content[i]!.input = JSON.parse(json.get(i) || '{}'); } catch {
+                // replaying the rewritten input drops the thinking after it (drop_block); the bad JSON never reaches a tool
+                console.warn(`[hermes] chat tool input was not JSON name=${String(content[i]!.name)}`);
+                content[i]!.input = {};
+              }
+            }
             const b = content[i]!;
             if (b.type === 'server_tool_use' && b.name === 'web_search') {
               emit({ type: 'tool', name: 'web_search', label: toolLabel('web_search', b.input as Record<string, unknown>), input: b.input as Record<string, unknown> });
@@ -142,15 +170,20 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
       } finally {
         cost += claude.record('chat', model, key, usage);
       }
-      const got = content.filter((b) => b && !(b.type === 'text' && !b.text));
+      const got = content.filter((b) => b && !blank(b));
       // a resumed paused search continues the same answer: one assistant message, so roles keep alternating
       if (turn.at(-1)?.role === 'assistant') (turn.at(-1)!.content as Block[]).push(...got);
       else turn.push({ role: 'assistant', content: got });
       const uses = content.filter((b) => b?.type === 'tool_use');
       content = [];
-      // the server paused a long search: send the answer so far back and it carries on
-      if (stop === 'pause_turn' && !last) continue;
+      // the server paused a long search: send the answer so far back and it carries on (on the last call too: tool_choice none stays)
+      if (stop === 'pause_turn') {
+        if (++pauses <= MAX_PAUSES && cost <= MAX_ANSWER_MICROS) continue;
+        if (!turn.some((m) => m.role === 'assistant' && (m.content as Block[]).some((b) => b.type === 'text'))) throw new ClaudeError('INCOMPLETE');
+        break;
+      }
       if (stop !== 'tool_use' || last || !uses.length) break;
+      rounds++;
       turn.push({
         role: 'user',
         content: uses.map((b) => {
