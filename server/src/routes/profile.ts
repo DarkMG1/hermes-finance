@@ -267,7 +267,8 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
       const merged = parseBody(PayStubBody, { ...pick(current, Object.keys(PayStubBody.shape)), ...patch });
       assertDates(merged, STUB_DATES);
       assertJob(merged.jobId);
-      assertNotDuplicate(merged, current.id);
+      // a legacy duplicate can still be edited in ways the duplicate test doesn't look at
+      if ((['jobId', 'payDate', 'grossCents', 'netCents'] as const).some((k) => (merged[k] ?? null) !== (current[k] ?? null))) assertNotDuplicate(merged, current.id);
       db.prepare(`UPDATE pay_stubs SET ${assign(STUB_COLS)} WHERE id = ?`).run(...stubValues(merged), current.id);
       replaceLink(db, patch.documentId, 'pay_stub', current.id);
       const s = stub(current.id);
@@ -352,6 +353,7 @@ export function profileRoutes(app: FastifyInstance, deps: Deps): void {
   app.delete('/v1/tax-returns/:id', del('tax_returns', 'tax return', 'tax_return'));
 
   app.get<{ Querystring: { recordType?: string; recordId?: string } }>('/v1/documents', async (req) => {
+    purgeUnlinked(db, deps.now());
     const { recordType, recordId } = req.query;
     if (recordType === undefined && recordId === undefined) return { documents: listDocuments(db) };
     const type = DocumentRecordType.safeParse(recordType);

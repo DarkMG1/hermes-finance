@@ -190,8 +190,8 @@ test('a document of another kind is a 400 that saves nothing', async () => {
   assert.deepEqual(['tax_forms', 'tax_returns', 'jobs', 'w4s', 'state_w4s', 'pay_stubs', 'document_links'].map(count), before);
 });
 
-test('unlinked documents older than 24 hours are purged on each read and at startup; linked ones stay', async () => {
-  const { deps, send, read, exists, job } = setup();
+test('unlinked documents older than 24 hours are purged on each read, each list and at startup; linked ones stay', async () => {
+  const { deps, get, send, read, exists, job } = setup();
   const t0 = Date.parse('2026-03-15T12:00:00Z');
   const old = await read();
   const kept = await read(1, 'w4');
@@ -202,7 +202,10 @@ test('unlinked documents older than 24 hours are purged on each read and at star
   deps.now = () => new Date(t0 + 24 * 3_600_000 + 1);
   await read();
   assert.deepEqual([old, kept, young].map(exists), [false, true, true]);
-  assert.equal(purgeUnlinked(deps.db, new Date(t0 + 49 * 3_600_000)), 2);
+  deps.now = () => new Date(t0 + 48 * 3_600_000 + 1);
+  await get('/v1/documents');
+  assert.ok(!exists(young), 'and on each list');
+  assert.equal(purgeUnlinked(deps.db, new Date(t0 + 49 * 3_600_000)), 1);
   assert.ok(exists(kept));
 });
 
@@ -260,6 +263,61 @@ test('re-reading a multi-stub document updates the stubs it saved (by pay date) 
   profileReader.next = stubRead([{ ...a, grossCents: 1100, netCents: 1100 }, b]);
   const fresh = (await app.inject({ method: 'POST', url: '/v1/profile/read', headers: AUTH, payload: { kind: 'pay_stub', pages: [page(1).toString('base64')] } })).json();
   assert.deepEqual(fresh.stubs.map((s: { recordId?: string; saved: boolean }) => [s.recordId, s.saved]), [[stubA, true], [created.json().id, true]]);
+});
+
+test('a re-read pairs same-day stubs by their amounts, and a stub whose pay date reads differently with one the document already saved', async () => {
+  const { app, send, read, job, profileReader } = setup();
+  const jobId = await job();
+  const regular = { employer: 'SYNTHETIC EMPLOYER', payDate: '2026-02-27', grossCents: 1000, netCents: 1000 };
+  const bonus = { ...regular, grossCents: 5000, netCents: 5000 };
+  profileReader.next = stubRead([regular, bonus]);
+  const doc = await read(2);
+  // saved in the other order than the pages
+  const bonusId = (await send('POST', '/v1/pay-stubs', { ...bonus, employer: undefined, jobId, documentId: doc })).json().id as string;
+  const regularId = (await send('POST', '/v1/pay-stubs', { ...regular, employer: undefined, jobId, documentId: doc })).json().id as string;
+  const recordIds = async () => (await rereadOf(app, doc)).json().stubs.map((s: { recordId?: string }) => s.recordId);
+  assert.deepEqual(await recordIds(), [regularId, bonusId]);
+  for (const [i, s] of [[0, regular], [1, bonus]] as const) {
+    const res = await send('PATCH', `/v1/pay-stubs/${[regularId, bonusId][i]}`, { ...s, employer: undefined, documentId: doc });
+    assert.equal(res.statusCode, 200, res.body);
+  }
+  // the regular stub was corrected by hand to the 16th; the re-read still says the 15th
+  await send('PATCH', `/v1/pay-stubs/${regularId}`, { payDate: '2026-02-16' });
+  await send('PATCH', `/v1/pay-stubs/${bonusId}`, { payDate: '2026-02-20' });
+  profileReader.next = stubRead([{ ...regular, payDate: '2026-02-15' }, { ...bonus, payDate: '2026-02-15' }]);
+  assert.deepEqual(await recordIds(), [regularId, bonusId], 'same amounts first');
+  profileReader.next = stubRead([{ ...regular, payDate: '2026-02-15', grossCents: 1001, netCents: 1001 }, { ...bonus, payDate: '2026-02-15', grossCents: 5001, netCents: 5001 }]);
+  assert.deepEqual(await recordIds(), [regularId, bonusId], 'then by pay date');
+  profileReader.next = stubRead([{ ...regular, payDate: '2026-02-15' }]);
+  const fresh = (await app.inject({ method: 'POST', url: '/v1/profile/read', headers: AUTH, payload: { kind: 'pay_stub', pages: [page(1).toString('base64')] } })).json();
+  assert.equal(fresh.stubs[0].recordId, undefined, 'a fresh read pairs only by the duplicate test');
+});
+
+test('a stub PATCH runs the duplicate test only when job, pay date or amounts change; its own old document, linked nowhere else, goes', async () => {
+  const { send, read, docs, exists, job, deps } = setup();
+  const jobId = await job();
+  const stub = { jobId, payDate: '2026-02-27', grossCents: 1000, netCents: 1000 };
+  const old = await read();
+  const a = (await send('POST', '/v1/pay-stubs', { ...stub, documentId: old })).json().id as string;
+  // a duplicate saved before the duplicate test existed
+  deps.db.prepare(`INSERT INTO pay_stubs (id, job_id, pay_date, gross_cents, federal_cents, state_cents, social_security_cents, medicare_cents,
+    retirement_cents, other_deductions_cents, net_cents, created_at) VALUES ('legacy', ?, ?, ?, 0, 0, 0, 0, 0, 0, ?, 'x')`).run(jobId, stub.payDate, stub.grossCents, stub.netCents);
+  const doc = await read();
+  assert.equal((await send('PATCH', `/v1/pay-stubs/${a}`, { documentId: doc })).statusCode, 200);
+  assert.deepEqual([exists(old), (await docs('pay_stub', a)).map((d) => d.id)], [false, [doc]]);
+  assert.equal((await send('PATCH', '/v1/pay-stubs/legacy', { grossCents: 900, netCents: 900 })).statusCode, 200);
+  assert.equal((await send('PATCH', '/v1/pay-stubs/legacy', { grossCents: 1000, netCents: 1000 })).json().code, 'DUPLICATE_STUB');
+});
+
+test('a state form moved to another state keeps its document once the old state is deleted', async () => {
+  const { send, read, docs, exists, job } = setup();
+  const jobId = await job();
+  const doc = await read(1, 'state_w4');
+  await send('PUT', `/v1/jobs/${jobId}/state-w4/XA`, { allowances: 1, documentId: doc });
+  assert.equal((await send('PUT', `/v1/jobs/${jobId}/state-w4/XB`, { allowances: 1, documentId: doc })).statusCode, 200);
+  assert.equal((await send('DELETE', `/v1/jobs/${jobId}/state-w4/XA`)).statusCode, 200);
+  assert.ok(exists(doc));
+  assert.deepEqual((await docs('state_w4', `${jobId}:XB`)).map((d) => d.id), [doc]);
 });
 
 test('reading a single-record kind returns the record it updates: the linked one on a re-read, an obvious existing one on a fresh read', async () => {

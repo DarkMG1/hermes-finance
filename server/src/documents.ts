@@ -76,7 +76,8 @@ export function documentPage(db: Db, id: string, n: number): Buffer | null {
   return (db.prepare('SELECT jpeg FROM document_pages WHERE document_id = ? AND idx = ?').pluck().get(id, n) as Buffer | undefined) ?? null;
 }
 
-/** The record each draft of a read updates when saved. A re-read: what this document is linked to (pay stubs by pay date). Otherwise one
+/** The record each draft of a read updates when saved. A re-read: what this document is linked to (pay stubs by pay date and amounts,
+ *  then by pay date, then any of its stubs left: same amounts first, then by pay date). Otherwise one
  *  plainly saved already: a stub by the duplicate test (pay date, gross, net; the draft's employer's job first), a form by year, kind and
  *  payer (case and edge spaces ignored), a return by year and jurisdiction, a W-4 or state form of the only job with the draft's employer.
  *  A fresh offer matches nothing: a second offer from an employer can be a new job. */
@@ -91,17 +92,23 @@ export function withRecordIds(db: Db, r: ProfileReadResult, documentId?: string)
   switch (r.kind) {
     case 'pay_stub': {
       const used = new Set<string>();
-      const free = (found: string[]) => found.find((id) => !used.has(id));
-      const stubs = r.stubs.map((s) => {
-        const d = s.draft;
-        const id = (documentId ? free(ids(`SELECT s.id FROM pay_stubs s JOIN document_links l ON l.record_type = 'pay_stub' AND l.record_id = s.id
-          WHERE l.document_id = ? AND s.pay_date = ? ORDER BY s.created_at, s.id`, documentId, d.payDate)) : undefined)
-          ?? free(ids(`SELECT s.id FROM pay_stubs s LEFT JOIN jobs j ON j.id = s.job_id WHERE s.pay_date = ? AND s.gross_cents = ? AND s.net_cents = ?
-            ORDER BY lower(trim(j.employer)) = lower(trim(?)) DESC, s.created_at, s.id`, d.payDate, d.grossCents, d.netCents, d.employer));
-        if (id) used.add(id);
-        return matched(s, id);
+      const { stubs } = r;
+      const found: (string | undefined)[] = stubs.map(() => undefined);
+      // each pass runs over every draft still unmatched, so a closer match is never taken by an earlier page's looser one
+      const pass = (find: (d: (typeof stubs)[number]['draft']) => string[]) => stubs.forEach((s, i) => {
+        const id = found[i] ? undefined : find(s.draft).find((x) => !used.has(x));
+        if (id) { found[i] = id; used.add(id); }
       });
-      return { ...r, stubs };
+      const onDoc = (where: string, ...args: unknown[]) => (documentId ? ids(`SELECT s.id FROM pay_stubs s JOIN document_links l ON l.record_type = 'pay_stub'
+        AND l.record_id = s.id WHERE l.document_id = ? ${where} ORDER BY s.pay_date, s.created_at, s.id`, documentId, ...args) : []);
+      pass((d) => onDoc('AND s.pay_date = ? AND s.gross_cents = ? AND s.net_cents = ?', d.payDate, d.grossCents, d.netCents));
+      pass((d) => onDoc('AND s.pay_date = ?', d.payDate));
+      pass((d) => ids(`SELECT s.id FROM pay_stubs s LEFT JOIN jobs j ON j.id = s.job_id WHERE s.pay_date = ? AND s.gross_cents = ? AND s.net_cents = ?
+        ORDER BY lower(trim(j.employer)) = lower(trim(?)) DESC, s.created_at, s.id`, d.payDate, d.grossCents, d.netCents, d.employer));
+      // a re-read whose pay date reads differently still updates one of the document's own stubs
+      pass((d) => onDoc('AND s.gross_cents = ? AND s.net_cents = ?', d.grossCents, d.netCents));
+      pass(() => onDoc(''));
+      return { ...r, stubs: stubs.map((s, i) => matched(s, found[i])) };
     }
     case 'tax_form': return matched(r, linked('tax_form') ?? ids(`SELECT id FROM tax_forms WHERE year = ? AND kind = ? AND lower(trim(payer)) = lower(trim(?))
       ORDER BY created_at, id`, r.draft.year, r.draft.kind, r.draft.payer)[0]);

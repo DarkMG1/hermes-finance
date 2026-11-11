@@ -7,6 +7,9 @@ const LABELS: Record<string, string> = {
   documents: 'Documents', document_pages: 'Document pages',
 };
 
+/** Tools whose failed call showed the owner nothing, so it gets no tool line. */
+export const SILENT_FAILS = new Set(['show_chart', 'document_pages']);
+
 /** Tools that read the financial profile: behind Face ID in Ask. */
 export const PROFILE_TOOLS = new Set(['profile', 'jobs', 'pay_stubs', 'tax_years', 'tax_projection', 'tax_what_if', 'investment_activity', 'tax_lots', 'documents', 'document_pages']);
 

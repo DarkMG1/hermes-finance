@@ -513,6 +513,7 @@ test('document pages go to the model as images in the live answer only; the stor
   ]);
   const doc = 'd1';
   s.db.prepare("INSERT INTO documents (id, kind, page_count, created_at) VALUES ('d1', 'w4', 1, ?)").run(NOW);
+  s.db.prepare("INSERT INTO document_links (document_id, record_type, record_id) VALUES ('d1', 'w4', 'j1')").run();
   s.db.prepare("INSERT INTO document_pages (document_id, idx, jpeg) VALUES ('d1', 1, ?)").run(Buffer.from([0xff, 0xd8, 0x01]));
   await s.run();
   const image = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: Buffer.from([0xff, 0xd8, 0x01]).toString('base64') } };
@@ -532,15 +533,17 @@ test('document pages go to the model as images in the live answer only; the stor
 
 const seedPages = (s: ReturnType<typeof setup>, n: number) => {
   s.db.prepare("INSERT INTO documents (id, kind, page_count, created_at) VALUES ('d1', 'pay_stub', ?, ?)").run(n, NOW);
+  s.db.prepare("INSERT INTO document_links (document_id, record_type, record_id) VALUES ('d1', 'pay_stub', 's1')").run();
   for (let i = 1; i <= n; i++) s.db.prepare("INSERT INTO document_pages (document_id, idx, jpeg) VALUES ('d1', ?, ?)").run(i, Buffer.from([0xff, 0xd8, i]));
 };
 const storedJson = (s: ReturnType<typeof setup>) => s.db.prepare('SELECT content_json FROM chat_messages WHERE id = ?').pluck().get(s.assistantId) as string;
 
-test('an answer sees at most 8 document pages; a call past that is an error result naming the pages left', async () => {
+test('an answer sees at most 8 document pages; a call past that reads nothing, is an error result naming the pages left, and gets no tool line', async () => {
   const s = setup([
     [start(), ...tool(0, 'tu1', 'document_pages', { id: 'd1', pages: [1, 2, 3] }), ...end('tool_use')],
     [start(), ...tool(0, 'tu2', 'document_pages', { id: 'd1', pages: [1, 2, 3, 4] }), ...end('tool_use')],
-    [start(), ...tool(0, 'tu3', 'document_pages', { id: 'd1', pages: [4, 5] }), ...end('tool_use')],
+    // page 9 doesn't exist: a call that read pages before the cap would fail as not found instead
+    [start(), ...tool(0, 'tu3', 'document_pages', { id: 'd1', pages: [4, 9] }), ...end('tool_use')],
     [start(), ...tool(0, 'tu4', 'document_pages', { id: 'd1', pages: [5] }), ...end('tool_use')],
     [start(), ...text(0, 'Done.'), ...end('end_turn')],
   ]);
@@ -550,6 +553,8 @@ test('an answer sees at most 8 document pages; a call past that is an error resu
   assert.deepEqual(result(3), { type: 'tool_result', tool_use_id: 'tu3', content: JSON.stringify({ error: 'at most 8 document pages per answer; 1 left' }), is_error: true });
   assert.equal(result(4).is_error, false);
   assert.equal((result(4).content as unknown[]).length, 2);
+  assert.equal(s.events.filter((e) => e.type === 'tool').length, 3, 'live: no line for the refused call');
+  assert.equal(getChat(s.db, s.chatId)!.messages[1]!.tools.length, 3, 'stored: no line for it either');
 });
 
 test('a stopped or failed answer after a document_pages round stores placeholders, never the images', async () => {

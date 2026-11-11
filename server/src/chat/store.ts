@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ChatDetail, ChatList, ChatMessage, ChatSummary } from '@hermes/shared';
 import type { Db } from '../db.ts';
 import { addDays, localDay } from '../days.ts';
-import { PROFILE_TOOLS, toolLabel } from './labels.ts';
+import { PROFILE_TOOLS, SILENT_FAILS, toolLabel } from './labels.ts';
 
 type Block = Record<string, unknown>;
 export type ApiMessage = { role: 'user' | 'assistant'; content: string | Block[] };
@@ -66,10 +66,10 @@ export function getChat(db: Db, id: string, hideProfile = false): ChatDetail | n
     const all = turn.filter((m) => m.role === 'assistant').flatMap(blocks);
     const results = new Map(turn.filter((m) => m.role === 'user').flatMap(blocks).map((b) => [b.tool_use_id, b.is_error === true]));
     const text = answerText(turn);
-    // a rejected chart showed nothing
+    // a rejected chart or page call showed nothing
     // a web search runs on Anthropic's side: its result is a block in the answer, not a tool_result
     const searched = new Set(all.filter((b) => b.type === 'web_search_tool_result').map((b) => b.tool_use_id));
-    const tools = all.filter((b) => (b.type === 'tool_use' && results.has(b.id) && !(b.name === 'show_chart' && results.get(b.id)))
+    const tools = all.filter((b) => (b.type === 'tool_use' && results.has(b.id) && !(SILENT_FAILS.has(b.name as string) && results.get(b.id)))
       || (b.type === 'server_tool_use' && b.name === 'web_search' && searched.has(b.id))).map((b) => {
       const input = b.input as Record<string, unknown>;
       return { name: b.name as string, input, label: toolLabel(b.name as string, input) };

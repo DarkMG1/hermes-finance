@@ -1,7 +1,7 @@
 import type { Deps } from '../deps.ts';
 import { ClaudeError, toCents, type Claude, type Usage } from './anthropic.ts';
-import { TOOLS, runTool } from './tools.ts';
-import { toolLabel } from './labels.ts';
+import { TOOLS, pagesWanted, runTool } from './tools.ts';
+import { SILENT_FAILS, toolLabel } from './labels.ts';
 import { chatUsesProfile, markProfile, replay, saveAssistant, type ApiMessage } from './store.ts';
 
 export type ChatEvent = { type: 'tool'; name: string; label: string; input: Record<string, unknown> } | { type: 'text'; text: string }
@@ -162,16 +162,14 @@ export async function answer(deps: Deps, chatId: string, assistantId: string, em
         content: uses.map((b) => {
           const name = b.name as string;
           const input = b.input as Record<string, unknown>;
-          let res: ReturnType<typeof runTool> = name === 'show_chart' && charts >= MAX_CHARTS
-            ? { content: JSON.stringify({ error: `at most ${MAX_CHARTS} charts per answer` }), isError: true } : runTool(deps, name, input, { chatId, profileUnlocked });
-          if (res.images && pages + res.images.length > MAX_PAGES) {
-            res = { content: JSON.stringify({ error: `at most ${MAX_PAGES} document pages per answer; ${MAX_PAGES - pages} left` }), isError: true };
-          }
+          const capped = name === 'show_chart' ? charts >= MAX_CHARTS && `at most ${MAX_CHARTS} charts per answer`
+            : name === 'document_pages' && profileUnlocked && pages + pagesWanted(deps, input) > MAX_PAGES && `at most ${MAX_PAGES} document pages per answer; ${MAX_PAGES - pages} left`;
+          const res: ReturnType<typeof runTool> = capped ? { content: JSON.stringify({ error: capped }), isError: true } : runTool(deps, name, input, { chatId, profileUnlocked });
           pages += res.images?.length ?? 0;
           if (name === 'show_chart' && !res.isError) charts++;
           if ('profile' in res && res.profile) markProfile(deps.db, chatId, assistantId);
-          // a rejected chart showed nothing, so there's no line for it
-          if (!(name === 'show_chart' && res.isError)) emit({ type: 'tool', name, label: toolLabel(name, input), input });
+          // a rejected chart or page call showed nothing, so there's no line for it
+          if (!(SILENT_FAILS.has(name) && res.isError)) emit({ type: 'tool', name, label: toolLabel(name, input), input });
           const text = { type: 'text', text: res.content };
           const result = { type: 'tool_result', tool_use_id: b.id, content: res.images ? [text, ...res.images.map((x) => x.block)] : res.content, is_error: res.isError };
           if (res.images) kept.set(result, { ...result, content: [text, ...res.images.map((x) => x.stored)] });

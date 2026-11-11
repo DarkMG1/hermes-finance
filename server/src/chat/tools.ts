@@ -13,7 +13,7 @@ import { getHoldingHistory, getInvestments } from '../investments.ts';
 import { getJob, getProfile, listJobs, payStubs, taxYears } from '../profile.ts';
 import { openYears, project, whatIf } from '../tax/projection.ts';
 import { buildLots, lotsView } from '../tax/lots.ts';
-import { documentPage, getDocument, listDocuments } from '../documents.ts';
+import { documentPage, getDocument, listDocuments, purgeUnlinked } from '../documents.ts';
 import { PROFILE_TOOLS } from './labels.ts';
 import { taxReference } from './tax-reference.ts';
 import { chatUsesProfile, getChat, searchChats } from './store.ts';
@@ -23,6 +23,10 @@ type Block = Record<string, unknown>;
 /** An image the live answer sends, and the text a stored turn keeps in its place (images are never stored or replayed). */
 export type ToolImage = { block: Block; stored: Block };
 type Pages = { content: string; images: ToolImage[] };
+const pagesOf = (pageCount: number, pages?: unknown[]) => [...new Set(pages ?? Array.from({ length: Math.min(4, pageCount) }, (_, i) => i + 1))] as number[];
+/** The pages a document_pages call would show, counted before any is read so a call over the per-answer cap reads none. */
+export const pagesWanted = (d: Deps, input: Record<string, unknown>) =>
+  pagesOf((typeof input.id === 'string' && getDocument(d.db, input.id)?.pageCount) || 0, Array.isArray(input.pages) ? input.pages : undefined).length;
 export const RESULT_MAX = 20_000;
 
 /** What the tools know about the request: the conversation being answered, and whether the owner unlocked the financial profile for it. */
@@ -128,15 +132,20 @@ const ENTRIES = new Map<string, Entry>([
   entry('documents', 'Kept documents (the redacted pages of pay stubs, W-2/1099s, W-4s, state withholding forms, tax returns and offers the owner scanned), newest first, each with its page count and the records saved from it; give recordType and recordId for one record\'s documents, or kind.',
     z.object({ recordType: DocumentRecordType.optional(), recordId: z.string().min(1).optional(), kind: ProfileKind.optional() }).strict()
       .refine((q) => !q.recordType === !q.recordId, { message: 'give recordType and recordId together', path: ['recordId'] }),
-    (d, q) => ({ documents: listDocuments(d.db, q.recordType && q.recordId ? { recordType: q.recordType, recordId: q.recordId } : undefined)
-      .filter((doc) => !q.kind || doc.kind === q.kind)
-      .map((doc) => ({ ...doc, links: doc.links.map((l) => ({ ...l, description: describe(d, l.recordType, l.recordId) })) })) })),
+    (d, q) => {
+      purgeUnlinked(d.db, d.now());
+      // a read never saved isn't the owner's yet
+      return { documents: listDocuments(d.db, q.recordType && q.recordId ? { recordType: q.recordType, recordId: q.recordId } : undefined)
+        .filter((doc) => doc.links.length && (!q.kind || doc.kind === q.kind))
+        .map((doc) => ({ ...doc, links: doc.links.map((l) => ({ ...l, description: describe(d, l.recordType, l.recordId) })) })) };
+    }),
   entry('document_pages', 'Shows you pages of a kept document (id from documents) as images, at most 4 per call and 8 per answer (pages 1-based; default the first 4). Each page costs tokens: use it only when the stored numbers (pay_stubs, jobs, tax_years) don\'t answer the question.',
     z.object({ id: z.string().min(1), pages: z.array(z.number().int().min(1)).min(1).max(4).optional() }).strict(),
     (d, q): Pages | null => {
+      purgeUnlinked(d.db, d.now());
       const doc = getDocument(d.db, q.id);
-      if (!doc) return null;
-      const pages = [...new Set(q.pages ?? Array.from({ length: Math.min(4, doc.pageCount) }, (_, i) => i + 1))];
+      if (!doc?.links.length) return null;
+      const pages = pagesOf(doc.pageCount, q.pages);
       const images = pages.map((n) => {
         const jpeg = documentPage(d.db, doc.id, n);
         if (!jpeg) throw new ApiError(404, 'NOT_FOUND', `page ${n}: the document has ${doc.pageCount} pages`);

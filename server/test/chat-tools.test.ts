@@ -386,6 +386,15 @@ test('document_pages returns JPEG image blocks and a stored form with placeholde
   assert.equal(runTool(deps, 'document_pages', { id: 'nope' }, UNLOCKED).isError, true);
 });
 
+test('Ask sees only documents a save linked; an unsaved read older than a day is purged when it looks', () => {
+  const { deps, db, stubDoc, formDoc, pages } = withDocument();
+  const unsaved = saveDocument(db, 'pay_stub', pages, deps.now());
+  const stale = saveDocument(db, 'pay_stub', pages, new Date(deps.now().getTime() - 86_400_001));
+  assert.deepEqual(call(deps, 'documents', {}, UNLOCKED).documents.map((d: { id: string }) => d.id), [formDoc, stubDoc]);
+  assert.equal(runTool(deps, 'document_pages', { id: unsaved }, UNLOCKED).isError, true);
+  assert.deepEqual([unsaved, stale].map((id) => !!db.prepare('SELECT 1 FROM documents WHERE id = ?').get(id)), [true, false]);
+});
+
 test('document tools refuse while the profile is locked', () => {
   const { deps, stubDoc } = withDocument();
   for (const [name, input] of [['documents', {}], ['document_pages', { id: stubDoc }]] as const) {
