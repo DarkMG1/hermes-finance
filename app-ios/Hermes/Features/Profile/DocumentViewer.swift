@@ -31,7 +31,7 @@ struct DocumentViewer: View {
                         .accessibilityLabel("Page \(index + 1) of \(document.pageCount)")
                 } else {
                     Spacer()
-                    if error == nil && pageErrors[index] == nil { ProgressView() }
+                    if pageErrors[index] == nil && !gone { ProgressView() }
                     Spacer()
                 }
                 InlineError(message: error ?? pageErrors[index])

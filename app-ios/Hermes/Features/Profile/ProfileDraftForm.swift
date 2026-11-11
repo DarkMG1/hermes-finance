@@ -111,10 +111,7 @@ struct ProfileDraftForm: View {
                     Text(updates).textStyle(.subhead, color: Palette.secondaryText)
                     // a second form or stub that matched the first is saved beside it
                     if [.taxForm, .payStub].contains(kind) {
-                        Button("Save as new") {
-                            record = .gone
-                            Task { await save() }
-                        }
+                        Button("Save as new") { Task { await saveAsNew() } }
                         .disabled(locked)
                     }
                 }
@@ -187,7 +184,7 @@ struct ProfileDraftForm: View {
             let name = [Self.formKinds.first { $0.value == f.kind }?.label ?? "form", f.year.map(String.init)].compactMap { $0 }.joined(separator: " ")
             return "Updates the saved \(name) from \(f.payer ?? "the same payer")."
         case .payStub: return record?.stub.map { "Updates the saved pay stub for \(DayText.display($0.payDate ?? ""))." } ?? "Updates a saved pay stub."
-        case .taxReturn: return "Updates the saved return for this year."
+        case .taxReturn: return "Updates the saved \([texts["year"], "return"].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " "))."
         case .w4: return jobId == recordId ? "Updates this job's saved W-4." : nil
         case .stateW4: return stateUpdate(recordId)
         case .offer: return nil
@@ -250,6 +247,14 @@ struct ProfileDraftForm: View {
         } catch {
             jobsError = "Couldn't load \(jobs.isEmpty ? "your jobs" : "the saved record"): \(errorMessage(error))"
         }
+    }
+
+    /// A create in place of the update; a failed one goes back to the update, unless its outcome is unknown and a retry must resend it.
+    private func saveAsNew() async {
+        let match = record
+        record = .gone
+        await save()
+        if error != nil, !writes.unresolved { record = match }
     }
 
     private func save() async {

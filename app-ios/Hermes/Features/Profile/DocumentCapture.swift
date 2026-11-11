@@ -236,6 +236,8 @@ struct ProfileCaptureFlow: View {
                                      reads = read.reads.filter { !$0.saved }
                                      skipped = read.reads.count - reads.count
                                      attach = read.reads.filter(\.saved).map { ($0, UUID().uuidString) }
+                                     // the spinner from the first frame, not a flash of the failure
+                                     attaching = !attach.isEmpty
                                      Task { await keep() }
                                  }, onByHand: { byHand = true })
             }
@@ -263,9 +265,9 @@ struct ProfileCaptureFlow: View {
 
     /// Stubs skipped as already saved still get these pages, as a re-scan of any other record does when saved.
     private func keep() async {
-        guard !attaching, let client = model.client else { return }
         attaching = true
         defer { attaching = false }
+        guard let client = model.client else { return }
         var failed: [(read: ProfileReadResult, key: String)] = []
         for item in attach {
             guard let id = item.read.recordId, let documentId = item.read.documentId, case .payStub(let body, _) = item.read.draft else { continue }
