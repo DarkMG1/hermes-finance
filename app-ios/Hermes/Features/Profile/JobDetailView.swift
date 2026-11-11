@@ -57,10 +57,14 @@ struct JobDetailView: View {
                         Button("Add W-4") { addingW4 = true }
                     }
                     ForEach(detail.stateW4s, id: \.state) { form in
+                        let document = documents[DocumentLink(recordType: .stateW4, recordId: "\(id):\(form.state ?? "")")]
                         EditRow(title: "State form", fields: ProfileDraftForm.stateW4Fields, original: form,
                                 row: ListRow(title: "\(form.state ?? "State") form", subtitle: Self.stateW4Detail(form))) { body, key in
                             guard let client = model.client else { return }
-                            _ = try await client.putStateW4(jobId: id, body: body, idempotencyKey: key)
+                            // its document moves with it, so deleting the old state below doesn't take the pages
+                            _ = try await savingDocument(document?.id, key: key) { doc, key in
+                                try await client.putStateW4(jobId: id, body: body, documentId: doc, idempotencyKey: key)
+                            }
                             // a changed state code is a different form: the old one goes
                             if let old = form.state, old != body.state { try await client.deleteStateW4(jobId: id, state: old, idempotencyKey: key + "-old") }
                             await load()
@@ -69,7 +73,7 @@ struct JobDetailView: View {
                             try await client.deleteStateW4(jobId: id, state: form.state ?? "", idempotencyKey: key)
                             await load()
                         }
-                        .keptDocument(documents[DocumentLink(recordType: .stateW4, recordId: "\(id):\(form.state ?? "")")]) { await load() }
+                        .keptDocument(document) { await load() }
                     }
                     Button("Add state form") { addingStateW4 = true }
                 }

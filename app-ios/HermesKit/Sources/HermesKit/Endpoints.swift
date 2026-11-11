@@ -262,8 +262,11 @@ extension APIClient {
         return try await write("PUT", "/v1/jobs/\(jobId)/state-w4/\(body.state ?? "")", body: fields, key: idempotencyKey)
     }
 
+    /// Already gone (deleted on another device) is done, so a save that replaces the form can finish.
     public func deleteStateW4(jobId: String, state: String, idempotencyKey: String) async throws {
-        try await send("DELETE", "/v1/jobs/\(jobId)/state-w4/\(state)", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
+        do {
+            try await send("DELETE", "/v1/jobs/\(jobId)/state-w4/\(state)", body: nil, idempotencyKey: idempotencyKey, timeout: 30)
+        } catch ClientError.api(status: 404, _) {}
     }
 
     public func createTaxForm(_ body: TaxFormBody, documentId: String? = nil, idempotencyKey: String) async throws -> TaxForm {

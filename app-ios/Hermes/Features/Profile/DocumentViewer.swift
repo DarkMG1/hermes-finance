@@ -8,7 +8,13 @@ struct DocumentViewer: View {
     let document: KeptDocument
     @State private var pages: [Int: UIImage] = [:]
     @State private var index = 0
+    /// a re-read's or delete's error, or the document being gone
     @State private var error: String?
+    @State private var pageErrors: [Int: String] = [:]
+    /// bumped by Retry, so the page load runs again and is cancelled like any other when paging on
+    @State private var retry = 0
+    /// a re-read saved something, so closing its review closes this too and the list behind refreshes
+    @State private var saved = false
     @State private var gone = false
     @State private var reading = false
     @State private var deleting = false
@@ -25,11 +31,11 @@ struct DocumentViewer: View {
                         .accessibilityLabel("Page \(index + 1) of \(document.pageCount)")
                 } else {
                     Spacer()
-                    if error == nil { ProgressView() }
+                    if error == nil && pageErrors[index] == nil { ProgressView() }
                     Spacer()
                 }
-                InlineError(message: error)
-                if pages[index] == nil, error != nil, !gone { Button("Retry") { Task { await loadPage() } } }
+                InlineError(message: error ?? pageErrors[index])
+                if pages[index] == nil, pageErrors[index] != nil, !gone { Button("Retry") { retry += 1 } }
                 if document.pageCount > 1 {
                     HStack {
                         Button { index -= 1 } label: { Image(systemName: "chevron.left") }
@@ -64,24 +70,24 @@ struct DocumentViewer: View {
             }
         }
         .interactiveDismissDisabled(reading || deleting)
-        .task(id: index) { await loadPage() }
-        // the review saves each draft as an update of the record it matched; closing it closes this too, so the list behind refreshes
-        .sheet(isPresented: Binding(get: { reread != nil }, set: { if !$0 { reread = nil } }), onDismiss: { dismiss() }, content: {
-            if let reread { ProfileCaptureFlow(reread: reread) }
+        .task(id: [index, retry]) { await loadPage() }
+        // the review saves each draft as an update of the record it matched
+        .sheet(isPresented: Binding(get: { reread != nil }, set: { if !$0 { reread = nil } }), onDismiss: { if saved { dismiss() } }, content: {
+            if let reread { ProfileCaptureFlow(reread: reread) { saved = true } }
         })
     }
 
     private func loadPage() async {
-        guard !gone else { return }
-        error = nil
-        guard pages[index] == nil, let client = model.client else { return }
         let page = index
+        guard !gone, pages[page] == nil, let client = model.client else { return }
+        pageErrors[page] = nil
         do {
             let data = try await client.documentPage(id: document.id, page: page + 1)
-            if let image = UIImage(data: data) { pages[page] = image } else if !Task.isCancelled { error = "Couldn't show this page." }
+            if let image = UIImage(data: data) { pages[page] = image } else if !Task.isCancelled { pageErrors[page] = "Couldn't show this page." }
         } catch {
             // paged on before it arrived
-            if !Task.isCancelled { show(error) }
+            if Task.isCancelled { return }
+            if case .api(status: 404, _) = error as? ClientError { show(error) } else { pageErrors[page] = errorMessage(error) }
         }
     }
 

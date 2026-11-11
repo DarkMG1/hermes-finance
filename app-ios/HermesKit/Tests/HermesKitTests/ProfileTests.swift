@@ -317,3 +317,16 @@ import Testing
     await #expect(throws: gone) { try await savingDocument(nil, key: "k") { _, key in calls.append(key); throw gone } }
     #expect(calls == ["k"], "no document: no retry")
 }
+
+@Test func noDocumentLeavesACreateBodyAsIsAndAGoneStateFormDeleteIsDone() async throws {
+    let stub = try JSONSerialization.data(withJSONObject: try #require(
+        (JSONSerialization.jsonObject(with: fixture("job")) as? [String: Any])?["stubs"].flatMap { ($0 as? [Any])?.first }))
+    let transport = FakeTransport([.success(HTTPResponse(status: 201, body: stub)), FakeTransport.json(404, #"{"code":"NOT_FOUND","message":"not found"}"#)])
+    let client = APIClient(baseURL: testBase, token: "t", transport: transport)
+    var body = PayStubBody()
+    body.payDate = "2026-03-13"
+    _ = try await client.createPayStub(body, documentId: nil, idempotencyKey: "k-1")
+    try await client.deleteStateW4(jobId: "job-1", state: "XA", idempotencyKey: "k-2")
+    #expect(String(data: transport.requests[0].body ?? Data(), encoding: .utf8) == #"{"payDate":"2026-03-13"}"#)
+    #expect(transport.requests.map(\.method) == ["POST", "DELETE"])
+}

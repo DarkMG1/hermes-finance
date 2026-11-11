@@ -1,143 +1,6 @@
 import HermesKit
 import SwiftUI
 
-/// One input on a review form, read from and written into its body by key path. `key` is the body's JSON name, as `uncertain` lists it.
-struct DraftField<B> {
-    enum Kind {
-        case money(WritableKeyPath<B, Int?>, signed: Bool = false)
-        case whole(WritableKeyPath<B, Int?>)
-        case number(WritableKeyPath<B, Double?>)
-        case date(WritableKeyPath<B, String?>)
-        case text(WritableKeyPath<B, String?>)
-        /// "federal" or a state code
-        case code(WritableKeyPath<B, String?>)
-        case choice(WritableKeyPath<B, String?>, [(value: String, label: String)])
-        case flag(WritableKeyPath<B, Bool?>)
-    }
-
-    let key: String
-    let label: String
-    let kind: Kind
-    /// a choice the server needs: no "None"
-    var required = false
-
-    func text(_ body: B) -> String {
-        switch kind {
-        case .money(let p, _): FieldText.cents(body[keyPath: p])
-        case .whole(let p): body[keyPath: p].map(String.init) ?? ""
-        case .number(let p): FieldText.number(body[keyPath: p])
-        case .date(let p), .text(let p), .code(let p), .choice(let p, _): body[keyPath: p] ?? ""
-        case .flag(let p): body[keyPath: p].map { $0 ? "yes" : "no" } ?? ""
-        }
-    }
-
-    /// Writes what the text means into `body` (empty is nil); false when it doesn't parse.
-    func apply(_ text: String, to body: inout B) -> Bool {
-        func put<T>(_ p: WritableKeyPath<B, T?>, _ parse: (String) -> T?) -> Bool {
-            let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            // a required choice left blank keeps Save off
-            guard !t.isEmpty else { body[keyPath: p] = nil; return !required }
-            guard let v = parse(t) else { return false }
-            body[keyPath: p] = v
-            return true
-        }
-        switch kind {
-        case .money(let p, let signed): return put(p) { FieldText.cents($0, signed: signed) }
-        case .whole(let p): return put(p, FieldText.whole)
-        case .number(let p): return put(p, FieldText.number)
-        case .date(let p): return put(p, FieldText.date)
-        case .text(let p), .choice(let p, _): return put(p) { $0 }
-        case .code(let p): return put(p, FieldText.code)
-        case .flag(let p): return put(p) { $0 == "yes" }
-        }
-    }
-
-    /// Empty text counts: the server says which fields it needs.
-    func parses(_ text: String) -> Bool {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty else { return true }
-        return switch kind {
-        case .money(_, let signed): FieldText.cents(t, signed: signed) != nil
-        case .whole: FieldText.whole(t) != nil
-        case .number: FieldText.number(t) != nil
-        case .date: FieldText.date(t) != nil
-        case .text, .code, .choice, .flag: true
-        }
-    }
-
-    var hint: String {
-        switch kind {
-        case .money: "Enter an amount like 1,234.56"
-        case .whole: "Enter a whole number"
-        case .number: "Enter a number"
-        case .date: "Enter a date like 2026-01-31"
-        case .text, .code, .choice, .flag: ""
-        }
-    }
-
-    var options: [(value: String, label: String)]? {
-        switch kind {
-        case .choice(_, let options): options
-        case .flag: [("yes", "Yes"), ("no", "No")]
-        default: nil
-        }
-    }
-
-    static func texts(_ fields: [DraftField], _ body: B) -> [String: String] {
-        Dictionary(uniqueKeysWithValues: fields.map { ($0.key, $0.text(body)) })
-    }
-
-    /// `base` with every field's text, or nil when one doesn't parse.
-    static func build(_ fields: [DraftField], _ texts: [String: String], _ base: B) -> B? {
-        var body = base
-        return fields.allSatisfy { $0.apply(texts[$0.key] ?? "", to: &body) } ? body : nil
-    }
-}
-
-struct DraftFields<B>: View {
-    let fields: [DraftField<B>]
-    @Binding var texts: [String: String]
-    let uncertain: Set<String>
-
-    var body: some View {
-        ForEach(fields, id: \.key) { field in
-            let text = Binding { texts[field.key] ?? "" } set: { texts[field.key] = $0 }
-            Group {
-                if let options = field.options {
-                    Picker(field.label, selection: text) {
-                        if !field.required || text.wrappedValue.isEmpty { Text(field.required ? "Choose" : "None").tag("") }
-                        ForEach(options, id: \.value) { Text($0.label).tag($0.value) }
-                    }
-                } else if field.key == "note" {
-                    NotesField(text: text, label: field.label)
-                } else {
-                    Field(label: field.label, error: field.parses(text.wrappedValue) ? nil : field.hint) {
-                        TextField(field.label, text: text)
-                            .keyboardType(Self.keyboard(field.kind))
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(Self.isCode(field.kind) ? .characters : .sentences)
-                    }
-                }
-            }
-            // what Claude wasn't sure of stands out until checked
-            .listRowBackground(uncertain.contains(field.key) ? Palette.loss.opacity(0.15) : nil)
-            .accessibilityHint(uncertain.contains(field.key) ? "Not sure this was read right; check it against the document" : "")
-        }
-    }
-
-    private static func isCode(_ kind: DraftField<B>.Kind) -> Bool { if case .code = kind { true } else { false } }
-
-    private static func keyboard(_ kind: DraftField<B>.Kind) -> UIKeyboardType {
-        switch kind {
-        case .money(_, let signed): signed ? .numbersAndPunctuation : .decimalPad
-        case .whole: .numberPad
-        case .number: .decimalPad
-        case .date: .numbersAndPunctuation
-        case .text, .code, .choice, .flag: .default
-        }
-    }
-}
-
 /// Review what was read (or enter it by hand), then save it. A pay stub then offers the deposits it matches; an offer saves its job
 /// (status offered) and then each grant.
 struct ProfileDraftForm: View {
@@ -157,6 +20,10 @@ struct ProfileDraftForm: View {
     private let documentId: String?
     /// the saved record the read matched: saved as an update of it
     private let recordId: String?
+    /// a re-read of a kept document, not a fresh scan
+    private let reread: Bool
+    /// after any write that saved
+    private let onSaved: (() -> Void)?
 
     private struct GrantRow: Identifiable {
         let id = UUID()
@@ -168,6 +35,8 @@ struct ProfileDraftForm: View {
     @State private var jobs: [Job] = []
     @State private var jobsError: String?
     @State private var jobId: String?
+    /// the picker was set, from the matched record or by hand; until then an update keeps the record's job
+    @State private var jobPicked = false
     @State private var writes = WriteGuard()
     @State private var busy = false
     @State private var error: String?
@@ -184,16 +53,19 @@ struct ProfileDraftForm: View {
         var form: TaxForm? { if case .form(let f) = self { f } else { nil } }
         var stub: PayStub? { if case .stub(let s) = self { s } else { nil } }
         var job: Job? { if case .job(let j) = self { j } else { nil } }
+        var gone: Bool { if case .gone = self { true } else { false } }
     }
 
     init(kind: ProfileKind, draft: ProfileDraft, uncertain: Set<String>, step: (Int, Int)? = nil, jobId: String? = nil, note: String? = nil,
-         documentId: String? = nil, recordId: String? = nil, next: ((String?) -> Void)? = nil) {
+         documentId: String? = nil, recordId: String? = nil, reread: Bool = false, onSaved: (() -> Void)? = nil, next: ((String?) -> Void)? = nil) {
         self.kind = kind
         self.uncertain = uncertain
         self.step = step
         self.note = note
         self.documentId = documentId
         self.recordId = recordId
+        self.reread = reread
+        self.onSaved = onSaved
         self.next = next
         // a W-4's record is its job, a state form's "<job id>:<state>"
         _jobId = State(initialValue: jobId ?? recordId.flatMap { [.w4, .stateW4].contains(kind) ? String($0.prefix { $0 != ":" }) : nil })
@@ -205,8 +77,7 @@ struct ProfileDraftForm: View {
         case .payStub(let b, let e):
             { employer = e; return DraftField.texts(Self.stubFields, b) }()
         case .offer(let j, let g):
-            // an update leaves the job's grants as they are: the read's would be added again
-            { grants = recordId == nil ? g.map { GrantRow(texts: DraftField.texts(Self.grantFields, $0)) } : []; return DraftField.texts(Self.jobFields, j) }()
+            { grants = g.map { GrantRow(texts: DraftField.texts(Self.grantFields, $0)) }; return DraftField.texts(Self.jobFields, j) }()
         case .w4(let b, let e):
             { employer = e; return DraftField.texts(Self.w4Fields, b) }()
         case .stateW4(let b, let e):
@@ -235,6 +106,19 @@ struct ProfileDraftForm: View {
             // at the top, by Save, not below a long form
             if let error { Section { InlineError(message: error) } }
             if let note { Section { Text(note).textStyle(.subhead, color: Palette.secondaryText) } }
+            if let updates {
+                Section {
+                    Text(updates).textStyle(.subhead, color: Palette.secondaryText)
+                    // a second form or stub that matched the first is saved beside it
+                    if [.taxForm, .payStub].contains(kind) {
+                        Button("Save as new") {
+                            record = .gone
+                            Task { await save() }
+                        }
+                        .disabled(locked)
+                    }
+                }
+            }
             switch kind {
             case .taxReturn:
                 Section { DraftFields(fields: Self.returnFields, texts: $texts, uncertain: uncertain) }.disabled(locked)
@@ -262,7 +146,8 @@ struct ProfileDraftForm: View {
             case .offer:
                 Section("Offer") { DraftFields(fields: Self.jobFields, texts: $texts, uncertain: uncertain) }
                     .disabled(locked || savedJobId != nil)
-                ForEach($grants) { $grant in
+                // an update leaves the job's grants as they are: the read's would be added again
+                if !updating { ForEach($grants) { $grant in
                     let i = grants.firstIndex { $0.id == grant.id } ?? 0
                     Section("Grant \(i + 1)") {
                         DraftFields(fields: Self.grantFields, texts: $grant.texts, uncertain: [])
@@ -271,9 +156,9 @@ struct ProfileDraftForm: View {
                         }
                     }
                     .disabled(locked || i < savedGrants)
-                }
+                } }
                 Section {
-                    if recordId != nil {
+                    if updating {
                         Text("Updates the saved job. Its grants stay as they are.").textStyle(.caption, color: Palette.secondaryText)
                     } else {
                         if uncertain.contains("grants") { Text("Check the grants against the letter.").textStyle(.caption, color: Palette.loss) }
@@ -283,7 +168,37 @@ struct ProfileDraftForm: View {
             }
             if let next { Section { Button("Skip this pay stub") { next(jobId) }.disabled(locked) } }
         }
-        .task { await loadJobs() }
+        .task {
+            await loadJobs()
+            if kind == .offer { _ = try? await matched() }
+        }
+        .onChange(of: jobId) { jobPicked = true }
+    }
+
+    /// matched a saved record that's still there (or not fetched yet)
+    private var updating: Bool { recordId != nil && record?.gone != true }
+
+    /// What a matched draft saves over, so a second form from one payer isn't saved over the first unnoticed.
+    private var updates: String? {
+        guard updating, let recordId else { return nil }
+        switch kind {
+        case .taxForm:
+            guard let f = record?.form else { return "Updates a saved form." }
+            let name = [Self.formKinds.first { $0.value == f.kind }?.label ?? "form", f.year.map(String.init)].compactMap { $0 }.joined(separator: " ")
+            return "Updates the saved \(name) from \(f.payer ?? "the same payer")."
+        case .payStub: return record?.stub.map { "Updates the saved pay stub for \(DayText.display($0.payDate ?? ""))." } ?? "Updates a saved pay stub."
+        case .taxReturn: return "Updates the saved return for this year."
+        case .w4: return jobId == recordId ? "Updates this job's saved W-4." : nil
+        case .stateW4: return stateUpdate(recordId)
+        case .offer: return nil
+        }
+    }
+
+    private func stateUpdate(_ recordId: String) -> String? {
+        let old = recordId.split(separator: ":", maxSplits: 1).map(String.init)
+        guard old.count == 2, old[0] == jobId else { return nil }
+        if old[1] == texts["state"]?.uppercased() { return "Updates this job's saved \(old[1]) form." }
+        return reread ? "Replaces this job's saved \(old[1]) form." : nil
     }
 
     @ViewBuilder private var jobSection: some View {
@@ -314,18 +229,18 @@ struct ProfileDraftForm: View {
         case .stateW4: jobId != nil && DraftField.build(Self.stateW4Fields, texts, StateW4Body()) != nil
         case .offer:
             DraftField.build(Self.jobFields, texts, CreateJobBody()) != nil
-                && grants.allSatisfy { DraftField.build(Self.grantFields, $0.texts, GrantBody()) != nil }
+                && (updating || grants.allSatisfy { DraftField.build(Self.grantFields, $0.texts, GrantBody()) != nil })
         }
     }
 
     private func loadJobs() async {
-        guard [.taxForm, .payStub, .w4, .stateW4].contains(kind), jobs.isEmpty, let client = model.client else { return }
+        guard [.taxForm, .payStub, .w4, .stateW4].contains(kind), jobs.isEmpty || jobsError != nil, let client = model.client else { return }
         jobsError = nil
         do {
-            jobs = try await client.jobs()
+            if jobs.isEmpty { jobs = try await client.jobs() }
             if recordId != nil, [.taxForm, .payStub].contains(kind) {
-                // an update keeps the record's job; nothing is suggested unless the record is gone (not after a failed fetch)
-                guard let found = try? await matched() else { return }
+                // an update keeps the record's job; nothing is suggested unless the record is gone
+                let found = try await matched()
                 if found.form != nil || found.stub != nil {
                     jobId = found.form?.jobId ?? found.stub?.jobId
                     return
@@ -333,7 +248,7 @@ struct ProfileDraftForm: View {
             }
             if jobId == nil { jobId = Job.suggested(for: kind == .taxForm ? texts["payer"] : employer, in: jobs)?.id }
         } catch {
-            jobsError = "Couldn't load your jobs: \(errorMessage(error))"
+            jobsError = "Couldn't load \(jobs.isEmpty ? "your jobs" : "the saved record"): \(errorMessage(error))"
         }
     }
 
@@ -345,6 +260,7 @@ struct ProfileDraftForm: View {
         do {
             guard try await write(client) else { return }
             writes.didSucceed()
+            onSaved?()
             if kind == .payStub { return }
             dismiss()
         } catch {
@@ -392,7 +308,7 @@ struct ProfileDraftForm: View {
     private func writeForm(_ client: APIClient) async throws -> Bool {
         let match = try await matched().form
         guard var body = DraftField.build(Self.formFields, texts, match?.fields ?? TaxFormBody()) else { return false }
-        body.jobId = jobId
+        if match == nil || jobPicked { body.jobId = jobId }
         try await savingDocument(documentId, key: writes.key) { doc, key in
             if let match {
                 if doc != nil || body != match.fields {
@@ -408,13 +324,14 @@ struct ProfileDraftForm: View {
     private func writeStub(_ client: APIClient) async throws -> Bool {
         let match = try await matched().stub
         guard var body = DraftField.build(Self.stubFields, texts, match?.fields ?? PayStubBody()) else { return false }
-        body.jobId = jobId
-        // on to the deposits it matches
-        stub = try await savingDocument(documentId, key: writes.key) { doc, key in
+        if match == nil || jobPicked { body.jobId = jobId }
+        let saved = try await savingDocument(documentId, key: writes.key) { doc, key in
             guard let match else { return try await client.createPayStub(body, documentId: doc, idempotencyKey: key) }
             guard doc != nil || body != match.fields else { return match }
             return try await client.patchPayStub(id: match.id, body: body, from: match.fields, documentId: doc, idempotencyKey: key)
         }
+        // on to the deposits it matches, unless an update kept its links
+        if match == nil || saved.transactionIds.isEmpty { stub = saved } else if let next { next(jobId) } else { dismiss() }
         return true
     }
 
@@ -431,8 +348,9 @@ struct ProfileDraftForm: View {
             _ = try await savingDocument(documentId, key: writes.key) { doc, key in
                 try await client.putStateW4(jobId: jobId, body: body, documentId: doc, idempotencyKey: key)
             }
-            // a re-read whose state code changed is a different form: the old one goes, as on an edit
-            let old = recordId.flatMap { $0.hasPrefix(jobId + ":") ? String($0.dropFirst(jobId.count + 1)) : nil }
+            // a re-read whose state code changed is a different form: the old one goes, as on an edit; a fresh read's match may be
+            // another real form the reader misread as this one, so it stays
+            let old = recordId.flatMap { reread && $0.hasPrefix(jobId + ":") ? String($0.dropFirst(jobId.count + 1)) : nil }
             if let old, old.uppercased() != body.state?.uppercased() {
                 try await client.deleteStateW4(jobId: jobId, state: old, idempotencyKey: writes.key + "-old")
             }
@@ -444,7 +362,13 @@ struct ProfileDraftForm: View {
     /// first one not saved.
     private func writeOffer(_ client: APIClient) async throws -> Bool {
         if savedJobId == nil {
+            let known = record != nil
             let match = try await matched().job
+            // the job went during review while its lookup had failed: the read's grants were hidden, so show them first
+            if match == nil, !known, recordId != nil, !grants.isEmpty {
+                error = "The saved job is gone, so this saves a new one. Check the grants, then save."
+                return false
+            }
             guard var body = DraftField.build(Self.jobFields, texts, match?.fields ?? CreateJobBody()) else { return false }
             if match == nil { body.status = "offered" }
             savedJobId = try await savingDocument(documentId, key: writes.key) { doc, key in
@@ -456,7 +380,7 @@ struct ProfileDraftForm: View {
             }
             writes.didSucceed()
         }
-        guard let jobId = savedJobId else { return false }
+        guard let jobId = savedJobId, record?.job == nil else { return savedJobId != nil }
         while savedGrants < grants.count {
             guard let body = DraftField.build(Self.grantFields, grants[savedGrants].texts, GrantBody()) else { return false }
             _ = try await client.createGrant(jobId: jobId, body: body, idempotencyKey: writes.key)
@@ -465,7 +389,9 @@ struct ProfileDraftForm: View {
         }
         return true
     }
+}
 
+extension ProfileDraftForm {
     static let filingStatuses: [(value: String, label: String)] = [
         ("single", "Single"), ("married_joint", "Married filing jointly"), ("married_separate", "Married filing separately"),
         ("head_of_household", "Head of household"),
