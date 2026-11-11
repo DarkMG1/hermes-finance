@@ -1,5 +1,8 @@
 import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { ClaudeError, costMicros, createClaude, usage as monthUsage } from '../src/chat/anthropic.ts';
 import { makeTestDeps } from './helpers.ts';
 
@@ -259,4 +262,50 @@ test('the request timeout covers the wait for headers: chat and profile reads 12
     assert.equal(settled, false);
     assert.equal(await drive(p, 30_000), 'TIMEOUT');
   }
+});
+
+test('betas go in the anthropic-beta header, not the body; the thinking-mismatch note is logged; HERMES_CHAT_CAPTURE writes each body as sent', async () => {
+  const sent: RequestInit[] = [];
+  const lines: string[] = [];
+  const { warn } = console;
+  console.warn = (...a: unknown[]) => { lines.push(a.join(' ')); };
+  const dir = mkdtempSync(join(tmpdir(), 'hermes-capture-'));
+  process.env.HERMES_CHAT_CAPTURE = dir;
+  try {
+    const s = setup([(init) => { sent.push(init); return new Response(OK().body, { status: 200, headers: { 'anthropic-thinking-prefix-mismatch': 'kind=blocks_modified; pattern=tool_use_rewritten' } }); }, OK]);
+    await s.claude.messages('chat', { ...BODY, betas: ['thinking-binding-controls-2026-08-01'] });
+    await s.claude.messages('chat', BODY);
+  } finally {
+    console.warn = warn;
+    delete process.env.HERMES_CHAT_CAPTURE;
+  }
+  assert.equal((sent[0]!.headers as Record<string, string>)['anthropic-beta'], 'thinking-binding-controls-2026-08-01');
+  assert.equal(JSON.parse(sent[0]!.body as string).betas, undefined);
+  assert.deepEqual(lines, ['[hermes] claude thinking prefix mismatch: kind=blocks_modified; pattern=tool_use_rewritten']);
+  const captured = readFileSync(join(dir, 'chat.jsonl'), 'utf8').trim().split('\n');
+  assert.deepEqual(captured, [sent[0]!.body, JSON.stringify(BODY)]);
+  assert.equal(statSync(join(dir, 'chat.jsonl')).mode & 0o777, 0o600);
+  rmSync(dir, { recursive: true });
+});
+
+test('HERMES_CHAT_CAPTURE never writes receipt or document reads, and a failed write logs once without failing the call', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'hermes-capture-'));
+  const lines: string[] = [];
+  const { warn } = console;
+  console.warn = (...a: unknown[]) => { lines.push(a.join(' ')); };
+  try {
+    process.env.HERMES_CHAT_CAPTURE = dir;
+    const s = setup([OK, OK, OK, OK]);
+    await s.claude.messages('receipt', BODY);
+    await s.claude.messages('profile', BODY);
+    assert.deepEqual(readdirSync(dir), []);
+    process.env.HERMES_CHAT_CAPTURE = join(dir, 'missing');
+    await s.claude.messages('chat', BODY);
+    await s.claude.messages('chat', BODY);
+  } finally {
+    console.warn = warn;
+    delete process.env.HERMES_CHAT_CAPTURE;
+    rmSync(dir, { recursive: true });
+  }
+  assert.deepEqual(lines, ['[hermes] chat capture failed ENOENT']);
 });

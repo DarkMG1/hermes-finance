@@ -1,3 +1,4 @@
+import { appendFileSync } from 'node:fs';
 import type { Db } from '../db.ts';
 import type { Config } from '../config.ts';
 import { localDay } from '../days.ts';
@@ -104,12 +105,20 @@ export function createClaude(deps: { db: Db; config: Config; now: () => Date }, 
   const mainKey = config.anthropicApiKey;
   if (!mainKey) return null;
   const month = () => localDay(deps.now()).slice(0, 7);
+  let captureFailed = false;
 
-  // Falls back to the backup key only on the initial HTTP status, before any of the reply is used.
-  async function post(feature: Feature, body: Record<string, unknown>, signal?: AbortSignal): Promise<{ res: Response; key: Key; timer: Timer }> {
+  // Falls back to the backup key only on the initial HTTP status, before any of the reply is used. body.betas goes in the anthropic-beta header.
+  async function post(feature: Feature, { betas, ...body }: Record<string, unknown>, signal?: AbortSignal): Promise<{ res: Response; key: Key; timer: Timer }> {
     const m = month();
     let key: Key = backupActive(db, m) && config.anthropicBackupKey ? 'backup' : 'main';
     const json = JSON.stringify(body);
+    // debugging only: each chat request body as sent, one per line (holds the owner's data; never the key). Receipts and documents stay out.
+    if (process.env.HERMES_CHAT_CAPTURE && feature === 'chat') {
+      try { appendFileSync(`${process.env.HERMES_CHAT_CAPTURE}/chat.jsonl`, `${json}\n`, { mode: 0o600 }); } catch (e) {
+        if (!captureFailed) console.warn(`[hermes] chat capture failed ${(e as NodeJS.ErrnoException).code ?? (e as Error).name}`);
+        captureFailed = true;
+      }
+    }
     for (;;) {
       // the profile reader's 8 pages can take as long as a chat answer; the app waits 120 s for both
       const timer = idleTimer(feature === 'receipt' ? 60_000 : 120_000);
@@ -117,7 +126,8 @@ export function createClaude(deps: { db: Db; config: Config; now: () => Date }, 
       try {
         res = await fetchFn('https://api.anthropic.com/v1/messages', {
           method: 'POST',
-          headers: { 'x-api-key': key === 'main' ? mainKey! : config.anthropicBackupKey!, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
+          headers: { 'x-api-key': key === 'main' ? mainKey! : config.anthropicBackupKey!, 'anthropic-version': '2023-06-01', 'content-type': 'application/json',
+            ...(Array.isArray(betas) ? { 'anthropic-beta': betas.join(',') } : {}) },
           body: json,
           signal: signal ? AbortSignal.any([signal, timer.signal]) : timer.signal,
         });
@@ -125,6 +135,9 @@ export function createClaude(deps: { db: Db; config: Config; now: () => Date }, 
         timer.disarm();
         throw fail(e, signal);
       }
+      // Anthropic's unpublished note on which edit broke a replayed thinking block; best effort
+      const mismatch = res.headers.get('anthropic-thinking-prefix-mismatch');
+      if (mismatch) console.warn(`[hermes] claude thinking prefix mismatch: ${mismatch}`);
       if (res.ok) return { res, key, timer };
       const text = await res.text().catch((e: unknown) => { throw fail(e, signal); }).finally(() => timer.disarm());
       if (res.status !== 400 || !CREDIT.test(text)) {

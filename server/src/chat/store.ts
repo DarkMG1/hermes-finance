@@ -176,16 +176,18 @@ export function dropFailedTail(db: Db, chatId: string): void {
 }
 
 /** A stored turn for replay: drops thinking (its signature binds it to the system prompt and tools it was written under, and only the turn
- * being answered needs it) and empty text, then trailing messages until one is an assistant message with text, minus its unanswered tool_use. */
+ * being answered needs it) and blank text, then trailing messages until one is an assistant message with text, minus its unanswered tool_use. */
 function trimTurn(turn: ApiMessage[]): ApiMessage[] {
   const out = turn.map((m) => (m.role === 'assistant'
-    ? { ...m, content: blocks(m).filter((b) => (b.type !== 'text' || b.text) && b.type !== 'thinking' && b.type !== 'redacted_thinking') } : m));
+    ? { ...m, content: blocks(m).filter((b) => (b.type !== 'text' || (b.text as string).trim()) && b.type !== 'thinking' && b.type !== 'redacted_thinking') } : m));
   while (out.length) {
     const last = out.at(-1)!;
     if (last.role === 'assistant') {
-      // and a web search the answer stopped before the result of
-      const searched = new Set(blocks(last).filter((b) => b.type === 'web_search_tool_result').map((b) => b.tool_use_id));
-      last.content = blocks(last).filter((b) => b.type !== 'tool_use' && !(b.type === 'server_tool_use' && !searched.has(b.id)));
+      // and a server tool call (search, code run) the answer stopped before the result of, with the searches that code run made; one with a
+      // result stays, since its result and its searches point back at it
+      const answered = new Set(blocks(last).map((b) => b.tool_use_id));
+      const cut = new Set(blocks(last).filter((b) => b.type === 'server_tool_use' && !answered.has(b.id)).map((b) => b.id));
+      last.content = blocks(last).filter((b) => b.type !== 'tool_use' && !cut.has(b.id) && !cut.has((b.caller as { tool_id?: string } | undefined)?.tool_id));
       if (last.content.some((b) => b.type === 'text')) break;
     }
     out.pop();
