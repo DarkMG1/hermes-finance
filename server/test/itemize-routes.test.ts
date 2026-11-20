@@ -140,6 +140,19 @@ test('own purchase: saving splits into my line (owner category) and each person'
   assert.equal(it.taxCents, 160);
 });
 
+test('a row is itemized while its split is the one its items left; Spending rows say which charges have a receipt', async () => {
+  const { save, app, deps } = setup();
+  assert.equal(getTransaction(deps.db, 'own', '2026-03-15')!.itemized, false);
+  await save('own', body([['Synthetic Tofu', 1000, ['me']], ['Synthetic Fish', 1160, ['p1']]]));
+  assert.equal(getTransaction(deps.db, 'own', '2026-03-15')!.itemized, true);
+  await save('paid', body([['Synthetic Tofu', 1000, ['me']]]));
+  assert.equal(getTransaction(deps.db, 'paid', '2026-03-15')!.itemized, true);
+  const rows = (await app.inject({ method: 'GET', url: '/v1/expenses?period=month&date=2026-03', headers: AUTH })).json().rows as { transactionId: string; hasReceipt: boolean }[];
+  assert.deepEqual([...new Set(rows.map((r) => `${r.transactionId}:${r.hasReceipt}`))].sort(), ['noreceipt:false', 'own:true', 'paid:true']);
+  deps.db.prepare("UPDATE split_lines SET amount_cents = amount_cents - 1 WHERE transaction_id = 'own'").run();
+  assert.equal(getTransaction(deps.db, 'own', '2026-03-15')!.itemized, false);
+});
+
 test('own purchase: all mine clears the split and keeps the owner category; one person tags the row', async () => {
   const { save, deps } = setup();
   await save('own', body([['A', 1000, ['me']], ['B', 1000, ['p1']]]));

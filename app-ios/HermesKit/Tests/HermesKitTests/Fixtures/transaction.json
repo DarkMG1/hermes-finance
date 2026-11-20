@@ -35,6 +35,7 @@
   "reconciled": false,
   "forgiven": false,
   "hasReceipt": false,
+  "itemized": false,
   "hasHistory": true,
   "recurring": null,
   "iou": null,
