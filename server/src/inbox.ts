@@ -152,7 +152,8 @@ export function linkInbox(deps: Deps, inboxId: string, transactionId: string): L
       }
     }
     if (!applied) {
-      const defaults = txn.paidByPersonId ? [ME, txn.paidByPersonId] : [ME];
+      // someone else paid: nobody is assumed, and Save waits until the owner has said who had each item
+      const defaults = txn.paidByPersonId ? [] : [ME];
       replaceItems(db, transactionId, row.tagged ? items : items.map((i) => ({ ...i, people: defaults })));
     }
     db.prepare('UPDATE inbox_receipts SET jpeg = NULL, linked_transaction_id = ?, linked_at = ?, split_applied = ? WHERE id = ?')

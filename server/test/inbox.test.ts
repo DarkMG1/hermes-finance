@@ -189,13 +189,13 @@ test('tagged items are applied as the split on link; a hand-split charge keeps i
   assert.deepEqual((b.db.prepare("SELECT people FROM receipt_items WHERE transaction_id = 'c1' ORDER BY position").all() as { people: string }[]).map((r) => r.people), ['["me"]', '["p1"]']);
 });
 
-test('a they-paid target defaults items to me + payer; tags naming a third person are applied, and only my share is recorded', () => {
+test('a they-paid target starts items with nobody; tags naming a third person are applied, and only my share is recorded', () => {
   const { deps, db, snap, charge } = setup();
   snap('r1');
   storeRead(db, 'r1', READ, 'now');
   charge('paid', '2026-03-11', -525, { source: 'manual', sourceId: undefined, paidByPersonId: 'p1' });
   linkInbox(deps, 'r1', 'paid');
-  assert.deepEqual((db.prepare("SELECT people FROM receipt_items WHERE transaction_id = 'paid' ORDER BY position").all() as { people: string }[]).map((r) => r.people), ['["me","p1"]', '["me","p1"]']);
+  assert.deepEqual((db.prepare("SELECT people FROM receipt_items WHERE transaction_id = 'paid' ORDER BY position").all() as { people: string }[]).map((r) => r.people), ['[]', '[]']);
 
   const b = setup();
   b.snap('r1');

@@ -44,8 +44,8 @@ export function itemizeRoutes(app: FastifyInstance, deps: Deps): void {
       const stored = db.prepare('UPDATE receipts SET tax_cents = ?, tip_cents = ?, fees_cents = ?, total_cents = ?, read_at = ?, model = ?, applied_lines = NULL WHERE transaction_id = ? AND created_at = ?')
         .run(result.taxCents, result.tipCents, result.feesCents, result.totalCents, deps.now().toISOString(), result.model, id, photoAt);
       if (stored.changes === 0) throw new ApiError(409, 'RECEIPT_CHANGED', 'the receipt photo changed while it was being read');
-      // on a "they paid" row most items are shared, so they start as me + the payer
-      const people = txn.paidByPersonId ? [ME, txn.paidByPersonId] : [ME];
+      // on a "they paid" row nobody is assumed: Save waits until the owner has said who had each item
+      const people = txn.paidByPersonId ? [] : [ME];
       replaceItems(db, id, result.items.map((i) => ({ ...i, people })));
       db.prepare('UPDATE inbox_receipts SET tagged = 0 WHERE linked_transaction_id = ?').run(id);
     })();

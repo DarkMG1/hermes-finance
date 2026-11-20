@@ -118,7 +118,9 @@ export function applyItems(db: Db, id: string, body: SaveItemsBody, nowIso: stri
     if (p !== ME && !stored.has(p)) assertPersonTaggable(db, p, `items.${i}.people`, id, p === payer ? 'payer' : 'person');
   }));
   const itemsTotal = body.items.reduce((s, i) => s + i.amountCents, 0);
-  const target = payer ? itemsTotal + body.taxCents + body.tipCents + body.feesCents : -txn.amountCents;
+  // someone else paid: the receipt's own total, so an item the read missed still lands on someone; without one, what the items add up to
+  const receiptTotal = payer ? db.prepare('SELECT total_cents FROM receipts WHERE transaction_id = ?').pluck().get(id) as number | null : null;
+  const target = !payer ? -txn.amountCents : receiptTotal && receiptTotal > 0 ? receiptTotal : itemsTotal + body.taxCents + body.tipCents + body.feesCents;
   let shares;
   try {
     ({ shares } = computeShares({ items: body.items, taxCents: body.taxCents, tipCents: body.tipCents, feesCents: body.feesCents, targetCents: target }));

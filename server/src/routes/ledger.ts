@@ -90,6 +90,10 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
         if (body.paidByPersonId !== null && current.amountCents >= 0) {
           throw new ApiError(400, 'INVALID_REQUEST', 'paidByPersonId: a payer covers money out', 'paidByPersonId');
         }
+        // the amount is only my share: without its payer the rest of the bill would be gone for good
+        if (body.paidByPersonId === null && current.paidByPersonId) {
+          throw new ApiError(409, 'PAID_BY_PERSON', 'a row someone else paid cannot become yours; delete it and add the charge again', 'paidByPersonId');
+        }
         assertPersonTaggable(db, body.paidByPersonId, 'paidByPersonId', current.id, 'payer');
       }
       // a row someone else paid is the owner's own spending, so it never carries a person tag

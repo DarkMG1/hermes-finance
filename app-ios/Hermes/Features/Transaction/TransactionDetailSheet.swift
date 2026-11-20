@@ -113,7 +113,8 @@ struct TransactionDetailSheet: View {
                     }
                     // someone else paid this manual expense: it stays your spending, and counts as their credit
                     if canHavePayer && personId == nil {
-                        NavigationLink { PersonPicker(selection: $paidById, noneTitle: "Me", title: "Paid by") } label: {
+                        // its amount is only my share, so a saved payer can change but not go back to Me
+                        NavigationLink { PersonPicker(selection: $paidById, noneTitle: current.paidByPersonId == nil ? "Me" : nil, title: "Paid by") } label: {
                             LabeledContent("Paid by", value: paidById.map(model.personName) ?? "Me")
                         }
                     }

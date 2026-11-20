@@ -87,7 +87,8 @@ struct ItemizeView: View {
                             HStack {
                                 VStack(alignment: .leading) {
                                     Text(item.name).textStyle(.body)
-                                    Text(item.people.map(label).joined(separator: ", ")).textStyle(.caption, color: Palette.secondaryText)
+                                    Text(item.people.isEmpty ? "Choose who had it" : item.people.map(label).joined(separator: ", "))
+                                        .textStyle(.caption, color: item.people.isEmpty ? Palette.loss : Palette.secondaryText)
                                 }
                                 Spacer()
                                 MoneyText(cents: item.amountCents, colored: false)
@@ -125,12 +126,8 @@ struct ItemizeView: View {
                     if transaction != nil, !isTheyPaid, let result, result.gapCents != 0 {
                         LabeledContent("Difference from bank") { MoneyText(cents: result.gapCents, colored: false) }
                     }
-                    // a missed or doubled item would otherwise change my share unseen: the shares come from the items, not the receipt's total
-                    if isTheyPaid, let receiptTotal, let tax = cents(taxText), let tip = cents(tipText), let fees = cents(feesText),
-                       receiptTotal != itemsTotal + tax + tip + fees {
-                        LabeledContent("Difference from receipt total") {
-                            MoneyText(cents: receiptTotal - itemsTotal - tax - tip - fees, colored: false)
-                        }
+                    if isTheyPaid, let result, result.gapCents != 0 {
+                        LabeledContent("Difference from receipt total") { MoneyText(cents: result.gapCents, colored: false) }
                     }
                 }
                 .disabled(locked)
@@ -223,7 +220,9 @@ struct ItemizeView: View {
 
     private var result: ItemShares.Result? {
         guard let tax = cents(taxText), let tip = cents(tipText), let fees = cents(feesText) else { return nil }
-        let target = isTheyPaid || inboxId != nil ? itemsTotal + tax + tip + fees : -(transaction?.amountCents ?? 0)
+        // someone else paid: the receipt's own total when it has one, as the server does
+        let sum = itemsTotal + tax + tip + fees
+        let target = inboxId != nil ? sum : isTheyPaid ? (receiptTotal.flatMap { $0 > 0 ? $0 : nil } ?? sum) : -(transaction?.amountCents ?? 0)
         return ItemShares.compute(items: shareItems, taxCents: tax, tipCents: tip, feesCents: fees, targetCents: target)
     }
 

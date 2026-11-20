@@ -80,10 +80,17 @@ test('legacy oversized ledger amounts return a field error when items are applie
   assert.equal(deps.db.prepare('SELECT COUNT(*) FROM split_lines').pluck().get(), 0);
 });
 
-test('a "they paid" read starts every item as shared by me and the payer', async () => {
-  const { read } = setup();
+test('a "they paid" read starts every item with nobody; saving scales my share to the receipt total; the payer cannot be cleared', async () => {
+  const { read, save, app, deps } = setup();
   const got = (await read('paid')).json();
-  assert.deepEqual(got.items.map((i: { people: string[] }) => i.people), [['me', 'p1'], ['me', 'p1']]);
+  assert.deepEqual(got.items.map((i: { people: string[] }) => i.people), [[], []]);
+  // the receipt says 3000 but only 2000 of items were read: my half of the items is half of the receipt
+  deps.db.prepare("UPDATE receipts SET total_cents = 3000 WHERE transaction_id = 'paid'").run();
+  assert.equal((await save('paid', body([['Synthetic Tofu', 1000, ['me']], ['Synthetic Fish', 1000, ['p2']]]))).statusCode, 200);
+  assert.equal(getTransaction(deps.db, 'paid', '2026-03-15')!.amountCents, -1500);
+  const cleared = await app.inject({ method: 'PATCH', url: '/v1/transactions/paid', headers: { ...AUTH, 'idempotency-key': 'c' }, payload: { paidByPersonId: null } });
+  assert.deepEqual([cleared.statusCode, cleared.json().code], [409, 'PAID_BY_PERSON']);
+  assert.equal(getTransaction(deps.db, 'paid', '2026-03-15')!.paidByPersonId, 'p1');
 });
 
 test('read errors: no receipt, removed, reader off, reader failure; nothing stored', async () => {
