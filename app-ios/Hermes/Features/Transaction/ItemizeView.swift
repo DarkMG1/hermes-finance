@@ -45,6 +45,7 @@ struct ItemizeView: View {
     @State private var unread = false
     @State private var showingSplit = false
     @State private var splitPeople: Set<String> = [ItemShares.me]
+    @State private var receiptTotal: Int?
 
     var body: some View {
         Sheet(title: "Itemize", canSave: canSave, busy: busy || reading || loading, unresolved: writes.unresolved,
@@ -101,7 +102,10 @@ struct ItemizeView: View {
                     Button("Add item") { editing = DraftItem(id: UUID().uuidString, name: "", amountCents: 0, people: [ItemShares.me]) }
                     if !items.isEmpty {
                         let others = choices.filter { $0 != ItemShares.me }
-                        if others.count == 1 {
+                        // one tap for the usual case: the payer, or the only other person
+                        if let payer = transaction?.paidByPersonId {
+                            Button("Split everything 50/50 with \(label(payer))") { splitAll(with: [ItemShares.me, payer]) }
+                        } else if others.count == 1 {
                             Button("Split everything 50/50") { splitAll(with: [ItemShares.me, others[0]]) }
                         }
                         if !others.isEmpty {
@@ -121,6 +125,13 @@ struct ItemizeView: View {
                     if transaction != nil, !isTheyPaid, let result, result.gapCents != 0 {
                         LabeledContent("Difference from bank") { MoneyText(cents: result.gapCents, colored: false) }
                     }
+                    // a missed or doubled item would otherwise change my share unseen: the shares come from the items, not the receipt's total
+                    if isTheyPaid, let receiptTotal, let tax = cents(taxText), let tip = cents(tipText), let fees = cents(feesText),
+                       receiptTotal != itemsTotal + tax + tip + fees {
+                        LabeledContent("Difference from receipt total") {
+                            MoneyText(cents: receiptTotal - itemsTotal - tax - tip - fees, colored: false)
+                        }
+                    }
                 }
                 .disabled(locked)
                 Section {
@@ -135,7 +146,9 @@ struct ItemizeView: View {
                         Text(sharesProblem).textStyle(.caption, color: Palette.loss)
                     }
                     InlineError(message: error)
-                } header: { Text(inboxId != nil ? "Shares · you paid · applied when your charge arrives" : "Shares") }
+                } header: {
+                    Text(inboxId != nil ? "Shares · you paid · applied when your charge arrives" : isTheyPaid ? "Shares · only yours is recorded" : "Shares")
+                }
                 if !(inboxId != nil && unread) { Section {
                     Button("Read receipt again") { confirmReread = true }
                         .disabled(locked)
@@ -176,12 +189,12 @@ struct ItemizeView: View {
 
     private var isTheyPaid: Bool { transaction?.paidByPersonId != nil }
 
-    /// Me first; on a "they paid" row only the payer, otherwise active people plus anyone already on an item.
+    /// Me first, then the payer of a "they paid" row, then active people plus anyone already on an item.
     private var choices: [String] {
-        if let payer = transaction?.paidByPersonId { return [ItemShares.me, payer] }
-        let active = model.people.filter { !$0.archived }.map(\.id)
-        let onItems = items.flatMap(\.people).filter { $0 != ItemShares.me && !active.contains($0) }
-        return [ItemShares.me] + active + Array(Set(onItems)).sorted()
+        let first = [ItemShares.me] + [transaction?.paidByPersonId].compactMap { $0 }
+        let active = model.people.filter { !$0.archived && !first.contains($0.id) }.map(\.id)
+        let onItems = items.flatMap(\.people).filter { !first.contains($0) && !active.contains($0) }
+        return first + active + Array(Set(onItems)).sorted()
     }
 
     private func splitAll(with people: Set<String>) {
@@ -238,6 +251,7 @@ struct ItemizeView: View {
         tipText = text(it.tipCents)
         feesText = text(it.feesCents)
         handEdited = it.handEdited
+        receiptTotal = it.totalCents
     }
 
     private func togglePhoto() async {

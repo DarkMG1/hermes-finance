@@ -118,6 +118,13 @@ struct InboxReceiptView: View {
         .navigationTitle(receipt.merchant ?? "Receipt")
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadPhoto() }
+        // opened mid-read: without its total, Paid by would ask for one the server is about to have
+        .task(id: receipt.status) {
+            while receipt.status == "reading", !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                if !busy, itemizing == nil, payer == nil { await refresh() }
+            }
+        }
         .sheet(isPresented: $picking, onDismiss: { pickedToConfirm = picked; picked = nil }, content: {
             ExpensePicker(title: "Link to transaction", suggestions: receipt.suggestions,
                           allows: { $0.amountCents < 0 && $0.hasReceipt != true
