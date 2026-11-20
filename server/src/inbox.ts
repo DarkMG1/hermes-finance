@@ -68,11 +68,15 @@ export function restoreToInbox(db: Db, txnId: string): void {
     { jpeg: Buffer; bytes: number; model: string | null; applied_lines: string | null } | undefined;
   if (!receipt) return;
   const r = getItemization(db, txnId);
+  const tagged = receipt.applied_lines !== null && !r.handEdited;
+  // tags the owner saved in the inbox stay even when the link could not apply them
+  const owners = tagged || db.prepare('SELECT tagged FROM inbox_receipts WHERE linked_transaction_id = ?').pluck().get(txnId) === 1;
   db.prepare(`UPDATE inbox_receipts SET jpeg = ?, bytes = ?, model = ?, items = ?, tax_cents = ?, tip_cents = ?, fees_cents = ?, total_cents = ?, read_at = ?,
       tagged = ?, read_failed = CASE WHEN ? IS NOT NULL THEN 0 ELSE read_failed END,
       linked_transaction_id = NULL, linked_at = NULL, split_applied = 0, dismissed_at = NULL WHERE linked_transaction_id = ?`)
-    .run(receipt.jpeg, receipt.bytes, receipt.model, JSON.stringify(r.items.map(({ name, amountCents, people }) => ({ name, amountCents, people }))),
-      r.taxCents, r.tipCents, r.feesCents, r.totalCents, r.readAt, receipt.applied_lines !== null && !r.handEdited ? 1 : 0, r.readAt, txnId);
+    .run(receipt.jpeg, receipt.bytes, receipt.model, // people nobody saved were only a payer row's starting point: the next link sets its own
+      JSON.stringify(r.items.map(({ name, amountCents, people }) => ({ name, amountCents, people: owners ? people : [ME] }))),
+      r.taxCents, r.tipCents, r.feesCents, r.totalCents, r.readAt, tagged ? 1 : 0, r.readAt, txnId);
 }
 
 /** A restart mid-read would otherwise show "Reading…" forever. */
@@ -207,8 +211,10 @@ export function inboxItemization(row: InboxRow): Itemization {
 export function saveInboxItems(db: Db, id: string, body: SaveItemsBody): Itemization {
   const row = waitingRow(db, id);
   if (!row) throw new ApiError(404, 'NOT_FOUND', 'inbox receipt not found');
+  const stored = new Set(itemsOf(row).flatMap((i) => i.people));
   body.items.forEach((item, i) => item.people.forEach((p) => {
-    if (p !== ME) assertPersonTaggable(db, p, `items.${i}.people`, '');
+    // someone already on the items stays, archived or not
+    if (p !== ME && !stored.has(p)) assertPersonTaggable(db, p, `items.${i}.people`, '');
   }));
   const receipt = body.items.reduce((s, i) => s + i.amountCents, 0) + body.taxCents + body.tipCents + body.feesCents;
   try {

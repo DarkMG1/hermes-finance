@@ -111,10 +111,11 @@ export function replaceItems(db: Db, txnId: string, items: { name: string; amoun
 export function applyItems(db: Db, id: string, body: SaveItemsBody, nowIso: string): Transaction {
   const txn = getTransaction(db, id, localDay(new Date(nowIso)))!;
   const payer = txn.paidByPersonId;
+  const stored = new Set((db.prepare('SELECT people FROM receipt_items WHERE transaction_id = ?').pluck().all(id) as string[])
+    .flatMap((p) => JSON.parse(p) as string[]));
   body.items.forEach((item, i) => item.people.forEach((p) => {
-    if (p === ME) return;
-    if (payer && p !== payer) throw new ApiError(400, 'INVALID_REQUEST', `items.${i}.people: only you and the person who paid`, `items.${i}.people`);
-    assertPersonTaggable(db, p, `items.${i}.people`, id, payer ? 'payer' : 'person');
+    // someone already on the items stays, archived or not; on a "they paid" row anyone can have had an item, and only my share is recorded
+    if (p !== ME && !stored.has(p)) assertPersonTaggable(db, p, `items.${i}.people`, id, p === payer ? 'payer' : 'person');
   }));
   const itemsTotal = body.items.reduce((s, i) => s + i.amountCents, 0);
   const target = payer ? itemsTotal + body.taxCents + body.tipCents + body.feesCents : -txn.amountCents;
@@ -149,6 +150,7 @@ export function applyItems(db: Db, id: string, body: SaveItemsBody, nowIso: stri
     }
   }
   replaceItems(db, id, body.items);
+  db.prepare('UPDATE inbox_receipts SET split_applied = 1 WHERE linked_transaction_id = ?').run(id);
   db.prepare('UPDATE receipts SET tax_cents = ?, tip_cents = ?, fees_cents = ?, applied_lines = ? WHERE transaction_id = ?')
     .run(body.taxCents, body.tipCents, body.feesCents, JSON.stringify(currentLines(db, id)), id);
   return getTransaction(db, id, localDay(new Date(nowIso)))!;
