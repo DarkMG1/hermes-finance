@@ -40,6 +40,7 @@ targets:
         LSSupportsOpeningDocumentsInPlace: false
         NSFaceIDUsageDescription: Unlock Hermes with Face ID
         NSCameraUsageDescription: Take a photo of a receipt.
+        NSPhotoLibraryAddUsageDescription: Save a receipt photo to your library.
         UILaunchScreen: {}
         UIApplicationShortcutItems:
           - UIApplicationShortcutItemType: snapReceipt

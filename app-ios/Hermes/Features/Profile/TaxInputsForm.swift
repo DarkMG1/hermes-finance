@@ -37,18 +37,19 @@ struct TaxEntriesSections: View {
         Section("Roth IRA contributions for \(String(year))") {
             ForEach(roth) { RothRow(contribution: $0, onChange: onChange) }
             Button("Add contribution") { addingRoth = true }
-        }
-        .sheet(isPresented: $addingRoth) {
-            // one dated for another year would save and vanish from this list
-            EditForm(title: "Roth IRA contribution", fields: Self.rothFields, original: RothDraft(), check: { draft in
-                let counts = draft.date.map { Self.rothYear(date: $0, shown: year) } ?? year
-                return counts == year ? nil : "A deposit on this date counts for \(String(counts)), not \(String(year))"
-            }, save: { draft, key in
-                guard let date = draft.date, let amount = draft.amountCents else { return }
-                _ = try await model.client?.addRothContribution(
-                    RothContributionBody(date: date, amountCents: amount, taxYear: Self.rothYear(date: date, shown: year)), idempotencyKey: key)
-                await onChange()
-            })
+                // on the Button, not the Section: each of a Section's rows gets its own copy, and several opening at once close the screen
+                .sheet(isPresented: $addingRoth) {
+                    // one dated for another year would save and vanish from this list
+                    EditForm(title: "Roth IRA contribution", fields: Self.rothFields, original: RothDraft(), check: { draft in
+                        let counts = draft.date.map { Self.rothYear(date: $0, shown: year) } ?? year
+                        return counts == year ? nil : "A deposit on this date counts for \(String(counts)), not \(String(year))"
+                    }, save: { draft, key in
+                        guard let date = draft.date, let amount = draft.amountCents else { return }
+                        _ = try await model.client?.addRothContribution(
+                            RothContributionBody(date: date, amountCents: amount, taxYear: Self.rothYear(date: date, shown: year)), idempotencyKey: key)
+                        await onChange()
+                    })
+                }
         }
     }
 

@@ -87,6 +87,7 @@ private struct ReceiptCamera: ViewModifier {
 
     private func deliver(_ image: UIImage, scan: Bool, client: APIClient?) async {
         if client === model.client { onCaptured() }
+        let image = await ReceiptImage.upright(image)
         if let onImage {
             guard client === model.client else { return }
             await onImage(image, scan)
