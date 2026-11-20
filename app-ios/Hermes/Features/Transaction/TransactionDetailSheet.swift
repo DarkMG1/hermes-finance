@@ -27,6 +27,7 @@ struct TransactionDetailSheet: View {
     @State private var splitting: LedgerTransaction?
     @State private var savedForSplit = false
     @State private var itemizing = false
+    private var itemizedSplit: Bool { current.itemized == true && !current.splitLines.isEmpty }
     @State private var savedFromItems = false
     @State private var markingRecurring = false
     /// Set by a mark here, so the sheet shows the new bill without reopening.
@@ -113,7 +114,8 @@ struct TransactionDetailSheet: View {
                     }
                     // someone else paid this manual expense: it stays your spending, and counts as their credit
                     if canHavePayer && personId == nil {
-                        NavigationLink { PersonPicker(selection: $paidById, noneTitle: "Me", title: "Paid by") } label: {
+                        // its amount is only my share, so a saved payer can change but not go back to Me
+                        NavigationLink { PersonPicker(selection: $paidById, noneTitle: current.paidByPersonId == nil ? "Me" : nil, title: "Paid by") } label: {
                             LabeledContent("Paid by", value: paidById.map(model.personName) ?? "Me")
                         }
                     }
@@ -144,7 +146,10 @@ struct TransactionDetailSheet: View {
                             .textStyle(.caption, color: Palette.loss)
                     }
                     // unsaved edits would be lost when the split saves and this sheet closes, so the button saves them first
-                    if canSplit {
+                    if itemizedSplit {
+                        // amounts typed over an itemized split would no longer match the receipt
+                        Text("Split by the receipt's items. Change who had what in Itemize.").textStyle(.caption, color: Palette.secondaryText)
+                    } else if canSplit {
                         Button(current.splitLines.isEmpty ? "Split transaction" : "Edit split") { Task { await split() } }
                             .disabled(busy || payeeInvalid || deleteWrites.unresolved)
                     }

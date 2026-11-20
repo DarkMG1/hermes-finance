@@ -101,17 +101,18 @@ export function getExpenses(db: Db, q: ExpensesQuery): ExpensesPage {
       SELECT lines.*, COALESCE(lines.line_id, '~') AS line_key, COALESCE(c.name, 'Uncategorized') AS category_name
         FROM lines LEFT JOIN categories c ON c.id = lines.category_id
        WHERE ${filters.join(' AND ')})
-    SELECT * FROM page ${after} ORDER BY date DESC, created_at DESC, row_order DESC, line_key LIMIT ?`)
+    SELECT *, EXISTS (SELECT 1 FROM receipts rc WHERE rc.transaction_id = page.transaction_id) AS has_receipt
+      FROM page ${after} ORDER BY date DESC, created_at DESC, row_order DESC, line_key LIMIT ?`)
     .all(...args, ...filterArgs, ...afterArgs, q.limit + 1) as {
       transaction_id: string; line_id: string | null; date: string; created_at: string; row_order: number; name: string;
-      category_id: string | null; amount: number; drift: number; is_split: number; pending: number; line_key: string; category_name: string;
+      category_id: string | null; amount: number; drift: number; is_split: number; pending: number; line_key: string; category_name: string; has_receipt: number;
     }[];
   const page = rows.slice(0, q.limit);
   const last = page[page.length - 1];
   return {
     rows: page.map((r): ExpenseRow => ({
       transactionId: r.transaction_id, lineId: r.line_id, date: r.date, name: r.name, categoryId: r.category_id, categoryName: r.category_name,
-      amountCents: q.kind === 'in' ? r.amount : -r.amount, isSplit: r.is_split === 1, isSplitDifference: r.drift === 1, pending: r.pending === 1,
+      amountCents: q.kind === 'in' ? r.amount : -r.amount, isSplit: r.is_split === 1, isSplitDifference: r.drift === 1, pending: r.pending === 1, hasReceipt: r.has_receipt === 1,
     })),
     nextCursor: rows.length > q.limit && last ? encodeCursor([last.date, last.created_at, last.row_order, last.line_key]) : null,
   };

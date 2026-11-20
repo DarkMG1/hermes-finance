@@ -44,7 +44,12 @@ struct ExpensesView: View {
                 InlineError(message: error)
                 ForEach(rows) { row in
                     Button { Task { await open(row) } } label: {
-                        ListRow(title: row.name, subtitle: subtitle(row)) { MoneyText(cents: row.amountCents, colored: false) }
+                        ListRow(title: row.name, subtitle: subtitle(row)) {
+                            if row.hasReceipt == true {
+                                Image(systemName: "doc.text").textStyle(.caption, color: Palette.secondaryText).accessibilityLabel("Has receipt")
+                            }
+                            MoneyText(cents: row.amountCents, colored: false)
+                        }
                     }
                     .buttonStyle(.plain)
                     .onAppear {

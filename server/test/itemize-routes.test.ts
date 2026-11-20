@@ -80,10 +80,17 @@ test('legacy oversized ledger amounts return a field error when items are applie
   assert.equal(deps.db.prepare('SELECT COUNT(*) FROM split_lines').pluck().get(), 0);
 });
 
-test('a "they paid" read starts every item as shared by me and the payer', async () => {
-  const { read } = setup();
+test('a "they paid" read starts every item with nobody; saving scales my share to the receipt total; the payer cannot be cleared', async () => {
+  const { read, save, app, deps } = setup();
   const got = (await read('paid')).json();
-  assert.deepEqual(got.items.map((i: { people: string[] }) => i.people), [['me', 'p1'], ['me', 'p1']]);
+  assert.deepEqual(got.items.map((i: { people: string[] }) => i.people), [[], []]);
+  // the receipt says 3000 but only 2000 of items were read: my half of the items is half of the receipt
+  deps.db.prepare("UPDATE receipts SET total_cents = 3000 WHERE transaction_id = 'paid'").run();
+  assert.equal((await save('paid', body([['Synthetic Tofu', 1000, ['me']], ['Synthetic Fish', 1000, ['p2']]]))).statusCode, 200);
+  assert.equal(getTransaction(deps.db, 'paid', '2026-03-15')!.amountCents, -1500);
+  const cleared = await app.inject({ method: 'PATCH', url: '/v1/transactions/paid', headers: { ...AUTH, 'idempotency-key': 'c' }, payload: { paidByPersonId: null } });
+  assert.deepEqual([cleared.statusCode, cleared.json().code], [409, 'PAID_BY_PERSON']);
+  assert.equal(getTransaction(deps.db, 'paid', '2026-03-15')!.paidByPersonId, 'p1');
 });
 
 test('read errors: no receipt, removed, reader off, reader failure; nothing stored', async () => {
@@ -133,6 +140,19 @@ test('own purchase: saving splits into my line (owner category) and each person'
   assert.equal(it.taxCents, 160);
 });
 
+test('a row is itemized while its split is the one its items left; Spending rows say which charges have a receipt', async () => {
+  const { save, app, deps } = setup();
+  assert.equal(getTransaction(deps.db, 'own', '2026-03-15')!.itemized, false);
+  await save('own', body([['Synthetic Tofu', 1000, ['me']], ['Synthetic Fish', 1160, ['p1']]]));
+  assert.equal(getTransaction(deps.db, 'own', '2026-03-15')!.itemized, true);
+  await save('paid', body([['Synthetic Tofu', 1000, ['me']]]));
+  assert.equal(getTransaction(deps.db, 'paid', '2026-03-15')!.itemized, true);
+  const rows = (await app.inject({ method: 'GET', url: '/v1/expenses?period=month&date=2026-03', headers: AUTH })).json().rows as { transactionId: string; hasReceipt: boolean }[];
+  assert.deepEqual([...new Set(rows.map((r) => `${r.transactionId}:${r.hasReceipt}`))].sort(), ['noreceipt:false', 'own:true', 'paid:true']);
+  deps.db.prepare("UPDATE split_lines SET amount_cents = amount_cents - 1 WHERE transaction_id = 'own'").run();
+  assert.equal(getTransaction(deps.db, 'own', '2026-03-15')!.itemized, false);
+});
+
 test('own purchase: all mine clears the split and keeps the owner category; one person tags the row', async () => {
   const { save, deps } = setup();
   await save('own', body([['A', 1000, ['me']], ['B', 1000, ['p1']]]));
@@ -158,14 +178,41 @@ test('they paid: saving sets the row to my share', async () => {
   assert.deepEqual(t.splitLines, []);
 });
 
-test('they paid: all theirs (my share zero) or a third person is refused and changes nothing', async () => {
+test('they paid: all theirs (my share zero) is refused and changes nothing', async () => {
   const { save, deps } = setup();
   const allTheirs = await save('paid', body([['Synthetic Fish', 800, ['p1']]]));
   assert.equal(allTheirs.statusCode, 400);
-  const third = await save('paid', body([['Synthetic Fish', 800, ['me', 'p2']]]));
-  assert.equal(third.statusCode, 400);
   assert.equal(getTransaction(deps.db, 'paid', '2026-03-15')!.amountCents, -1000);
   assert.equal((deps.db.prepare('SELECT COUNT(*) AS n FROM receipt_items').get() as { n: number }).n, 0);
+});
+
+test('they paid: anyone can have had an item, only my share is recorded, and someone on the items stays once archived', async () => {
+  const { save, deps } = setup();
+  const items = body([['Synthetic Tofu', 900, ['me', 'p1', 'p2']], ['Synthetic Fish', 800, ['p2']], ['Synthetic Rice', 300, ['me']]]);
+  assert.equal((await save('paid', items)).statusCode, 200);
+  const t = getTransaction(deps.db, 'paid', '2026-03-15')!;
+  assert.deepEqual([t.amountCents, t.paidByPersonId, t.splitLines.length], [-600, 'p1', 0]);
+  deps.db.prepare("UPDATE people SET archived = 1 WHERE id = 'p2'").run();
+  assert.equal((await save('paid', items)).statusCode, 200);
+  seedPerson(deps.db, { id: 'p3', name: 'Synthetic Moss', archived: true });
+  assert.equal((await save('paid', body([['Synthetic Rice', 300, ['me', 'p3']]]))).statusCode, 400);
+});
+
+test('they paid: a new payer takes the old payer\'s place on the items; an item both were on marks the row as changed', async () => {
+  const { save, items, app, deps } = setup();
+  await save('paid', body([['Synthetic Tofu', 900, ['me', 'p1']], ['Synthetic Fish', 800, ['p1']]]));
+  const patch = (paidByPersonId: string, key: string) =>
+    app.inject({ method: 'PATCH', url: '/v1/transactions/paid', headers: { ...AUTH, 'idempotency-key': key }, payload: { paidByPersonId } });
+  assert.equal((await patch('p2', 'a')).statusCode, 200);
+  let got = (await items('paid')).json();
+  assert.deepEqual(got.items.map((i: { people: string[] }) => i.people), [['me', 'p2'], ['p2']]);
+  assert.equal(got.handEdited, false);
+  await save('paid', body([['Synthetic Tofu', 900, ['me', 'p1', 'p2']]]));
+  assert.equal((await patch('p1', 'b')).statusCode, 200);
+  got = (await items('paid')).json();
+  assert.deepEqual(got.items.map((i: { people: string[] }) => i.people), [['me', 'p1']]);
+  assert.equal(got.handEdited, true);
+  assert.equal(getTransaction(deps.db, 'paid', '2026-03-15')!.amountCents, -300);
 });
 
 test('save rejects: unknown person, nobody on an item, money in, no receipt', async () => {

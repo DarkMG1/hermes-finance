@@ -16,6 +16,8 @@ struct InboxReceiptView: View {
     @State private var choosingPayer = false
     @State private var choosingFor = false
     @State private var payer: Person?
+    /// chosen in a person list; acted on when the list has closed
+    @State private var pickedPerson: String?
     @State private var itemizing: ItemizeSource?
     @State private var confirmDelete = false
     @State private var confirmReread = false
@@ -52,72 +54,102 @@ struct InboxReceiptView: View {
                     Text("For \(model.personName(personId)): they owe the whole charge").textStyle(.subhead, color: Palette.secondaryText)
                 }
             }
-            if !receipt.suggestions.isEmpty {
-                Section("Suggested charges") {
-                    ForEach(receipt.suggestions) { t in
-                        Button { confirming = t } label: { TransactionRow(transaction: t).contentShape(Rectangle()) }.buttonStyle(.plain)
-                            .confirmationDialog(confirmTitle(t), isPresented: Binding(get: { confirming?.id == t.id }, set: { if !$0 { confirming = nil } }),
-                                                titleVisibility: .visible) {
-                                Button("Link") { Task { await link(t) } }
-                            }
-                    }
-                }
-                .disabled(busy || payment.guardState.unresolved || pendingLink.target != nil || forWrite.guardState.unresolved)
-            }
             Section {
-                Button("Link to transaction…") { picking = true }
-                    .confirmationDialog(pickedToConfirm.map(confirmTitle) ?? "",
-                                        isPresented: Binding(get: { pickedToConfirm != nil }, set: { if !$0 { pickedToConfirm = nil } }),
-                                        titleVisibility: .visible) {
-                        Button("Link") { if let t = pickedToConfirm { Task { await link(t) } } }
-                    }
-                    .disabled(payment.guardState.unresolved || pendingLink.target != nil || forWrite.guardState.unresolved)
                 if let retry = pendingLink.target {
                     Button("Retry link to \(retry.payee)") { Task { await link(retry, thenItemize: pendingLink.createdPayment?.id == retry.id) } }
                 } else if payment.guardState.unresolved, let personId = payment.body?.paidByPersonId {
                     Button("Retry paid by \(model.personName(personId))") { Task { await paidBy(personId) } }
                 } else {
-                    Button("Paid by…") { choosingPayer = true }
-                        .confirmationDialog("Who paid?", isPresented: $choosingPayer) {
-                            ForEach(model.people.filter { !$0.archived }) { person in
-                                Button(person.name) { if receipt.totalCents != nil { Task { await paidBy(person.id) } } else { payer = person } }
-                            }
+                    Button { choosingPayer = true } label: {
+                        HStack {
+                            Text("Me").textStyle(.body)
+                            Spacer()
+                            Image(systemName: "chevron.right").textStyle(.caption, color: Palette.secondaryText)
                         }
-                        .disabled(receipt.forPersonId != nil || forWrite.guardState.unresolved)
-                }
-                if forWrite.guardState.unresolved {
-                    Button("Retry For…") { Task { await setFor(forWrite.body?.personId) } }
-                } else {
-                    Button("For…") { choosingFor = true }
-                        .confirmationDialog("Who is the charge for?", isPresented: $choosingFor) {
-                            Button("Nobody") { Task { await setFor(nil) } }
-                            ForEach(model.people.filter { !$0.archived }) { person in
-                                Button(person.name) { Task { await setFor(person.id) } }
-                            }
-                        }
-                        .disabled(payment.guardState.unresolved || pendingLink.target != nil)
-                }
-                Button("Itemize") { itemizing = .inbox(receipt.id) }
-                    .disabled(payment.guardState.unresolved || pendingLink.target != nil || forWrite.guardState.unresolved || receipt.forPersonId != nil)
-                // dialogs on their buttons: on the List they float mid-screen over the photo
-                Button("Read again") { if receipt.tagged { confirmReread = true } else { Task { await readAgain() } } }
-                    .confirmationDialog("Read the receipt again?", isPresented: $confirmReread, titleVisibility: .visible) {
-                        Button("Read again", role: .destructive) { Task { await readAgain() } }
-                    } message: { Text("Replaces the items and who had them.") }
-                    .disabled(payment.guardState.unresolved || pendingLink.target != nil || forWrite.guardState.unresolved)
-                Button("Delete", role: .destructive) { confirmDelete = true }
-                    .confirmationDialog("Delete this receipt?", isPresented: $confirmDelete, titleVisibility: .visible) {
-                        Button("Delete", role: .destructive) { Task { await delete() } }
+                        .contentShape(Rectangle())
                     }
-                    .disabled(payment.guardState.unresolved || pendingLink.target != nil || forWrite.guardState.unresolved)
+                    .buttonStyle(.plain)
+                    .disabled(receipt.forPersonId != nil || forWrite.guardState.unresolved)
+                }
+            } header: { Text("Who paid") } footer: {
+                Text(receipt.forPersonId != nil ? "A receipt that is all for someone is one you paid."
+                     : "If someone else paid, pick them: what you owe them is logged, and Itemize opens to say who had what.")
             }
             .disabled(busy)
+            Section("Whose is it") {
+                if forWrite.guardState.unresolved {
+                    Button("Retry") { Task { await setFor(forWrite.body?.personId) } }
+                } else {
+                    let split = receipt.forPersonId == nil ? receipt.taggedPersonIds ?? [] : []
+                    Button { Task { await setMine() } } label: { SelectionRow(title: "Mine", selected: receipt.forPersonId == nil && split.isEmpty) }
+                    Button { Task { await itemize() } } label: {
+                        SelectionRow(title: split.isEmpty ? "Split by items…" : "Split by items with \(split.map(model.personName).joined(separator: ", "))",
+                                     selected: !split.isEmpty)
+                    }
+                    Button { choosingFor = true } label: {
+                        SelectionRow(title: receipt.forPersonId.map { "All for \(model.personName($0))" } ?? "All for one person…",
+                                     selected: receipt.forPersonId != nil)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .disabled(busy || payment.guardState.unresolved || pendingLink.target != nil)
+            Section("Charge") {
+                ForEach(receipt.suggestions) { t in
+                    Button { confirming = t } label: { TransactionRow(transaction: t).contentShape(Rectangle()) }.buttonStyle(.plain)
+                        .confirmationDialog(confirmTitle(t), isPresented: Binding(get: { confirming?.id == t.id }, set: { if !$0 { confirming = nil } }),
+                                            titleVisibility: .visible) {
+                            Button("Link") { Task { await link(t) } }
+                        }
+                }
+                Button(receipt.suggestions.isEmpty ? "Choose its charge…" : "Choose another charge…") { picking = true }
+                    .confirmationDialog(pickedToConfirm.map(confirmTitle) ?? "",
+                                        isPresented: Binding(get: { pickedToConfirm != nil }, set: { if !$0 { pickedToConfirm = nil } }),
+                                        titleVisibility: .visible) {
+                        Button("Link") { if let t = pickedToConfirm { Task { await link(t) } } }
+                    }
+            }
+            .disabled(busy || blocked)
             InlineError(message: error)
         }
         .themedForm()
         .navigationTitle(receipt.merchant ?? "Receipt")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button("Read again", systemImage: "arrow.clockwise") { if receipt.tagged { confirmReread = true } else { Task { await readAgain() } } }
+                    Button("Delete", systemImage: "trash", role: .destructive) { confirmDelete = true }
+                } label: { Label("More", systemImage: "ellipsis") }
+                .disabled(busy || blocked)
+                // on the menu: on the List they float mid-screen over the photo
+                .confirmationDialog("Read the receipt again?", isPresented: $confirmReread, titleVisibility: .visible) {
+                    Button("Read again", role: .destructive) { Task { await readAgain() } }
+                } message: { Text("Replaces the items and who had them.") }
+                .confirmationDialog("Delete this receipt?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                    Button("Delete", role: .destructive) { Task { await delete() } }
+                }
+            }
+        }
         .task { await loadPhoto() }
+        // acted on after the list closes: SwiftUI drops a sheet presented while another is up
+        .sheet(isPresented: $choosingPayer, onDismiss: {
+            guard let id = pickedPerson else { return }
+            pickedPerson = nil
+            if receipt.totalCents != nil { Task { await paidBy(id) } } else { payer = model.people.first { $0.id == id } }
+        }, content: { personList(title: "Who paid", noneTitle: "Me") { choosingPayer = false } })
+        .sheet(isPresented: $choosingFor, onDismiss: {
+            guard let id = pickedPerson else { return }
+            pickedPerson = nil
+            Task { await setFor(id) }
+        }, content: { personList(title: "All for", noneTitle: nil) { choosingFor = false } })
+        // opened mid-read: without its total, Paid by would ask for one the server is about to have
+        .task(id: receipt.status) {
+            while receipt.status == "reading", !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                if !busy, itemizing == nil, payer == nil { await refresh() }
+            }
+        }
         .sheet(isPresented: $picking, onDismiss: { pickedToConfirm = picked; picked = nil }, content: {
             ExpensePicker(title: "Link to transaction", suggestions: receipt.suggestions,
                           allows: { $0.amountCents < 0 && $0.hasReceipt != true
@@ -133,6 +165,41 @@ struct InboxReceiptView: View {
         .sheet(item: $itemizing, onDismiss: { if linked != nil { dismiss() } else { Task { await refresh() } } }, content: { source in
             ItemizeView(source: source) { await onChange() }
         })
+    }
+
+    private var blocked: Bool { payment.guardState.unresolved || pendingLink.target != nil || forWrite.guardState.unresolved }
+
+    private func personList(title: String, noneTitle: String?, close: @escaping () -> Void) -> some View {
+        NavigationStack {
+            PersonPicker(selection: $pickedPerson, noneTitle: noneTitle, title: title)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Close", action: close) } }
+        }
+    }
+
+    /// Mine: nobody else on it, whether it was all for someone or split by its items.
+    private func setMine() async {
+        if receipt.forPersonId != nil { await setFor(nil); return }
+        guard receipt.taggedPersonIds?.isEmpty == false, !busy, let client = model.client else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            let saved = try await client.inboxItems(id: receipt.id)
+            let body = SaveItemsBody(items: saved.items.map { .init(name: $0.name, amountCents: $0.amountCents, people: [ItemShares.me]) },
+                                     taxCents: saved.taxCents ?? 0, tipCents: saved.tipCents ?? 0, feesCents: saved.feesCents ?? 0)
+            // the same body every time, so a repeat changes nothing and needs no kept key
+            _ = try await client.saveInboxItems(id: receipt.id, body: body, idempotencyKey: UUID().uuidString)
+            await refresh()
+        } catch {
+            self.error = errorMessage(error)
+        }
+    }
+
+    private func itemize() async {
+        if receipt.forPersonId != nil {
+            await setFor(nil)
+            guard receipt.forPersonId == nil else { return }
+        }
+        itemizing = .inbox(receipt.id)
     }
 
     private func confirmTitle(_ t: LedgerTransaction) -> String {

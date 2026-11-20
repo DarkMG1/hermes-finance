@@ -29,8 +29,9 @@ export function lookups(db: Db, rows: TxnRow[], member: ReturnType<typeof member
     if (!splits.has(id)) splits.set(id, []);
     splits.get(id)!.push(line);
   }
-  const receipts = new Set((db.prepare('SELECT transaction_id AS id FROM receipts WHERE transaction_id IN (SELECT value FROM json_each(?))')
-    .all(ids) as { id: string }[]).map((r) => r.id));
+  // each receipt with the lines its last items save left (null: never saved)
+  const receipts = new Map((db.prepare('SELECT transaction_id AS id, applied_lines AS applied FROM receipts WHERE transaction_id IN (SELECT value FROM json_each(?))')
+    .all(ids) as { id: string; applied: string | null }[]).map((r) => [r.id, r.applied]));
   const payStubs = new Map((db.prepare('SELECT transaction_id AS tid, stub_id AS id FROM pay_stub_deposits WHERE transaction_id IN (SELECT value FROM json_each(?))')
     .all(ids) as { tid: string; id: string }[]).map(({ tid, id }) => [tid, { id }]));
   // only unsplit person-tagged rows carry iou; one settle per person in the list
@@ -58,6 +59,9 @@ export function rowToTransaction(r: TxnRow, { spending, recurring, splits, recei
     reconciled: r.reconciled_at !== null && r.reconciled_cents === r.amount_cents,
     forgiven: r.forgiven === 1,
     hasReceipt: receipts.has(r.id),
+    // the same lines itemize.ts's currentLines compares: any later change by hand makes it false
+    itemized: (receipts.get(r.id) ?? null) !== null && receipts.get(r.id) === JSON.stringify(r.paid_by_person_id ? [{ personId: null, amountCents: r.amount_cents }]
+      : splitLines.length ? splitLines.map((l) => ({ personId: l.personId, amountCents: l.amountCents })) : [{ personId: r.person_id, amountCents: r.amount_cents }]),
     // raw bank text alone (no merchant, no owner payee) is often generic ("POS PURCHASE") and would pool unrelated charges
     // a bill's charge always opens the bill's History
     hasHistory: (normalizeName(payee) !== '' && (r.payee !== null || r.merchant_name !== null) && spending.has(r.id)) || recurring.has(r.id),

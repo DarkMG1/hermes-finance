@@ -18,6 +18,7 @@
   "reconciled": false,
   "forgiven": false,
   "hasReceipt": false,
+  "itemized": false,
   "hasHistory": false,
   "recurring": null,
   "iou": {
