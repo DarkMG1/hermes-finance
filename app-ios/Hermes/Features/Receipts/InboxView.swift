@@ -45,7 +45,7 @@ struct InboxView: View {
                     ForEach(linked) { linked in
                         HStack {
                             Button { Task { await open(linked) } } label: {
-                                ListRow(title: linked.merchant ?? "Receipt", subtitle: linked.splitApplied ? "Linked · split applied" : "Linked · Itemize") {
+                                ListRow(title: linked.merchant ?? "Receipt", subtitle: linked.splitApplied ? "Linked · itemized" : "Linked · Itemize") {
                                     if let total = linked.totalCents { MoneyText(cents: total, colored: false) }
                                 }
                                 .contentShape(Rectangle())

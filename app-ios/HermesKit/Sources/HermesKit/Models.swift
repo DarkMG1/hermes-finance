@@ -61,6 +61,8 @@ public struct LedgerTransaction: Codable, Sendable, Identifiable, Hashable {
     /// nil from servers before v1.5 and from cached responses saved by older builds
     public let reconciled: Bool?
     public let hasReceipt: Bool?
+    /// The receipt's items set the split or share and nothing changed it by hand since; nil from servers before 2.4.1.
+    public var itemized: Bool?
     /// nil from servers before v1.7.5
     public let forgiven: Bool?
     /// The server's say on whether History can find anything; nil from servers before v1.8.1.
@@ -299,6 +301,8 @@ public struct ExpenseRow: Codable, Sendable, Identifiable, Hashable {
     public let isSplitDifference: Bool
     /// nil from servers before 2.2.0
     public let pending: Bool?
+    /// nil from servers before 2.4.1
+    public var hasReceipt: Bool?
 
     public var id: String { "\(transactionId)/\(lineId ?? (isSplitDifference ? "difference" : "row"))" }
 }

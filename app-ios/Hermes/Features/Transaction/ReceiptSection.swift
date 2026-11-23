@@ -1,6 +1,7 @@
 import HermesKit
 import SwiftUI
 import UIKit
+import Vision
 import VisionKit
 
 /// A transaction's receipt photo: add from the camera or library, view full screen, replace, delete. Each change is saved at once.
@@ -129,6 +130,32 @@ enum ReceiptImage {
         return nil
     }
 
+    /// The photo turned so its text reads upright: one saved sideways or upside down carries no orientation to go by.
+    static func upright(_ image: UIImage) async -> UIImage {
+        // a small copy is enough to tell which way the text runs; it is drawn upright as the photo claims to be
+        guard let small = jpeg(image, longSide: 1200).flatMap(UIImage.init(data:))?.cgImage else { return image }
+        let turn = await Task.detached(priority: .userInitiated) { () -> UIImage.Orientation in
+            func score(_ orientation: CGImagePropertyOrientation) -> Float {
+                let request = VNRecognizeTextRequest()
+                request.recognitionLevel = .fast
+                try? VNImageRequestHandler(cgImage: small, orientation: orientation).perform([request])
+                return (request.results ?? []).reduce(0) { sum, text in
+                    sum + (text.topCandidates(1).first.map { $0.confidence * Float($0.string.count) } ?? 0)
+                }
+            }
+            let turns: [(UIImage.Orientation, Float)] = [(.right, score(.right)), (.left, score(.left)), (.down, score(.down))]
+            let best = turns.max { $0.1 < $1.1 } ?? (.up, 0)
+            // clearly better than as it came: a photo with little text, or text both ways, stays as it is
+            return best.1 > 10 && best.1 > score(.up) * 1.3 ? best.0 : .up
+        }.value
+        guard turn != .up else { return image }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let size = CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
+        let flat = UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+        return flat.cgImage.map { UIImage(cgImage: $0, scale: 1, orientation: turn) } ?? image
+    }
+
     static func jpeg(_ image: UIImage, longSide: CGFloat = 1600, quality: CGFloat = 0.7) -> Data? {
         let size = image.size
         guard size.width > 0, size.height > 0 else { return nil }
@@ -233,7 +260,13 @@ struct ReceiptViewer: View {
     var body: some View {
         NavigationStack {
             ZoomableImage(image: image)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                    // the share sheet saves it to Photos or Files, or sends it
+                    ToolbarItem(placement: .primaryAction) {
+                        ShareLink(item: Image(uiImage: image), preview: SharePreview("Receipt", image: Image(uiImage: image)))
+                    }
+                }
                 .navigationBarTitleDisplayMode(.inline)
         }
     }

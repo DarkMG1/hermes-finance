@@ -101,6 +101,10 @@ private struct TaxResultSection: View {
                 ForEach(projection.returns, id: \.jurisdiction) { Text(Self.name($0.jurisdiction)).tag($0.jurisdiction) }
             }
             .pickerStyle(.segmented)
+            // on one row, not the lines' Section: each of a Section's rows gets its own copy
+            .sheet(isPresented: Binding { shown != nil } set: { if !$0 { shown = nil } }) {
+                if let shown { TaxLineSheet(line: shown) }
+            }
         }
         if let ret {
             Section(Self.name(ret.jurisdiction)) {
@@ -116,9 +120,6 @@ private struct TaxResultSection: View {
                 } else {
                     ForEach(ret.lines, id: \.key) { Text($0.assumption ?? $0.label).textStyle(.subhead, color: Palette.secondaryText) }
                 }
-            }
-            .sheet(isPresented: Binding { shown != nil } set: { if !$0 { shown = nil } }) {
-                if let shown { TaxLineSheet(line: shown) }
             }
         }
     }

@@ -20,12 +20,15 @@ struct SplitLineSheet: View {
     @State private var splitting: LedgerTransaction?
     @State private var savedForSplit = false
     @State private var paying: PaybackTarget?
+    @State private var receiptBusy = false
+    @State private var itemizing = false
+    @State private var savedFromItems = false
 
     private var line: SplitLine? { transaction.splitLines.first { $0.id == lineId } }
 
     var body: some View {
         Sheet(
-            title: "Transaction", canSave: line != nil && !patch.isEmpty, busy: busy, unresolved: writes.unresolved,
+            title: "Transaction", canSave: line != nil && !patch.isEmpty, busy: busy || receiptBusy, unresolved: writes.unresolved,
             onCancel: { if writes.unresolved { Task { await onChange() } }; dismiss() },
             onSave: { Task { await save() } }
         ) { // swiftlint:disable:this multiple_closures_with_trailing_closure
@@ -52,9 +55,21 @@ struct SplitLineSheet: View {
                 }
                 .disabled(writes.unresolved || busy)
                 Section {
-                    // unsaved edits would be lost when the split saves and this sheet closes, so the button saves them first
-                    Button("Edit split") { Task { await editSplit() } }
-                        .disabled(busy)
+                    if transaction.itemized == true {
+                        // amounts typed over an itemized split would no longer match the receipt
+                        Text("Split by the receipt's items. Change who had what in Itemize.").textStyle(.caption, color: Palette.secondaryText)
+                    } else {
+                        // unsaved edits would be lost when the split saves and this sheet closes, so the button saves them first
+                        Button("Edit split") { Task { await editSplit() } }
+                            .disabled(busy)
+                    }
+                }
+                // the charge's receipt, as its own screen shows it: Spending opens a split's line here
+                if transaction.hasReceipt == true {
+                    Section("Receipt") {
+                        ReceiptSection(transactionId: transaction.id, hadReceipt: true, busy: $receiptBusy,
+                                       onItemize: patch.isEmpty && transaction.amountCents < 0 ? { itemizing = true } : nil) { Task { await onChange() } }
+                    }
                 }
             } else {
                 // the split was saved again elsewhere, which gives every line a new id
@@ -79,6 +94,15 @@ struct SplitLineSheet: View {
                 await onChange()
                 dismiss()
             }
+        })
+        .sheet(isPresented: $itemizing, onDismiss: {
+            // the items save rewrote the split: this line is gone, so close
+            if savedFromItems {
+                busy = true
+                Task { await onChange(); dismiss() }
+            }
+        }, content: {
+            ItemizeView(transaction: transaction) { savedFromItems = true }
         })
         .sheet(item: $paying, onDismiss: { dismiss() }, content: { target in PaybackPicker(target: target) { await onChange() } })
     }

@@ -390,6 +390,15 @@ test('Paid-by creation links the waiting receipt atomically and replays the save
   assert.equal((await get('/v1/transactions')).json().transactions.length, 1);
 });
 
+test('Paid-by creation takes the category remembered for the store', async () => {
+  const { db, post } = setup();
+  seedCategory(db, { id: 'cat-mem', name: 'Synthetic Remembered' });
+  seedTxn(db, { id: 'before', accountId: 'manual', date: '2026-03-01', amountCents: -500, payee: 'Synthetic Grocer', categoryId: 'cat-mem' });
+  db.prepare("INSERT INTO inbox_receipts (id, jpeg, bytes, captured_at) VALUES ('r1', ?, ?, 'now')").run(JPEG, JPEG.length);
+  const r = await post('/v1/transactions', { date: '2026-03-10', amountCents: -1050, payee: 'Synthetic Grocer', paidByPersonId: 'p1', inboxReceiptId: 'r1' }, 'paid');
+  assert.equal(r.json().categoryId, 'cat-mem');
+});
+
 test('an auto-linked or deleted receipt cannot leave behind a new Paid-by transaction', async () => {
   for (const linked of [false, true]) {
     const { db, deps, post } = setup();

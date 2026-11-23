@@ -13,7 +13,7 @@ import { dropLinks } from '../ious.ts';
 import { normalizeName } from '../recurring.ts';
 import { getNetWorth, localDay } from '../networth.ts';
 import { oldestOpenBefore, reconcileIfMovedIntoClosedMonth } from '../reconcile.ts';
-import { assertCategoryExists, getHome, getTransaction, learnCategory, listAccounts, listCategories, listTransactions } from '../ledger.ts';
+import { assertCategoryExists, getHome, getTransaction, learnCategory, listAccounts, listCategories, listTransactions, merchantMemory } from '../ledger.ts';
 
 export { writeSplit } from '../splits.ts';
 
@@ -90,6 +90,10 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
         if (body.paidByPersonId !== null && current.amountCents >= 0) {
           throw new ApiError(400, 'INVALID_REQUEST', 'paidByPersonId: a payer covers money out', 'paidByPersonId');
         }
+        // the amount is only my share: without its payer the rest of the bill would be gone for good
+        if (body.paidByPersonId === null && current.paidByPersonId) {
+          throw new ApiError(409, 'PAID_BY_PERSON', 'a row someone else paid cannot become yours; delete it and add the charge again', 'paidByPersonId');
+        }
         assertPersonTaggable(db, body.paidByPersonId, 'paidByPersonId', current.id, 'payer');
       }
       // a row someone else paid is the owner's own spending, so it never carries a person tag
@@ -117,6 +121,18 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       const now = deps.now().toISOString();
       db.prepare(`UPDATE transactions SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`).run(...args, now, req.params.id);
       if (personAfter !== current.personId) dropLinks(db, current.id, null);
+      const was = current.paidByPersonId;
+      if (was && body.paidByPersonId && body.paidByPersonId !== was) {
+        // the receipt's items follow the payer; one the new payer already shared changes my share, so Itemize says the row changed
+        const setPeople = db.prepare('UPDATE receipt_items SET people = ? WHERE id = ?');
+        for (const item of db.prepare('SELECT id, people FROM receipt_items WHERE transaction_id = ?').all(current.id) as { id: string; people: string }[]) {
+          const people = JSON.parse(item.people) as string[];
+          if (!people.includes(was)) continue;
+          const moved = [...new Set(people.map((p) => (p === was ? body.paidByPersonId! : p)))];
+          setPeople.run(JSON.stringify(moved), item.id);
+          if (moved.length < people.length) db.prepare("UPDATE receipts SET applied_lines = '[]' WHERE transaction_id = ? AND applied_lines IS NOT NULL").run(current.id);
+        }
+      }
       if (body.categoryId) learnCategory(db, req.params.id, body.categoryId, now);
       if (date !== undefined) reconcileIfMovedIntoClosedMonth(db, req.params.id, current.date, date, now);
       return { status: 200, body: getTransaction(db, req.params.id, localDay(deps.now())) };
@@ -184,10 +200,12 @@ export function ledgerRoutes(app: FastifyInstance, deps: Deps): void {
       assertPersonTaggable(db, body.paidByPersonId, 'paidByPersonId', id, 'payer');
       assertPersonTaggable(db, body.personId, 'personId', id);
       const now = deps.now().toISOString();
+      // a receipt logged as paid by someone asks for no category: the store's remembered one fills it, as on a bank row
+      const categoryId = body.categoryId ?? (body.inboxReceiptId && !body.personId ? merchantMemory(db)(body.payee, '') : null);
       db.prepare(`INSERT INTO transactions (id, account_id, source, date, amount_cents, bank_description, payee, category_id, notes, paid_by_person_id,
           person_id, created_at, updated_at)
         VALUES (?, 'manual', 'manual', ?, ?, '', ?, ?, ?, ?, ?, ?, ?)`)
-        .run(id, body.date, body.amountCents, body.payee, body.categoryId ?? null, body.notes ?? null, body.paidByPersonId ?? null,
+        .run(id, body.date, body.amountCents, body.payee, categoryId, body.notes ?? null, body.paidByPersonId ?? null,
           body.personId ?? null, now, now);
       // one transaction with the row: a bad line rolls the row back too
       if (body.splitLines?.length) writeSplit(db, id, body.amountCents, body.splitLines, 'splitLines', now);

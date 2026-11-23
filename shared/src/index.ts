@@ -43,6 +43,8 @@ export const Transaction = z.object({
   /** Marked reconciled and the bank amount unchanged since. */
   reconciled: z.boolean(),
   hasReceipt: z.boolean(),
+  /** The receipt's items set this row's split or share, and nothing has changed it by hand since. */
+  itemized: z.boolean(),
   forgiven: z.boolean(),
   /** The payee has a History to open: a name to match, not an unsplit IOU, and not only the bank's raw text. */
   hasHistory: z.boolean(),
@@ -272,7 +274,7 @@ export type ExpensesQuery = z.infer<typeof ExpensesQuery>;
 export const ExpenseRow = z.object({
   transactionId: Id, lineId: Id.nullable(), date: DateStr, name: z.string(), categoryId: Id.nullable(), categoryName: z.string(),
   /** Out: spending is positive and a refund negative. In: income is positive. */
-  amountCents: Cents, isSplit: z.boolean(), isSplitDifference: z.boolean(), pending: z.boolean(),
+  amountCents: Cents, isSplit: z.boolean(), isSplitDifference: z.boolean(), pending: z.boolean(), hasReceipt: z.boolean(),
 });
 export type ExpenseRow = z.infer<typeof ExpenseRow>;
 

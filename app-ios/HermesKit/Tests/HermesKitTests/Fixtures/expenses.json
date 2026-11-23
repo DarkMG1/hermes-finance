@@ -10,7 +10,8 @@
       "amountCents": 1250,
       "isSplit": false,
       "isSplitDifference": false,
-      "pending": false
+      "pending": false,
+      "hasReceipt": false
     },
     {
       "transactionId": "txn-3",
@@ -22,7 +23,8 @@
       "amountCents": 2500,
       "isSplit": true,
       "isSplitDifference": false,
-      "pending": true
+      "pending": true,
+      "hasReceipt": false
     },
     {
       "transactionId": "txn-6",
@@ -34,7 +36,8 @@
       "amountCents": 300,
       "isSplit": false,
       "isSplitDifference": false,
-      "pending": false
+      "pending": false,
+      "hasReceipt": false
     }
   ],
   "nextCursor": null
